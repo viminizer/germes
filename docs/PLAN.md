@@ -937,6 +937,12 @@ Slash commands, with autocomplete: `/sessions` (picker), `/switch`, `/rename`, `
 
 - Skipped: markdown rendering of model text (`glamour`). Plain text first.
 
+### To build (Kevin, 2026-10-29)
+
+- `/clear`: keeps the current session (its context stays saved, nothing is deleted) and starts a new one. The new session is only saved when I send a message in it; `/clear` with no message after it leaves nothing behind. Only sessions with context are kept. (Sessions are already created on the first message, so `/clear` works like `/new`.)
+- Slash suggestions: typing `/` shows a list of commands under the input, filtered as I type, like Hermes. Up/Down to pick, Tab or Enter to complete.
+- `@` references, like Hermes (`hermes/agent/context_references.py`): `@file:path` (optional `:start-end` lines), `@folder:path`, `@diff` (uncommitted), `@staged`, `@git:<args>`, `@url:<url>`. Typing `@` suggests the kinds; after `@file:` / `@folder:` it suggests paths in the project as I type. On send, each reference is expanded (file text, folder listing, git output, page text) and added to the message, with a size limit; the token stays visible in the message.
+
 Files: `tui.go` (New, Run), `model.go` (state + Update), `view.go`, `picker.go`, `commands.go`.
 
 ## MCP module
@@ -1217,6 +1223,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - Background review: after 10 tool calls without saving memory or a skill, a silent review with only memory and skill tools runs after the turn.
    - Checked live: memory saved, config edited by the agent, search found an old session, the right skill named, review ran, Claude knew the config path and memory.
 5. Worktrees.
+5b. TUI pass: `/clear`, slash suggestions, `@` references (see "TUI module", To build).
 6. Jobs, then workflows.
 7. MCP and the overseer.
 8. Telegram.

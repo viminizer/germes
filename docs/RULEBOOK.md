@@ -154,6 +154,14 @@ Error strings follow Go's convention: they start with a lowercase letter and hav
 - Check: `staticcheck ./...` reports no ST1005.
 - Example: `internal/store/sessions.go`
 
+## R45. Audit before merge
+
+No milestone or feature branch merges into main before the `consistency-audit` skill has run on its diff (`git diff origin/main...HEAD`) and its findings are fixed or decided by Kevin.
+
+- From: Kevin, 2026-10-30, chat ("you seem to be forgetting consistency-audit after implementation")
+- Check: the branch's last step before merge is the audit; the summary to Kevin lists what it found.
+- Example: none yet
+
 ## R43. TUI built from components
 
 Each UI element of the TUI (banner, message, transcript, status bar, composer, picker) is its own component in its own file, with its own state and a `view(width)`. Every component renders correctly at any terminal width (responsive).

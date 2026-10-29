@@ -27,6 +27,8 @@ func (t Transcript) String() string {
 		switch ev.Kind {
 		case api.KindUserMessage:
 			fmt.Fprintf(&b, "User: %s\n", Shorten(ev.Text, 2000))
+		case api.KindAttachment:
+			fmt.Fprintf(&b, "Attached: %s\n", Shorten(ev.Text, 1000))
 		case api.KindText:
 			fmt.Fprintf(&b, "Assistant: %s\n", Shorten(ev.Text, 2000))
 		case api.KindToolCall:

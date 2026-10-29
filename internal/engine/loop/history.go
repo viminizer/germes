@@ -66,6 +66,10 @@ func convert(events []api.Event) []llm.Message {
 		case api.KindUserMessage:
 			closeOpen()
 			out = append(out, llm.Message{Role: llm.RoleUser, Text: ev.Text})
+		case api.KindAttachment:
+			if n := len(out); n > 0 && out[n-1].Role == llm.RoleUser {
+				out[n-1].Text += "\n\n" + ev.Text
+			}
 		case api.KindText:
 			closeOpen()
 			out = append(out, llm.Message{Role: llm.RoleAssistant, Text: ev.Text})

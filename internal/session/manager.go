@@ -53,14 +53,24 @@ type Manager struct {
 	hub     hub
 	wg      sync.WaitGroup
 
-	worktrees string // where session worktrees go; "" = no worktrees
+	opts Options
+}
+
+// Expander expands @ references in a message into the text they point to.
+type Expander interface {
+	Expand(ctx context.Context, msg, sessionID, dir string) string
+}
+
+// Options configure the manager.
+type Options struct {
+	Worktrees string   // where session worktrees go; "" = no worktrees
+	Refs      Expander // nil = @ references stay plain text
 }
 
 // NewManager creates a manager.
-// worktreesDir is where sessions' worktrees go; "" turns worktrees off.
-func NewManager(store Store, runner Runner, worktreesDir string) *Manager {
+func NewManager(store Store, runner Runner, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{store: store, runner: runner, ctx: ctx, cancel: cancel, worktrees: worktreesDir,
+	return &Manager{store: store, runner: runner, ctx: ctx, cancel: cancel, opts: opts,
 		workers: map[string]*worker{}, hub: hub{watchers: map[*watcher]struct{}{}}}
 }
 
@@ -243,8 +253,8 @@ func (m *Manager) createSession(ctx context.Context, dir, text string, noWorktre
 		Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
 	warning := ""
 	switch {
-	case m.worktrees != "" && !noWorktree && worktree.IsRepo(ctx, s.Project):
-		wt, err := worktree.Create(ctx, m.worktrees, s.Project, s.ID)
+	case m.opts.Worktrees != "" && !noWorktree && worktree.IsRepo(ctx, s.Project):
+		wt, err := worktree.Create(ctx, m.opts.Worktrees, s.Project, s.ID)
 		if err != nil {
 			slog.Warn("create worktree", "session", s.ID, "err", err)
 			warning = "no worktree for this session (" + gitReason(err) + "), so it works in the project folder"

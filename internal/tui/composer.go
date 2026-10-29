@@ -50,6 +50,12 @@ func (c composer) update(msg tea.Msg) (composer, tea.Cmd) {
 // value is the text typed so far.
 func (c composer) value() string { return strings.TrimSpace(c.area.Value()) }
 
+// raw is the text as typed, spaces kept (completion needs them).
+func (c composer) raw() string { return c.area.Value() }
+
+// setValue replaces the input; the cursor goes to the end.
+func (c *composer) setValue(s string) { c.area.SetValue(s) }
+
 // reset clears the input.
 func (c *composer) reset() { c.area.Reset() }
 

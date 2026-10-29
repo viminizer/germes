@@ -9,15 +9,29 @@ import (
 	"github.com/viminizer/germes/internal/api"
 )
 
-const helpText = `Commands:
-  /new            start a new session
-  /sessions       list sessions in this project
-  /switch <id>    open another session
-  /rename <text>  rename this session
-  /help           this help
-  /exit           quit (the session keeps running)
-Keys: Enter send · Shift+Enter or Alt+Enter new line · Ctrl+C quit
-      Esc Esc stop the turn (queued messages then run right away)`
+// commands are the slash commands, for /help and the suggestion list.
+var commands = []struct{ Name, Args, Help string }{
+	{"new", "", "start a new session"},
+	{"clear", "", "keep this session saved and start a new one"},
+	{"sessions", "", "list sessions in this project"},
+	{"switch", "<id>", "open another session"},
+	{"rename", "<text>", "rename this session"},
+	{"help", "", "this help"},
+	{"exit", "", "quit (the session keeps running)"},
+}
+
+// helpText lists the commands and keys.
+func helpText() string {
+	var b strings.Builder
+	b.WriteString("Commands:\n")
+	for _, c := range commands {
+		fmt.Fprintf(&b, "  %-16s%s\n", strings.TrimSpace("/"+c.Name+" "+c.Args), c.Help)
+	}
+	b.WriteString("References: @file:path[:10-20] @folder:path @diff @staged @git:\"args\" @url:address\n")
+	b.WriteString("Keys: Enter send · Shift+Enter or Alt+Enter new line · Tab complete · Ctrl+C quit\n")
+	b.WriteString("      Esc Esc stop the turn (queued messages then run right away)")
+	return b.String()
+}
 
 // command runs a slash command.
 func (m *model) command(text string) tea.Cmd {
@@ -31,9 +45,15 @@ func (m *model) command(text string) tea.Cmd {
 		m.stopWatch()
 		return tea.Quit
 	case "help":
-		return notice(helpText)
-	case "new":
+		return notice(helpText())
+	case "new", "clear":
+		// The current session stays saved; a new one is only saved once a
+		// message is sent, so /clear with nothing after it leaves nothing.
+		old := m.sessionID
 		m.open("")
+		if name == "clear" && old != "" {
+			return notice("cleared; session " + old + " is saved (/switch " + old + " to go back)")
+		}
 		return notice("new session")
 	case "switch":
 		if arg == "" {

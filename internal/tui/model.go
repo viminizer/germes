@@ -59,6 +59,7 @@ type model struct {
 
 	transcript transcript
 	queue      queueView
+	suggest    suggestBox
 	status     statusBar
 	composer   composer
 }
@@ -169,6 +170,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if len(m.suggest.items) > 0 {
+		switch msg.String() {
+		case "up":
+			m.suggest.move(-1)
+			return m, nil
+		case "down":
+			m.suggest.move(1)
+			return m, nil
+		case "esc":
+			m.suggest.closed, m.suggest.items = m.composer.raw(), nil
+			return m, nil
+		case "tab", "enter":
+			// Enter completes first; once nothing changes, it sends.
+			if done, changed := m.suggest.complete(m.composer.raw()); changed || msg.String() == "tab" {
+				m.composer.setValue(done)
+				m.suggest.update(done, m.opts.Dir)
+				return m, nil
+			}
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		m.stopWatch()
@@ -194,6 +215,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.composer.reset()
+		m.suggest.update("", m.opts.Dir)
 		if strings.HasPrefix(text, "/") {
 			return m, m.command(text)
 		}
@@ -201,6 +223,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.composer, cmd = m.composer.update(msg)
+	m.suggest.update(m.composer.raw(), m.opts.Dir)
 	return m, cmd
 }
 
@@ -320,7 +343,11 @@ func (m *model) View() tea.View {
 		parts = append(parts, q)
 	}
 	// A rule under the input closes the app at the bottom.
-	parts = append(parts, m.status.view(m.width), m.composer.view(), styleBorder.Render(strings.Repeat("─", max(m.width, 1))))
+	parts = append(parts, m.status.view(m.width), m.composer.view())
+	if sug := m.suggest.view(m.width); sug != "" {
+		parts = append(parts, sug)
+	}
+	parts = append(parts, styleBorder.Render(strings.Repeat("─", max(m.width, 1))))
 	return tea.NewView(strings.Join(parts, "\n"))
 }
 

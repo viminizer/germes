@@ -47,7 +47,8 @@ const (
 	KindToolResult     EventKind = "tool_result"
 	KindTurnDone       EventKind = "turn_done"
 	KindEngineSwitched EventKind = "engine_switched"
-	KindCompacted      EventKind = "compacted" // Text: summary of everything before KeepFrom
+	KindCompacted      EventKind = "compacted"  // Text: summary of everything before KeepFrom
+	KindAttachment     EventKind = "attachment" // Text: the expanded @ references of the user message before it
 	KindLimitHit       EventKind = "limit_hit"
 	KindError          EventKind = "error"
 )
@@ -166,4 +167,15 @@ func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
 // NewError creates an Error.
 func NewError(code Code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
+}
+
+// RefKinds are the @ references a message may use (expanded by the daemon),
+// with a short help for suggestions.
+var RefKinds = []struct{ Token, Help string }{
+	{"@file:", "a file's text; add :10-20 for lines"},
+	{"@folder:", "a folder's files"},
+	{"@diff", "uncommitted changes"},
+	{"@staged", "staged changes"},
+	{"@git:", `git output, e.g. @git:"log -5"`},
+	{"@url:", "a web page's text"},
 }

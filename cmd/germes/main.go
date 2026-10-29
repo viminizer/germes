@@ -27,6 +27,7 @@ import (
 	"github.com/viminizer/germes/internal/llm/codex"
 	"github.com/viminizer/germes/internal/memory"
 	"github.com/viminizer/germes/internal/prompt"
+	"github.com/viminizer/germes/internal/refs"
 	"github.com/viminizer/germes/internal/router"
 	"github.com/viminizer/germes/internal/session"
 	"github.com/viminizer/germes/internal/skill"
@@ -223,11 +224,11 @@ func runDaemon(p paths) error {
 	}
 	defer st.Close()
 
-	rt, err := newRouter(p, cfg, st)
+	rt, reg, err := newRouter(p, cfg, st)
 	if err != nil {
 		return err
 	}
-	sessions := session.NewManager(st, rt, filepath.Join(p.home, "worktrees"))
+	sessions := session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg)})
 	err = daemon.New(sessions, version, p.config).Run(context.Background(), p.socket, p.lock)
 	if !errors.Is(err, daemon.ErrUpdated) {
 		return err
@@ -311,10 +312,11 @@ func availableEngines(p paths, cfg config.Config) []string {
 }
 
 // newRouter builds every available engine, in config order, behind the router.
-func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, error) {
+// newRouter also returns the tool registry: @ references expand through it.
+func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *tool.Registry, error) {
 	names := availableEngines(p, cfg)
 	if len(names) == 0 {
-		return nil, errors.New("no engine found: log in with `codex login`, or install Claude Code")
+		return nil, nil, errors.New("no engine found: log in with `codex login`, or install Claude Code")
 	}
 	mem := memory.New(filepath.Join(p.home, "memories"))
 	home, _ := os.UserHomeDir()
@@ -334,7 +336,7 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, err
 	}
 	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var engines []engine.Engine
@@ -348,7 +350,8 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, err
 		engines = append(engines, loop.New(client, reg, prompts, st, loop.Options{
 			Name: name, Toolsets: []string{"project"}, ReviewToolsets: []string{"review"}}))
 	}
-	return router.New(engines, cfg.Engines, st, time.Now)
+	rt, err := router.New(engines, cfg.Engines, st, time.Now)
+	return rt, reg, err
 }
 
 func codexDir() string {

@@ -42,6 +42,8 @@ func (t *transcript) apply(ev api.Event) []message {
 		return append(t.flushText(), message{Kind: kindError, Text: ev.Text})
 	case api.KindEngineSwitched:
 		return []message{{Kind: kindSwitch, Text: ev.Text}}
+	case api.KindAttachment:
+		return []message{{Kind: kindNotice, Text: "attached: " + attachedNames(ev.Text)}}
 	case api.KindCompacted:
 		return []message{{Kind: kindNotice, Text: "older history was summarized to keep the context small"}}
 	case api.KindTurnDone:
@@ -102,4 +104,15 @@ func (t *transcript) view(width int, spin string) string {
 		parts = append(parts, gutter(styleBorder.Render("┊ "), styleText, s+"▍", width))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// attachedNames lists the references in an attachment ("--- @file:x ---" headers).
+func attachedNames(att string) string {
+	var names []string
+	for _, line := range strings.Split(att, "\n") {
+		if name, ok := strings.CutPrefix(line, "--- "); ok && strings.HasSuffix(name, " ---") {
+			names = append(names, strings.TrimSuffix(name, " ---"))
+		}
+	}
+	return strings.Join(names, ", ")
 }

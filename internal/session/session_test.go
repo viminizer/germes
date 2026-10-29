@@ -48,7 +48,7 @@ func newTestManager(t *testing.T, r Runner) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(s, r, t.TempDir())
+	m := NewManager(s, r, Options{Worktrees: t.TempDir()})
 	t.Cleanup(func() { m.Stop(context.Background()); s.Close() })
 	return m
 }

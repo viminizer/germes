@@ -1,0 +1,166 @@
+package tui
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/viminizer/germes/internal/api"
+)
+
+const (
+	maxSuggestRows = 8
+	maxPathEntries = 200
+)
+
+// suggestion is one entry of the suggestion list.
+type suggestion struct {
+	Insert string // replaces the word being typed
+	Label  string
+	Help   string
+}
+
+// suggestBox lists completions for the word being typed: slash commands at
+// the start of the input, @ references anywhere (like Hermes).
+type suggestBox struct {
+	items    []suggestion
+	selected int
+	closed   string // input the user closed the box for (Esc); reopens on change
+}
+
+// update recomputes the list for the composer's text.
+func (s *suggestBox) update(input, dir string) {
+	if input != s.closed {
+		s.closed = ""
+	}
+	items := suggestionsFor(input, dir)
+	if s.closed != "" {
+		items = nil
+	}
+	if len(items) != len(s.items) {
+		s.selected = 0
+	}
+	s.items = items
+	s.selected = min(s.selected, max(len(items)-1, 0))
+}
+
+func (s *suggestBox) move(by int) {
+	if n := len(s.items); n > 0 {
+		s.selected = (s.selected + by + n) % n
+	}
+}
+
+// complete returns the input with the selected suggestion in place of the
+// word being typed, and whether that changed anything.
+func (s suggestBox) complete(input string) (string, bool) {
+	if len(s.items) == 0 {
+		return input, false
+	}
+	word := lastWord(input)
+	done := input[:len(input)-len(word)] + s.items[s.selected].Insert
+	return done, done != input
+}
+
+// view renders up to maxSuggestRows rows around the selected one.
+func (s suggestBox) view(width int) string {
+	if len(s.items) == 0 {
+		return ""
+	}
+	start := max(0, min(s.selected-maxSuggestRows/2, len(s.items)-maxSuggestRows))
+	end := min(len(s.items), start+maxSuggestRows)
+	labelWidth := 0 // help text lines up in one column
+	for _, it := range s.items[start:end] {
+		labelWidth = max(labelWidth, len([]rune(it.Label)))
+	}
+	var rows []string
+	for i := start; i < end; i++ {
+		it := s.items[i]
+		padded := it.Label + strings.Repeat(" ", labelWidth-len([]rune(it.Label)))
+		mark, label := "  ", styleText.Render(padded)
+		if i == s.selected {
+			mark, label = styleAccent.Render("› "), styleAccent.Bold(true).Render(padded)
+		}
+		row := mark + label
+		if it.Help != "" {
+			row += styleDim.Render("  " + it.Help)
+		}
+		rows = append(rows, ansi.Truncate(row, max(width, 10), "…"))
+	}
+	if len(s.items) > maxSuggestRows {
+		rows = append(rows, styleDim.Render("  ↑↓ more · Tab complete · Esc close"))
+	}
+	return strings.Join(rows, "\n")
+}
+
+// suggestionsFor returns the completions for the end of input.
+func suggestionsFor(input, dir string) []suggestion {
+	if strings.HasPrefix(input, "/") && !strings.ContainsAny(input, " \n") {
+		var out []suggestion
+		for _, c := range commands {
+			if strings.HasPrefix("/"+c.Name, input) {
+				insert := "/" + c.Name
+				if c.Args != "" {
+					insert += " "
+				}
+				out = append(out, suggestion{Insert: insert, Label: strings.TrimSpace("/" + c.Name + " " + c.Args), Help: c.Help})
+			}
+		}
+		return out
+	}
+	word := lastWord(input)
+	if !strings.HasPrefix(word, "@") {
+		return nil
+	}
+	for _, kind := range []string{"@file:", "@folder:"} {
+		if path, ok := strings.CutPrefix(word, kind); ok {
+			return pathSuggestions(kind, path, dir)
+		}
+	}
+	var out []suggestion
+	for _, k := range api.RefKinds {
+		if strings.HasPrefix(k.Token, word) && k.Token != word {
+			out = append(out, suggestion{Insert: k.Token, Label: k.Token, Help: k.Help})
+		}
+	}
+	return out
+}
+
+// pathSuggestions lists entries under dir that start with the typed path.
+// Folders end with "/" so Tab goes into them; @folder: lists only folders.
+func pathSuggestions(kind, typed, dir string) []suggestion {
+	base, prefix := filepath.Split(typed)
+	entries, err := os.ReadDir(filepath.Join(dir, base))
+	if err != nil {
+		return nil
+	}
+	var out []suggestion
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || (strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".")) || name == ".git" {
+			continue
+		}
+		if kind == "@folder:" && !e.IsDir() {
+			continue
+		}
+		if e.IsDir() {
+			name += "/"
+		}
+		out = append(out, suggestion{Insert: kind + base + name, Label: base + name})
+		if len(out) == maxPathEntries {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
+	return out
+}
+
+// lastWord is the text after the last space or newline.
+func lastWord(s string) string {
+	if i := strings.LastIndexAny(s, " \n\t"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}

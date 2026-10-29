@@ -152,10 +152,19 @@ func (w *worker) runTurn(text string) {
 	w.emit(api.Event{Kind: api.KindUserMessage, Text: text})
 	w.setStatus(api.StatusWorking)
 	w.refresh()
+	prompt := text
+	if w.m.opts.Refs != nil {
+		// Saved apart from the message, so the TUI shows what was typed and
+		// the history still gives the model the attached text.
+		if att := w.m.opts.Refs.Expand(ctx, text, w.sess.ID, w.sess.Dir); att != "" {
+			w.emit(api.Event{Kind: api.KindAttachment, Text: att})
+			prompt += "\n\n" + att
+		}
+	}
 
 	for {
 		turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Project: w.sess.Project, Branch: w.sess.Branch,
-			Prompt: text, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine}
+			Prompt: prompt, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine}
 		events, err := w.m.runner.Run(ctx, turn)
 		var unavail *engine.UnavailableError
 		if errors.As(err, &unavail) {

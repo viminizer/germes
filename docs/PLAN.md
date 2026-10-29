@@ -72,6 +72,8 @@ tools                 tools/files, tools/shell             → tool, env
                       tools/search                         → tool, api
                       tools/sessions, tools/jobs,          → tool, api
                       tools/worktree
+                      refs (@ references)                  → tool, text
+                      worktree (git worktrees, RunGit)     → (none); used by session and router
 
 services              prompt                               → memory, skill
                       store                                → api, engine
@@ -1185,6 +1187,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Non-zero exit code: normal result.
 - Memory file full: error asking the model to merge entries first.
 - Two sessions on one project: separate worktrees (see "Worktrees").
+- `@` reference fails (file missing, blocked by the block list, URL fails, git error): that reference shows `[error: …]` inside the attachment; the message still goes. Too much text: each reference is cut at 50k characters, and references past 120k in total are left out with a note.
 - Worktree cannot be created (no commits yet, branch exists, disk): the session works in the project folder; the TUI shows a short warning with git's reason.
 
 ### Router and handoff
@@ -1229,7 +1232,10 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - No worktree possible (no commits yet, git error): the session works in the project folder with a short warning. Not a git repo and another session working there: a warning that changes may clash.
    - `germes --no-worktree` opts out. Claude sessions get worktrees too, but `worktree_exit` reaches Claude only with MCP (milestone 7); until then a Claude session can merge with git, and stays pointed at its worktree folder.
    - Checked live: fallback warning, then the full flow (worktree, commit, merge into master, worktree_exit; worktree and branch gone).
-5b. TUI pass: `/clear`, slash suggestions, `@` references (see "TUI module", To build).
+5b. TUI pass: `/clear`, slash suggestions, `@` references. Done:
+   - `/clear` keeps the session saved and wipes the screen and scrollback: the TUI program ends, Germes clears the terminal, and a fresh TUI starts with a new (unsaved until the first message) session. Clearing from inside Bubble Tea's inline renderer garbled the screen, so it restarts instead.
+   - Suggestions component (`internal/tui/suggest.go`): `/` lists commands, `@` lists reference kinds, `@file:` / `@folder:` list project paths. Up/Down pick, Tab completes, Enter completes first then sends, Esc closes. Commands and reference kinds are data shared with `/help` and the daemon (`api.RefKinds`).
+   - `@` references expand in the daemon (`internal/refs`), relative to the session's folder, through the tool registry, so the block list applies. Saved as an `attachment` event after the user message; the TUI shows `attached: @file:x`, the model gets the text.
 6. Jobs, then workflows.
 7. MCP and the overseer.
 8. Telegram.

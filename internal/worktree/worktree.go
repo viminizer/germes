@@ -28,9 +28,12 @@ type Worktree struct {
 // ErrHasWork means removing the worktree would lose changes or commits.
 var ErrHasWork = errors.New("the worktree has work that is not merged")
 
+// ErrNoCommits means the project has no commit to start a worktree from.
+var ErrNoCommits = errors.New("the project has no commits yet")
+
 // IsRepo reports whether dir is the top of a git repository.
 func IsRepo(ctx context.Context, dir string) bool {
-	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+	top, err := RunGit(ctx, dir, "rev-parse", "--show-toplevel")
 	return err == nil && filepath.Clean(top) == filepath.Clean(evalLinks(dir))
 }
 
@@ -42,8 +45,11 @@ func Create(ctx context.Context, base, project, sessionID string) (Worktree, err
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return Worktree{}, err
 	}
+	if _, err := RunGit(ctx, project, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+		return Worktree{}, ErrNoCommits
+	}
 	branch := "germes/" + sessionID
-	if _, err := git(ctx, project, "worktree", "add", "-b", branch, dir, "HEAD"); err != nil {
+	if _, err := RunGit(ctx, project, "worktree", "add", "-b", branch, dir, "HEAD"); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree: %w", err)
 	}
 	return Worktree{Dir: dir, Branch: branch}, nil
@@ -52,14 +58,14 @@ func Create(ctx context.Context, base, project, sessionID string) (Worktree, err
 // HasWork reports whether the worktree has uncommitted changes, or commits
 // that the project's current branch does not have.
 func HasWork(ctx context.Context, project string, wt Worktree) (bool, error) {
-	status, err := git(ctx, wt.Dir, "status", "--porcelain")
+	status, err := RunGit(ctx, wt.Dir, "status", "--porcelain")
 	if err != nil {
 		return false, err
 	}
 	if status != "" {
 		return true, nil
 	}
-	ahead, err := git(ctx, project, "rev-list", "--count", "HEAD.."+wt.Branch)
+	ahead, err := RunGit(ctx, project, "rev-list", "--count", "HEAD.."+wt.Branch)
 	if err != nil {
 		return false, err
 	}
@@ -80,17 +86,18 @@ func Delete(ctx context.Context, project string, wt Worktree) error {
 	if has {
 		return ErrHasWork
 	}
-	if _, err := git(ctx, project, "worktree", "remove", wt.Dir); err != nil {
+	if _, err := RunGit(ctx, project, "worktree", "remove", wt.Dir); err != nil {
 		return fmt.Errorf("remove worktree: %w", err)
 	}
 	// -d (not -D): git itself refuses to drop a branch that is not merged.
-	if _, err := git(ctx, project, "branch", "-d", wt.Branch); err != nil {
+	if _, err := RunGit(ctx, project, "branch", "-d", wt.Branch); err != nil {
 		return fmt.Errorf("delete branch %s: %w", wt.Branch, err)
 	}
 	return nil
 }
 
-func git(ctx context.Context, dir string, args ...string) (string, error) {
+// RunGit runs git in dir with a timeout and returns its trimmed output.
+func RunGit(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)

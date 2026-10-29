@@ -31,7 +31,7 @@ var allowed = map[string][]string{
 	"internal/cli":            {"internal/api"},
 	"internal/archtest":       {},
 	"internal/env":            {},
-	"internal/router":         {"internal/api", "internal/engine", "internal/config", "internal/stream", "internal/text"},
+	"internal/router":         {"internal/api", "internal/engine", "internal/config", "internal/stream", "internal/text", "internal/worktree"},
 	"internal/tool":           {},
 	"internal/llm":            {},
 	"internal/llm/codex":      {"internal/llm", "internal/file", "internal/stream", "internal/text"},

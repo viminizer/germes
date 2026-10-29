@@ -257,7 +257,11 @@ func (m *Manager) createSession(ctx context.Context, dir, text string, noWorktre
 		wt, err := worktree.Create(ctx, m.opts.Worktrees, s.Project, s.ID)
 		if err != nil {
 			slog.Warn("create worktree", "session", s.ID, "err", err)
-			warning = "no worktree for this session (" + gitReason(err) + "), so it works in the project folder"
+			reason := "git failed; details in the daemon log"
+			if errors.Is(err, worktree.ErrNoCommits) {
+				reason = err.Error()
+			}
+			warning = "no worktree for this session (" + reason + "), so it works in the project folder"
 		} else {
 			s.Dir, s.Branch = wt.Dir, wt.Branch
 		}
@@ -307,16 +311,4 @@ func (m *Manager) newWorker(ctx context.Context, s api.Session) (*worker, error)
 		return nil, fmt.Errorf("load session %s: %w", s.ID, err)
 	}
 	return &worker{m: m, sess: s, seq: seq, wake: make(chan struct{}, 1)}, nil
-}
-
-// gitReason is the short part of a git error worth showing a user.
-func gitReason(err error) string {
-	msg := err.Error()
-	if strings.Contains(msg, "invalid reference: HEAD") {
-		return "the project has no commits yet"
-	}
-	if i := strings.LastIndex(msg, "fatal: "); i >= 0 {
-		msg = msg[i+len("fatal: "):]
-	}
-	return strings.TrimSuffix(strings.TrimSpace(strings.Split(msg, ": exit status")[0]), ".")
 }

@@ -4,6 +4,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -31,9 +33,25 @@ type TUI struct {
 func New(svc api.Service, opts Options) *TUI { return &TUI{svc: svc, opts: opts} }
 
 // Run shows the TUI until the user quits. The session keeps running.
+// /clear ends one program and starts a fresh one on a clean screen: the
+// inline renderer cannot wipe what it already printed into the scrollback.
 func (t *TUI) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	_, err := tea.NewProgram(newModel(ctx, t.svc, t.opts), tea.WithContext(ctx)).Run()
-	return err
+	opts, notice := t.opts, ""
+	for {
+		m := newModel(ctx, t.svc, opts)
+		m.startNotice = notice
+		final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+		if err != nil {
+			return err
+		}
+		done, ok := final.(*model)
+		if !ok || !done.restart {
+			return nil
+		}
+		// Home, clear the screen, clear the scrollback.
+		fmt.Fprint(os.Stdout, "\x1b[H\x1b[2J\x1b[3J")
+		opts.SessionID, notice = "", done.restartNotice
+	}
 }

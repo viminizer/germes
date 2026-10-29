@@ -51,10 +51,16 @@ func (m *model) command(text string) tea.Cmd {
 		// message is sent, so /clear with nothing after it leaves nothing.
 		old := m.sessionID
 		m.open("")
-		if name == "clear" && old != "" {
-			return notice("cleared; session " + old + " is saved (/switch " + old + " to go back)")
+		if name == "new" {
+			return notice("new session")
 		}
-		return notice("new session")
+		m.restartNotice = "new session"
+		if old != "" {
+			m.restartNotice = "session " + old + " is saved (/switch " + old + " to go back)"
+		}
+		// /clear also wipes the screen, so it shows one session only.
+		m.restart = true
+		return tea.Quit
 	case "switch":
 		if arg == "" {
 			return notice("usage: /switch <id>")

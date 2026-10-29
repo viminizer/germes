@@ -73,6 +73,7 @@ The same action uses the same word in every module. If one module uses `Fetch` f
 | constructor | `New` |
 | release a resource (Go's `io.Closer`) | `Close` |
 | answer yes or no (returns a bool) | `Is` / `Has` |
+| fill in references (@file, @diff…) with what they point to | `Expand` |
 
 ## R26. Handle every failure gracefully
 

@@ -4,11 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/viminizer/germes/internal/text"
+	"github.com/viminizer/germes/internal/worktree"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/engine"
@@ -57,16 +56,12 @@ func (r *Router) recent(ctx context.Context, sessionID string) string {
 // gitChanges is `git status --short` and `git diff --stat`, or "" when the
 // folder is not a git repo.
 func gitChanges(ctx context.Context, dir string) string {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 	run := func(args ...string) string {
-		cmd := exec.CommandContext(ctx, "git", args...)
-		cmd.Dir = dir
-		out, err := cmd.Output()
+		out, err := worktree.RunGit(ctx, dir, args...)
 		if err != nil {
 			return ""
 		}
-		return strings.TrimSpace(string(out))
+		return out
 	}
 	status := run("status", "--short")
 	if status == "" {

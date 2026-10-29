@@ -32,8 +32,8 @@ type Ref struct {
 	Value string // path, git args or address ("" for diff and staged)
 }
 
-// Token is the reference as the user writes it.
-func (r Ref) Token() string {
+// String is the reference as the user writes it.
+func (r Ref) String() string {
 	if r.Value == "" {
 		return "@" + r.Kind
 	}
@@ -79,12 +79,12 @@ func (e *Expander) Expand(ctx context.Context, msg, sessionID, dir string) strin
 	for _, r := range List(msg) {
 		body := e.expand(ctx, r, sessionID, dir)
 		if left := maxTotal - b.Len(); left <= 0 {
-			fmt.Fprintf(&b, "--- %s ---\n[left out: the references are too long]\n\n", r.Token())
+			fmt.Fprintf(&b, "--- %s ---\n[left out: the references are too long]\n\n", r.String())
 			continue
 		} else if len(body) > left {
 			body = text.Shorten(body, left)
 		}
-		fmt.Fprintf(&b, "--- %s ---\n%s\n\n", r.Token(), strings.TrimRight(body, "\n"))
+		fmt.Fprintf(&b, "--- %s ---\n%s\n\n", r.String(), strings.TrimRight(body, "\n"))
 	}
 	return strings.TrimSpace(b.String())
 }

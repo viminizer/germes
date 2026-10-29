@@ -51,6 +51,10 @@ type model struct {
 	width     int
 	started   bool // banner printed
 
+	startNotice   string // printed under the banner (after /clear)
+	restart       bool   // /clear: Run starts a fresh program on a clean screen
+	restartNotice string
+
 	gen         int // watch generation; events from older watches are ignored
 	watchCancel context.CancelFunc
 
@@ -87,8 +91,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.composer.setWidth(msg.Width)
 		if !m.started {
 			m.started = true
-			b := banner{Version: m.opts.Version, Project: m.opts.Project, Session: m.sessionID, Engine: m.opts.Engine}
-			return m, tea.Println(b.view(msg.Width))
+			return m, m.printBanner()
 		}
 		return m, nil
 
@@ -361,4 +364,15 @@ func (m *model) loadBranch() tea.Cmd {
 		}
 		return branchMsg{branch: s.Branch}
 	}
+}
+
+// printBanner prints the intro: logo, version and the session's info box.
+// One print: two prints in a row at startup can lose the first.
+func (m *model) printBanner() tea.Cmd {
+	b := banner{Version: m.opts.Version, Project: m.opts.Project, Session: m.sessionID, Engine: m.status.Engine}
+	out := b.view(m.width)
+	if m.startNotice != "" {
+		out += "\n" + message{Kind: kindNotice, Text: m.startNotice}.view(m.width)
+	}
+	return tea.Println(out)
 }

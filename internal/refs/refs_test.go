@@ -18,8 +18,8 @@ func TestListFindsReferences(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 	for i, r := range got {
-		if r.Token() != want[i] {
-			t.Fatalf("ref %d = %s, want %s", i, r.Token(), want[i])
+		if r.String() != want[i] {
+			t.Fatalf("ref %d = %s, want %s", i, r.String(), want[i])
 		}
 	}
 }

@@ -898,6 +898,9 @@ func (t *TUI) Run(ctx) error
 - Components: each UI element (banner, message, transcript, status bar, composer) is its own component in its own file, with its own state and a `view(width)` that fits any width (R43).
 - Inline mode: finished messages are printed into the terminal scrollback; only the live part (running tools, streaming text, status bar, input) is redrawn.
 - `text_delta` events are live only (Seq 0, never saved); the finished text block is saved as one `text` event.
+- `queue` events are live only too. `GetSession` returns the current queue (`Queued`) for clients that attach later.
+- A rule line under the input closes the app at the bottom.
+- UI work is checked with screenshots: run the TUI in tmux, capture with colors, render with `freeze`, check 50, 80 and 100+ columns.
 - Screen: header (project, session title, engine status), chat (text + one compact line per tool call), input box, footer with keys.
 - Events: `Watch` channel → a Bubble Tea command reads one event → `Update` adds it → `View` draws it. Watch drops: reconnect with `afterSeq`.
 
@@ -1129,7 +1132,8 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - `Watch` stream drops: reconnect with `afterSeq`; nothing is missed.
 - Client too slow: its stream is closed; it reconnects and catches up.
 - Daemon dies while the TUI is open: show "daemon stopped", start it again, reconnect.
-- Message while busy: waits in the queue.
+- Message while busy: waits in the session's queue (max 100), shown above the status bar (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). Esc stops the turn and drops the queue.
+- Daemon stops with messages still queued: the queue lives in memory, so they are lost. Later: save the queue, if this happens in practice.
 
 ### Engines and models
 - Network error or 5xx: retry 3 times with backoff, then an `error` event; the turn ends.

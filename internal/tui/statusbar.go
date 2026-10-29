@@ -59,7 +59,7 @@ func (s statusBar) view(width int) string {
 		left := styleBorder.Render("─ ") + strings.Join(parts, sep)
 		gap := width - lipgloss.Width(left) - 3
 		if gap >= 10 && right != "" {
-			r := ansi.Truncate(right, gap, "…")
+			r := truncateLeft(right, gap)
 			pad := width - lipgloss.Width(left) - lipgloss.Width(r) - 3
 			return left + styleBorder.Render(" "+strings.Repeat("─", max(pad, 1))+" ") + styleLabel.Render(r)
 		}

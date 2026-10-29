@@ -42,15 +42,25 @@ func (b banner) view(width int) string {
 	if session == "" {
 		session = "new"
 	}
+	// Border (2) + padding (4) + label (8) + one spare column (writing the last
+	// column makes some terminals wrap): the rest is for the value, so the
+	// box never gets wider than the terminal.
+	valueWidth := max(width-15, 8)
 	info := []string{
-		styleLabel.Render("project ") + styleText.Render(b.Project),
+		styleLabel.Render("project ") + styleText.Render(truncateLeft(b.Project, valueWidth)),
 		styleLabel.Render("session ") + styleText.Render(session),
 		styleLabel.Render("engine  ") + styleAccent.Render(b.Engine),
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 2)
-	if inner := width - 6; inner > 10 {
-		box = box.MaxWidth(width)
-	}
 	out = append(out, box.Render(strings.Join(info, "\n")))
 	return strings.Join(out, "\n")
+}
+
+// truncateLeft keeps the end of s (the useful part of a path).
+func truncateLeft(s string, width int) string {
+	r := []rune(s)
+	if len(r) <= width {
+		return s
+	}
+	return "…" + string(r[len(r)-width+1:])
 }

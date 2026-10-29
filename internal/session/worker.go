@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,15 +13,19 @@ import (
 	"github.com/viminizer/germes/internal/engine"
 )
 
+// maxQueue is how many messages may wait while a turn runs.
+const maxQueue = 100
+
 // worker runs one session's turns, one at a time. Only the worker goroutine
 // touches sess and seq.
 type worker struct {
-	m     *Manager
-	sess  api.Session
-	seq   int64
-	inbox chan string
+	m    *Manager
+	sess api.Session
+	seq  int64
+	wake chan struct{} // a message was queued
 
 	mu     sync.Mutex
+	queue  []string           // messages waiting for the next turn
 	cancel context.CancelFunc // cancels the running turn
 }
 
@@ -30,8 +35,11 @@ func (w *worker) run() {
 	defer idle.Stop()
 	for {
 		select {
-		case text := <-w.inbox:
-			w.runTurn(text)
+		case <-w.wake:
+			// Everything queued while a turn ran becomes one turn.
+			for texts := w.take(); len(texts) > 0; texts = w.take() {
+				w.runTurn(strings.Join(texts, "\n\n"))
+			}
 			idle.Reset(idleTime)
 		case <-idle.C:
 			if w.exit() {
@@ -44,22 +52,73 @@ func (w *worker) run() {
 	}
 }
 
-// exit removes the worker from the manager unless a message just arrived.
+// enqueue adds a message for the next turn and wakes the worker.
+func (w *worker) enqueue(text string) error {
+	w.mu.Lock()
+	if len(w.queue) >= maxQueue {
+		w.mu.Unlock()
+		return api.NewError(api.CodeUnavailable, "session %s has too many queued messages", w.sess.ID)
+	}
+	w.queue = append(w.queue, text)
+	q := w.queuedLocked()
+	w.mu.Unlock()
+	w.publishQueue(q)
+	select {
+	case w.wake <- struct{}{}:
+	default: // already woken
+	}
+	return nil
+}
+
+// take empties the queue and returns what was in it.
+func (w *worker) take() []string {
+	w.mu.Lock()
+	texts := w.queue
+	w.queue = nil
+	w.mu.Unlock()
+	if len(texts) > 0 {
+		w.publishQueue(nil)
+	}
+	return texts
+}
+
+// queued returns a copy of the waiting messages.
+func (w *worker) queued() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.queuedLocked()
+}
+
+func (w *worker) queuedLocked() []string { return append([]string(nil), w.queue...) }
+
+// publishQueue tells watchers what is waiting. Live only: the queue lives in
+// memory, and GetSession reports it to clients that attach later.
+func (w *worker) publishQueue(q []string) {
+	w.m.hub.publish(api.Event{SessionID: w.sess.ID, Time: time.Now(), Kind: api.KindQueue, Queue: q})
+}
+
+// exit removes the worker from the manager unless a message is waiting.
 func (w *worker) exit() bool {
 	w.m.mu.Lock()
 	defer w.m.mu.Unlock()
-	if len(w.inbox) > 0 {
+	if len(w.queued()) > 0 {
 		return false
 	}
 	delete(w.m.workers, w.sess.ID)
 	return true
 }
 
+// stopTurn stops the running turn and drops the queued messages (Esc).
 func (w *worker) stopTurn() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	dropped := len(w.queue) > 0
+	w.queue = nil
 	if w.cancel != nil {
 		w.cancel()
+	}
+	w.mu.Unlock()
+	if dropped {
+		w.publishQueue(nil)
 	}
 }
 

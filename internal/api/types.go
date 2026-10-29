@@ -27,6 +27,7 @@ type Session struct {
 	Status    Status            `json:"status"`
 	Engine    string            `json:"engine"`               // engine that ran the last turn
 	ResumeIDs map[string]string `json:"resume_ids,omitempty"` // engine name -> its own session id
+	Queued    []string          `json:"queued,omitempty"`     // messages waiting for the next turn (not saved)
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
 }
@@ -34,10 +35,12 @@ type Session struct {
 // EventKind says what happened in a session.
 type EventKind string
 
-// Event kinds. TextDelta is live only: it has Seq 0 and is never saved.
+// Event kinds. TextDelta and Queue are live only: they have Seq 0 and are
+// never saved.
 const (
 	KindUserMessage    EventKind = "user_message"
 	KindTextDelta      EventKind = "text_delta"
+	KindQueue          EventKind = "queue"
 	KindText           EventKind = "text"
 	KindToolCall       EventKind = "tool_call"
 	KindToolResult     EventKind = "tool_result"
@@ -55,6 +58,7 @@ type Event struct {
 	Kind      EventKind `json:"kind"`
 	Text      string    `json:"text,omitempty"`
 	Tool      *ToolCall `json:"tool,omitempty"`
+	Queue     []string  `json:"queue,omitempty"` // queue: the waiting messages
 }
 
 // ToolCall is set on tool_call and tool_result events.

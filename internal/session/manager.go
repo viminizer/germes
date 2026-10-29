@@ -121,15 +121,13 @@ func (m *Manager) SendMessage(ctx context.Context, r api.MessageRequest) (api.Me
 		m.wg.Add(1)
 		go w.run()
 	}
-	select {
-	case w.inbox <- text:
-		return api.MessageResult{SessionID: id}, nil
-	default:
-		return api.MessageResult{}, api.NewError(api.CodeUnavailable, "session %s has too many queued messages", id)
+	if err := w.enqueue(text); err != nil {
+		return api.MessageResult{}, err
 	}
+	return api.MessageResult{SessionID: id}, nil
 }
 
-// StopSession stops the current step of a session (Esc).
+// StopSession stops the current step of a session and drops its queue (Esc).
 func (m *Manager) StopSession(ctx context.Context, id string) error {
 	m.mu.Lock()
 	w, ok := m.workers[id]
@@ -145,9 +143,19 @@ func (m *Manager) ListSessions(ctx context.Context, f api.SessionFilter) (api.Pa
 	return m.store.ListSessions(ctx, f)
 }
 
-// GetSession reads one session.
+// GetSession reads one session, with the messages waiting in its queue.
 func (m *Manager) GetSession(ctx context.Context, id string) (api.Session, error) {
-	return m.store.GetSession(ctx, id)
+	s, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return s, err
+	}
+	m.mu.Lock()
+	w, ok := m.workers[id]
+	m.mu.Unlock()
+	if ok {
+		s.Queued = w.queued()
+	}
+	return s, nil
 }
 
 // UpdateSession renames a session.
@@ -235,5 +243,5 @@ func (m *Manager) newWorker(ctx context.Context, s api.Session) (*worker, error)
 	if err != nil {
 		return nil, fmt.Errorf("load session %s: %w", s.ID, err)
 	}
-	return &worker{m: m, sess: s, seq: seq, inbox: make(chan string, 100)}, nil
+	return &worker{m: m, sess: s, seq: seq, wake: make(chan struct{}, 1)}, nil
 }

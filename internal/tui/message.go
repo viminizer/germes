@@ -69,7 +69,7 @@ func toolView(t *api.ToolCall, width int) string {
 	if t.Output == "" {
 		return head
 	}
-	result := firstLine(t.Output)
+	result := strings.Join(strings.Fields(firstLine(t.Output)), " ") // tabs and runs of spaces
 	if n := strings.Count(strings.TrimSpace(t.Output), "\n"); n > 0 {
 		result += fmt.Sprintf(" (+%d lines)", n)
 	}

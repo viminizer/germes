@@ -19,9 +19,10 @@ type (
 	}
 	printMsg struct{ msgs []message }
 	watchMsg struct {
-		gen int
-		ch  <-chan api.Event
-		err error
+		gen   int
+		ch    <-chan api.Event
+		queue []string // what was waiting when the watch started
+		err   error
 	}
 	eventMsg struct {
 		gen int
@@ -46,6 +47,7 @@ type model struct {
 	watchCancel context.CancelFunc
 
 	transcript transcript
+	queue      queueView
 	status     statusBar
 	composer   composer
 }
@@ -104,6 +106,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.retryWatch(msg.gen)
 		}
+		m.queue.items = msg.queue
 		return m, next(msg.gen, msg.ch)
 
 	case eventMsg:
@@ -144,7 +147,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.stopWatch()
 		return m, tea.Quit
 	case "esc":
-		if m.status.Busy && m.sessionID != "" {
+		if (m.status.Busy || len(m.queue.items) > 0) && m.sessionID != "" {
 			id := m.sessionID
 			return m, func() tea.Msg {
 				if err := m.svc.StopSession(m.ctx, id); err != nil {
@@ -179,6 +182,8 @@ func (m *model) track(ev api.Event) tea.Cmd {
 			m.composer.setPlaceholder("Esc to stop…")
 			return tick()
 		}
+	case api.KindQueue:
+		m.queue.items = ev.Queue
 	case api.KindTurnDone:
 		m.status.Busy = false
 		m.composer.setPlaceholder("Ask me anything…")
@@ -207,7 +212,11 @@ func (m *model) watch() tea.Cmd {
 	m.watchCancel = cancel
 	return func() tea.Msg {
 		ch, err := m.svc.Watch(ctx, api.WatchFilter{SessionID: id, AfterSeq: after})
-		return watchMsg{gen: gen, ch: ch, err: err}
+		if err != nil {
+			return watchMsg{gen: gen, err: err}
+		}
+		s, err := m.svc.GetSession(ctx, id)
+		return watchMsg{gen: gen, ch: ch, queue: s.Queued, err: err}
 	}
 }
 
@@ -256,10 +265,14 @@ func (m *model) print(msgs ...message) tea.Cmd {
 }
 
 func (m *model) View() tea.View {
-	var parts []string
+	parts := []string{""} // a blank line between the transcript and the live area
 	if live := m.transcript.view(m.width, m.status.spinner()); live != "" {
 		parts = append(parts, live)
 	}
-	parts = append(parts, m.status.view(m.width), m.composer.view())
+	if q := m.queue.view(m.width); q != "" {
+		parts = append(parts, q)
+	}
+	// A rule under the input closes the app at the bottom.
+	parts = append(parts, m.status.view(m.width), m.composer.view(), styleBorder.Render(strings.Repeat("─", max(m.width, 1))))
 	return tea.NewView(strings.Join(parts, "\n"))
 }

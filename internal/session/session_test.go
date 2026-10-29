@@ -12,10 +12,16 @@ import (
 )
 
 // fakeRunner answers every turn with a delta, a text and done. When block is
-// set, it waits for it before answering.
-type fakeRunner struct{ block chan struct{} }
+// set, it waits for it before answering. prompts records each turn's prompt.
+type fakeRunner struct {
+	block   chan struct{}
+	prompts chan string
+}
 
 func (f fakeRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
+	if f.prompts != nil {
+		f.prompts <- t.Prompt
+	}
 	out := make(chan engine.Event, 4)
 	go func() {
 		defer close(out)
@@ -118,4 +124,47 @@ func TestStopSession(t *testing.T) {
 		t.Fatalf("error = %q", ev.Text)
 	}
 	next(t, ch, api.KindTurnDone)
+}
+
+func TestQueuedMessagesMergeIntoOneTurn(t *testing.T) {
+	ctx := context.Background()
+	r := fakeRunner{block: make(chan struct{}), prompts: make(chan string, 10)}
+	m := newTestManager(t, r)
+	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := <-r.prompts; p != "a" {
+		t.Fatalf("first prompt = %q", p)
+	}
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	for _, text := range []string{"b", "c"} {
+		if _, err := m.SendMessage(ctx, api.MessageRequest{SessionID: res.SessionID, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if q := next(t, ch, api.KindQueue).Queue; len(q) != 1 {
+		t.Fatalf("queue after b = %v", q)
+	}
+	if s, _ := m.GetSession(ctx, res.SessionID); len(s.Queued) != 2 {
+		t.Fatalf("GetSession queued = %v", s.Queued)
+	}
+	close(r.block)
+	if p := <-r.prompts; p != "b\n\nc" {
+		t.Fatalf("merged prompt = %q", p)
+	}
+}
+
+func TestStopDropsQueue(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t, fakeRunner{block: make(chan struct{})})
+	res, _ := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: "a"})
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	next(t, ch, api.KindUserMessage)
+	m.SendMessage(ctx, api.MessageRequest{SessionID: res.SessionID, Text: "b"})
+	m.StopSession(ctx, res.SessionID)
+	next(t, ch, api.KindTurnDone)
+	if s, _ := m.GetSession(ctx, res.SessionID); len(s.Queued) != 0 {
+		t.Fatalf("queue kept after stop: %v", s.Queued)
+	}
 }

@@ -70,6 +70,7 @@ The same action uses the same word in every module. If one module uses `Fetch` f
 | start or stop something that keeps running | `Start` / `Stop` |
 | send a message | `Send` |
 | stream changes live until stopped | `Watch` |
+| block until goroutines finish | `Wait` |
 | constructor | `New` |
 | release a resource (Go's `io.Closer`) | `Close` |
 | answer yes or no (returns a bool) | `Is` / `Has` |

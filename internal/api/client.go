@@ -131,6 +131,45 @@ func (c *Client) Watch(ctx context.Context, f WatchFilter) (<-chan Event, error)
 	return out, nil
 }
 
+// CreateJob creates and starts a job.
+func (c *Client) CreateJob(ctx context.Context, r JobRequest) (Job, error) {
+	var j Job
+	return j, c.call(ctx, "POST", "/jobs", r, &j)
+}
+
+// ListJobs lists jobs.
+func (c *Client) ListJobs(ctx context.Context, f JobFilter) (Page[Job], error) {
+	q := url.Values{}
+	set(q, "status", string(f.Status))
+	set(q, "cursor", f.Cursor)
+	if f.Limit > 0 {
+		q.Set("limit", strconv.Itoa(f.Limit))
+	}
+	var p Page[Job]
+	return p, c.call(ctx, "GET", "/jobs?"+q.Encode(), nil, &p)
+}
+
+// GetJob reads one job by id or name.
+func (c *Client) GetJob(ctx context.Context, idOrName string) (Job, error) {
+	var j Job
+	return j, c.call(ctx, "GET", "/jobs/"+url.PathEscape(idOrName), nil, &j)
+}
+
+// StartJob starts a stopped job again.
+func (c *Client) StartJob(ctx context.Context, id string) error {
+	return c.call(ctx, "POST", "/jobs/"+url.PathEscape(id)+"/start", nil, nil)
+}
+
+// StopJob stops a job and its running round.
+func (c *Client) StopJob(ctx context.Context, id string) error {
+	return c.call(ctx, "POST", "/jobs/"+url.PathEscape(id)+"/stop", nil, nil)
+}
+
+// DeleteJob stops and deletes a job. Its round sessions stay.
+func (c *Client) DeleteJob(ctx context.Context, id string) error {
+	return c.call(ctx, "DELETE", "/jobs/"+url.PathEscape(id), nil, nil)
+}
+
 func (c *Client) call(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {

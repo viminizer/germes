@@ -57,3 +57,33 @@ func (d *Daemon) ListEvents(ctx context.Context, f api.EventFilter) (api.Page[ap
 func (d *Daemon) Watch(ctx context.Context, f api.WatchFilter) (<-chan api.Event, error) {
 	return d.sessions.Watch(ctx, f)
 }
+
+// CreateJob creates and starts a job.
+func (d *Daemon) CreateJob(ctx context.Context, r api.JobRequest) (api.Job, error) {
+	return d.jobs.CreateJob(ctx, r)
+}
+
+// ListJobs lists jobs.
+func (d *Daemon) ListJobs(ctx context.Context, f api.JobFilter) (api.Page[api.Job], error) {
+	return d.jobs.ListJobs(ctx, f)
+}
+
+// GetJob reads one job by id or name.
+func (d *Daemon) GetJob(ctx context.Context, idOrName string) (api.Job, error) {
+	return d.jobs.GetJob(ctx, idOrName)
+}
+
+// StartJob starts a stopped job again.
+func (d *Daemon) StartJob(ctx context.Context, id string) error {
+	return d.jobs.StartJob(ctx, id)
+}
+
+// StopJob stops a job and its running round.
+func (d *Daemon) StopJob(ctx context.Context, id string) error {
+	return d.jobs.StopJob(ctx, id)
+}
+
+// DeleteJob stops and deletes a job.
+func (d *Daemon) DeleteJob(ctx context.Context, id string) error {
+	return d.jobs.DeleteJob(ctx, id)
+}

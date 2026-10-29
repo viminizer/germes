@@ -80,6 +80,30 @@ func NewHandler(svc Service) http.Handler {
 			}
 		}
 	})
+	mux.HandleFunc("POST /jobs", func(w http.ResponseWriter, r *http.Request) {
+		var j JobRequest
+		if !decode(w, r, &j) {
+			return
+		}
+		reply(w, r, func() (any, error) { return svc.CreateJob(r.Context(), j) })
+	})
+	mux.HandleFunc("GET /jobs", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		f := JobFilter{Status: JobStatus(q.Get("status")), Limit: atoi(q.Get("limit")), Cursor: q.Get("cursor")}
+		reply(w, r, func() (any, error) { return svc.ListJobs(r.Context(), f) })
+	})
+	mux.HandleFunc("GET /jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, r, func() (any, error) { return svc.GetJob(r.Context(), r.PathValue("id")) })
+	})
+	mux.HandleFunc("POST /jobs/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, r, func() (any, error) { return nil, svc.StartJob(r.Context(), r.PathValue("id")) })
+	})
+	mux.HandleFunc("POST /jobs/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, r, func() (any, error) { return nil, svc.StopJob(r.Context(), r.PathValue("id")) })
+	})
+	mux.HandleFunc("DELETE /jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, r, func() (any, error) { return nil, svc.DeleteJob(r.Context(), r.PathValue("id")) })
+	})
 	return mux
 }
 

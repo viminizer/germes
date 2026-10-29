@@ -1,5 +1,5 @@
 // Package daemon is the background process. It implements api.Service and
-// serves it on the unix socket. The real work is in session.
+// serves it on the unix socket. The real work is in session and job.
 package daemon
 
 import (
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/viminizer/germes/internal/api"
+	"github.com/viminizer/germes/internal/job"
 	"github.com/viminizer/germes/internal/session"
 )
 
@@ -27,9 +28,10 @@ var ErrUpdated = errors.New("germes binary updated")
 // updateCheck is how often the daemon looks for a new binary.
 const updateCheck = 3 * time.Second
 
-// Daemon serves the sessions.
+// Daemon serves the sessions and jobs.
 type Daemon struct {
 	sessions   *session.Manager
+	jobs       *job.Scheduler
 	version    string
 	configPath string // watched: a change restarts the daemon when idle
 	startedAt  time.Time
@@ -40,8 +42,8 @@ type Daemon struct {
 var _ api.Service = (*Daemon)(nil)
 
 // New creates the daemon.
-func New(sessions *session.Manager, version, configPath string) *Daemon {
-	return &Daemon{sessions: sessions, version: version, configPath: configPath, startedAt: time.Now(), stop: make(chan struct{})}
+func New(sessions *session.Manager, jobs *job.Scheduler, version, configPath string) *Daemon {
+	return &Daemon{sessions: sessions, jobs: jobs, version: version, configPath: configPath, startedAt: time.Now(), stop: make(chan struct{})}
 }
 
 // Run serves until SIGTERM, SIGINT, StopDaemon or ctx ends.
@@ -67,6 +69,9 @@ func (d *Daemon) Run(ctx context.Context, socketPath, lockPath string) error {
 
 	if err := d.sessions.Start(ctx); err != nil {
 		slog.Error("recover sessions", "err", err)
+	}
+	if err := d.jobs.Start(ctx); err != nil {
+		slog.Error("resume jobs", "err", err)
 	}
 
 	// Watch streams never end on their own; cancel them on shutdown.
@@ -100,6 +105,10 @@ func (d *Daemon) Run(ctx context.Context, socketPath, lockPath string) error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("http shutdown", "err", err)
+	}
+	// Jobs first: a job goroutine must not start a round in a stopped manager.
+	if err := d.jobs.Stop(shutdownCtx); err != nil {
+		slog.Warn("stop jobs", "err", err)
 	}
 	if err := d.sessions.Stop(shutdownCtx); err != nil {
 		slog.Warn("stop sessions", "err", err)

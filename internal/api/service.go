@@ -17,6 +17,13 @@ type Service interface {
 
 	ListEvents(ctx context.Context, f EventFilter) (Page[Event], error)
 	Watch(ctx context.Context, f WatchFilter) (<-chan Event, error)
+
+	CreateJob(ctx context.Context, r JobRequest) (Job, error)
+	ListJobs(ctx context.Context, f JobFilter) (Page[Job], error)
+	GetJob(ctx context.Context, idOrName string) (Job, error)
+	StartJob(ctx context.Context, id string) error
+	StopJob(ctx context.Context, id string) error
+	DeleteJob(ctx context.Context, id string) error
 }
 
 // EventLister lists stored events (the Service, or the store).

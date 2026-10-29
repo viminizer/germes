@@ -25,11 +25,7 @@ func ListSessions(ctx context.Context, svc api.Service, out io.Writer) error {
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATUS\tUPDATED\tPROJECT\tBRANCH\tTITLE")
 	for _, s := range page.Items {
-		branch := s.Branch
-		if branch == "" {
-			branch = "-"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, s.Status, ago(s.UpdatedAt), s.Project, branch, s.Title)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, s.Status, ago(s.UpdatedAt), s.Project, orDash(s.Branch), s.Title)
 	}
 	return tw.Flush()
 }
@@ -50,6 +46,75 @@ func StopDaemon(ctx context.Context, svc api.Service, out io.Writer) error {
 	}
 	fmt.Fprintln(out, "daemon stopped")
 	return nil
+}
+
+// CreateJob creates a job and says how to follow it.
+func CreateJob(ctx context.Context, svc api.Service, r api.JobRequest, out io.Writer) error {
+	j, err := svc.CreateJob(ctx, r)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "job %s started (%s); follow it with `germes attach %s`\n", j.Name, schedule(j), j.Name)
+	return nil
+}
+
+// ListJobs prints the jobs, newest first.
+func ListJobs(ctx context.Context, svc api.Service, out io.Writer) error {
+	page, err := svc.ListJobs(ctx, api.JobFilter{Limit: 50})
+	if err != nil {
+		return err
+	}
+	if len(page.Items) == 0 {
+		fmt.Fprintln(out, "no jobs")
+		return nil
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tNAME\tSTATUS\tRUNS\tSCHEDULE\tSESSION\tDIR\tERROR")
+	for _, j := range page.Items {
+		runs := fmt.Sprint(j.Runs)
+		if j.MaxRuns > 0 {
+			runs += fmt.Sprintf("/%d", j.MaxRuns)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Name, j.Status, runs, schedule(j),
+			orDash(j.SessionID), j.Dir, orDash(j.Error))
+	}
+	return tw.Flush()
+}
+
+// UpdateJob starts, stops or deletes (rm) a job.
+func UpdateJob(ctx context.Context, svc api.Service, action, id string, out io.Writer) error {
+	var err error
+	done := ""
+	switch action {
+	case "start":
+		err, done = svc.StartJob(ctx, id), "started"
+	case "stop":
+		err, done = svc.StopJob(ctx, id), "stopped"
+	case "rm":
+		err, done = svc.DeleteJob(ctx, id), "deleted"
+	default:
+		return fmt.Errorf("unknown job command %q", action)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, done, "job", id)
+	return nil
+}
+
+// schedule says how often a job runs.
+func schedule(j api.Job) string {
+	if j.Every == 0 {
+		return "back to back"
+	}
+	return "every " + j.Every.String()
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func ago(t time.Time) string {

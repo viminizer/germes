@@ -68,17 +68,9 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 
 // ListSessions lists sessions, newest first. The cursor is an offset.
 func (s *Store) ListSessions(ctx context.Context, f api.SessionFilter) (api.Page[api.Session], error) {
-	limit := f.Limit
-	if limit <= 0 || limit > 500 {
-		limit = defaultLimit
-	}
-	offset := 0
-	if f.Cursor != "" {
-		n, err := strconv.Atoi(f.Cursor)
-		if err != nil || n < 0 {
-			return api.Page[api.Session]{}, api.NewError(api.CodeInvalid, "bad page cursor %q", f.Cursor)
-		}
-		offset = n
+	limit, offset, err := pageBounds(f.Limit, f.Cursor)
+	if err != nil {
+		return api.Page[api.Session]{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
 		WHERE (? = '' OR project = ?) AND (? = '' OR status = ?)
@@ -88,19 +80,41 @@ func (s *Store) ListSessions(ctx context.Context, f api.SessionFilter) (api.Page
 		return api.Page[api.Session]{}, fmt.Errorf("list sessions: %w", err)
 	}
 	defer rows.Close()
-	var page api.Page[api.Session]
+	var sessions []api.Session
 	for rows.Next() {
 		sess, err := scanSession(rows)
 		if err != nil {
-			return page, err
+			return api.Page[api.Session]{}, err
 		}
-		page.Items = append(page.Items, sess)
+		sessions = append(sessions, sess)
 	}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
+	return newPage(sessions, limit, offset), rows.Err()
+}
+
+// pageBounds reads a list's limit and offset cursor.
+func pageBounds(limit int, cursor string) (int, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = defaultLimit
+	}
+	offset := 0
+	if cursor != "" {
+		n, err := strconv.Atoi(cursor)
+		if err != nil || n < 0 {
+			return 0, 0, api.NewError(api.CodeInvalid, "bad page cursor %q", cursor)
+		}
+		offset = n
+	}
+	return limit, offset, nil
+}
+
+// newPage cuts items (read with limit+1) to one page.
+func newPage[T any](items []T, limit, offset int) api.Page[T] {
+	page := api.Page[T]{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
 		page.Next = strconv.Itoa(offset + limit)
 	}
-	return page, rows.Err()
+	return page
 }
 
 const sessionColumns = `id, title, project, dir, branch, status, engine, resume_ids, created_at, updated_at`

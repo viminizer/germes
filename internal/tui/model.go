@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -35,7 +36,11 @@ type (
 	watchEndMsg   struct{ gen int }
 	escTimeoutMsg struct{ gen int }
 	reconnectMsg  struct{ gen int }
+	jobMsg        struct{ job api.Job }
 )
+
+// jobCheck is how often an attached job is checked for a new round.
+const jobCheck = 2 * time.Second
 
 // doubleEscWindow is how long a second Esc may follow the first. One Esc
 // never interrupts; Esc Esc does.
@@ -79,7 +84,7 @@ func newModel(ctx context.Context, svc api.Service, opts Options) *model {
 
 func (m *model) Init() tea.Cmd {
 	if m.sessionID != "" {
-		return m.watch()
+		return tea.Batch(m.watch(), m.checkJob())
 	}
 	return nil
 }
@@ -121,6 +126,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.print(msg.msgs...)
 
 	case switchMsg:
+		m.opts.JobID = "" // picked a session by hand: stop following the job
 		return m, tea.Batch(m.print(message{Kind: kindNotice, Text: "switched to " + msg.id}), m.open(msg.id))
 
 	case watchMsg:
@@ -151,6 +157,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.watch()
+
+	case jobMsg:
+		// Follow the job to its new round.
+		if msg.job.SessionID != "" && msg.job.SessionID != m.sessionID {
+			marker := fmt.Sprintf("round %d", msg.job.Runs)
+			return m, tea.Batch(m.print(message{Kind: kindRound, Text: marker}), m.open(msg.job.SessionID), m.checkJob())
+		}
+		if msg.job.Status != "" && msg.job.Status != api.JobRunning {
+			return m, nil // no more rounds
+		}
+		return m, m.checkJob()
 
 	case escTimeoutMsg:
 		if !m.escPending || msg.gen != m.escGen {
@@ -291,6 +308,21 @@ func (m *model) watch() tea.Cmd {
 		s, err := m.svc.GetSession(ctx, id)
 		return watchMsg{gen: gen, ch: ch, queue: s.Queued, branch: s.Branch, err: err}
 	}
+}
+
+// checkJob reads the attached job after a short wait. Not attached: nothing.
+func (m *model) checkJob() tea.Cmd {
+	id := m.opts.JobID
+	if id == "" {
+		return nil
+	}
+	return tea.Tick(jobCheck, func(time.Time) tea.Msg {
+		j, err := m.svc.GetJob(m.ctx, id)
+		if err != nil {
+			return jobMsg{} // the daemon may be restarting; check again later
+		}
+		return jobMsg{job: j}
+	})
 }
 
 func (m *model) stopWatch() {

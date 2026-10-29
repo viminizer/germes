@@ -359,7 +359,7 @@ internal/session/
 - Esc stops the current step (interrupt and redirect). `/sessions` opens a session picker. Ctrl+C or `/exit` quits; the session keeps running. Keys: see "TUI module".
 - The overseer is one more session in the picker. Optional.
 - `germes` always starts a new session. Resuming is explicit: `germes -c` (last session in this project), `germes --resume` (pick from a list), `germes attach <name>` (any session). `germes ls` lists sessions.
-- Direct commands without an LLM: `germes stop <s>`, `germes job add <s> --every 1h "..."`, `germes job ls`, `germes job stop <s>`.
+- Direct commands without an LLM: `germes stop <s>`, `germes job add --every 1h "..."` (in the current folder), `germes job ls|start|stop|rm <job>`.
 - Slash commands inside the TUI: `/sessions`, `/switch <s>`, `/overseer`.
 - Built with Bubble Tea.
 
@@ -1196,7 +1196,9 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 ### Jobs
 - A round fails: count it. Three in a row: status `failed`, notify me.
 - Daemon was off at the planned time: run once at the next start. Missed rounds are not caught up.
-- Job folder is gone: status `failed` with an error.
+- Job folder is gone, or the last round's session or worktree is gone: status `failed` with an error.
+- A running round's session is deleted: the round fails (counts toward the three).
+- A job goroutine panics: logged with its stack, the job is `failed` with "internal error"; the daemon keeps running.
 
 ### Telegram
 - Network down: polling retries with backoff.
@@ -1236,7 +1238,14 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - `/clear` keeps the session saved and wipes the screen and scrollback: the TUI program ends, Germes clears the terminal, and a fresh TUI starts with a new (unsaved until the first message) session. Clearing from inside Bubble Tea's inline renderer garbled the screen, so it restarts instead.
    - Suggestions component (`internal/tui/suggest.go`): `/` lists commands, `@` lists reference kinds, `@file:` / `@folder:` list project paths. Up/Down pick, Tab completes, Enter completes first then sends, Esc closes. Commands and reference kinds are data shared with `/help` and the daemon (`api.RefKinds`).
    - `@` references expand in the daemon (`internal/refs`), relative to the session's folder, through the tool registry, so the block list applies. Saved as an `attachment` event after the user message; the TUI shows `attached: @file:x`, the model gets the text.
-6. Jobs, then workflows.
+6. Jobs, then workflows. Jobs done:
+   - `germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"` in the current folder; `germes job ls|start|stop|rm <job>`. `Service` has CreateJob, ListJobs, GetJob (id or name), StartJob, StopJob, DeleteJob; jobs live in the `jobs` table.
+   - `job.Scheduler` runs one goroutine per running job. Each round counts itself and sets the next start before it runs, then sends the round prompt to a new session and watches it until it is idle with nothing queued (typing into a round steers it). The round prompt asks the agent to read and update `PROGRESS.md` and to end with `[DONE]` when nothing is left.
+   - All rounds share one folder: a new round uses `MessageRequest.SameDirAs` (the round before), so it works in the same worktree. Deleting one round's session keeps a worktree other sessions still use.
+   - Ends: `[DONE]` (done), `MaxRuns` (done), 3 failed rounds in a row (failed, with the error in `job ls`), folder or last round gone (failed at once), `job stop` (also stops the running round). Daemon restart: running jobs resume; a missed round runs once.
+   - `germes attach <job>` opens the latest round and follows new ones (checks the job every 2 s, prints `── round N ──`). `/switch` or `/clear` stops following.
+   - Checked live: a 3-round job ended itself with `[DONE]`, rounds shared one worktree and `PROGRESS.md`; an attached TUI followed round 1 to round 2.
+   - Known: the daemon updates itself only when no session is working, so a back-to-back job delays a self-update until it ends or is stopped.
 7. MCP and the overseer.
 8. Telegram.
 

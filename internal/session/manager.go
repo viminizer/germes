@@ -4,7 +4,6 @@ package session
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	textpkg "github.com/viminizer/germes/internal/text"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/engine"
+	"github.com/viminizer/germes/internal/stream"
 )
 
 // idleTime is how long a worker stays in memory with nothing to do.
@@ -96,14 +96,7 @@ func (m *Manager) Start(ctx context.Context) error {
 // Stop cancels every running turn and waits for the workers to finish.
 func (m *Manager) Stop(ctx context.Context) error {
 	m.cancel()
-	done := make(chan struct{})
-	go func() { m.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return stream.Wait(ctx, &m.wg)
 }
 
 // SendMessage queues text for a session. No SessionID: a new session is
@@ -115,7 +108,7 @@ func (m *Manager) SendMessage(ctx context.Context, r api.MessageRequest) (api.Me
 	}
 	id, warning := r.SessionID, ""
 	if id == "" {
-		s, warn, err := m.createSession(ctx, r.Dir, text, r.NoWorktree)
+		s, warn, err := m.createSession(ctx, r, text)
 		if err != nil {
 			return api.MessageResult{}, err
 		}
@@ -224,13 +217,29 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// A session whose worktree holds work is never deleted with it.
-	if s.Branch != "" {
+	// A session whose worktree holds work is never deleted with it. A
+	// worktree other sessions still use (a job's rounds) stays.
+	if s.Branch != "" && !m.isShared(ctx, s) {
 		if err := m.deleteWorktree(ctx, s); err != nil {
 			return err
 		}
 	}
 	return m.store.DeleteSession(ctx, id)
+}
+
+// isShared reports whether another session works in s.Dir. On a read error
+// it says yes, so the worktree is kept.
+func (m *Manager) isShared(ctx context.Context, s api.Session) bool {
+	page, err := m.store.ListSessions(ctx, api.SessionFilter{Project: s.Project, Limit: 500})
+	if err != nil {
+		return true
+	}
+	for _, o := range page.Items {
+		if o.ID != s.ID && o.Dir == s.Dir {
+			return true
+		}
+	}
+	return false
 }
 
 // ListEvents lists stored events.
@@ -239,17 +248,30 @@ func (m *Manager) ListEvents(ctx context.Context, f api.EventFilter) (api.Page[a
 }
 
 // createSession saves a new session. In a git project it gets its own
-// worktree, so sessions never clash; if that fails it works in dir, with a
-// warning for the user.
-func (m *Manager) createSession(ctx context.Context, dir, text string, noWorktree bool) (api.Session, string, error) {
+// worktree, so sessions never clash; if that fails it works in r.Dir, with a
+// warning for the user. With r.SameDirAs it works where that session works.
+func (m *Manager) createSession(ctx context.Context, r api.MessageRequest, text string) (api.Session, string, error) {
+	now := time.Now()
+	if r.SameDirAs != "" {
+		src, err := m.store.GetSession(ctx, r.SameDirAs)
+		if err != nil {
+			return api.Session{}, "", err
+		}
+		if _, err := os.Stat(src.Dir); err != nil {
+			return api.Session{}, "", api.NewError(api.CodeInvalid, "folder %q of session %s is gone", src.Dir, src.ID)
+		}
+		s := api.Session{ID: api.NewID(), Title: titleOf(text), Project: src.Project, Dir: src.Dir, Branch: src.Branch,
+			Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
+		return s, "", m.store.CreateSession(ctx, s)
+	}
+	dir, noWorktree := r.Dir, r.NoWorktree
 	if dir == "" {
 		return api.Session{}, "", api.NewError(api.CodeInvalid, "no session id and no folder")
 	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return api.Session{}, "", api.NewError(api.CodeInvalid, "folder %q does not exist", dir)
 	}
-	now := time.Now()
-	s := api.Session{ID: newID(), Title: titleOf(text), Project: GetProjectRoot(dir), Dir: dir,
+	s := api.Session{ID: api.NewID(), Title: titleOf(text), Project: GetProjectRoot(dir), Dir: dir,
 		Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
 	warning := ""
 	switch {
@@ -293,16 +315,6 @@ func GetProjectRoot(dir string) string {
 func titleOf(text string) string {
 	line, _, _ := strings.Cut(text, "\n")
 	return textpkg.Shorten(line, 40)
-}
-
-func newID() string {
-	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 6)
-	rand.Read(b)
-	for i := range b {
-		b[i] = letters[int(b[i])%len(letters)]
-	}
-	return string(b)
 }
 
 func (m *Manager) newWorker(ctx context.Context, s api.Session) (*worker, error) {

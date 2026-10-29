@@ -17,6 +17,7 @@ type Options struct {
 	Dir          string // where new sessions work
 	Project      string // shown in the banner and status bar
 	SessionID    string // "" = start a new session on the first message
+	JobID        string // attached to a job: follow its new rounds
 	NoWorktree   bool   // a new session works in Dir, not in its own worktree
 	Version      string
 	Engine       string
@@ -52,6 +53,6 @@ func (t *TUI) Run(ctx context.Context) error {
 		}
 		// Home, clear the screen, clear the scrollback.
 		fmt.Fprint(os.Stdout, "\x1b[H\x1b[2J\x1b[3J")
-		opts.SessionID, notice = "", done.restartNotice
+		opts.SessionID, opts.JobID, notice = "", "", done.restartNotice
 	}
 }

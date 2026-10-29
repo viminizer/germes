@@ -3,6 +3,7 @@
 package api
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -112,6 +113,7 @@ type MessageRequest struct {
 	Dir        string `json:"dir,omitempty"`
 	Text       string `json:"text"`
 	NoWorktree bool   `json:"no_worktree,omitempty"` // new session works in Dir, not in its own worktree
+	SameDirAs  string `json:"same_dir_as,omitempty"` // new session works where this session works (a job's rounds share a worktree)
 }
 
 // MessageResult says which session got the message.
@@ -134,6 +136,54 @@ type SessionUpdate struct {
 	// LeaveWorktree moves the session to the project folder and removes its
 	// worktree. Refused while the worktree has unmerged work.
 	LeaveWorktree bool `json:"leave_worktree,omitempty"`
+}
+
+// JobStatus is where a job is in its life.
+type JobStatus string
+
+// Job statuses.
+const (
+	JobRunning JobStatus = "running"
+	JobStopped JobStatus = "stopped"
+	JobDone    JobStatus = "done"   // the agent replied [DONE], or MaxRuns rounds ran
+	JobFailed  JobStatus = "failed" // rounds kept failing, or the job cannot run
+)
+
+// Job runs a prompt again and again, each round in a new session, all rounds
+// in one folder (their own worktree unless NoWorktree).
+type Job struct {
+	ID         string        `json:"id"`
+	Name       string        `json:"name"`
+	Dir        string        `json:"dir"`
+	Prompt     string        `json:"prompt"`
+	NoWorktree bool          `json:"no_worktree,omitempty"`
+	Every      time.Duration `json:"every"`    // time between round starts; 0 = next round right away
+	MaxRuns    int           `json:"max_runs"` // 0 = no limit
+	Runs       int           `json:"runs"`
+	Failures   int           `json:"failures"` // failed rounds in a row
+	NextRunAt  time.Time     `json:"next_run_at"`
+	Status     JobStatus     `json:"status"`
+	SessionID  string        `json:"session_id,omitempty"` // the latest round's session
+	Error      string        `json:"error,omitempty"`      // why the last round failed
+	CreatedAt  time.Time     `json:"created_at"`
+	UpdatedAt  time.Time     `json:"updated_at"`
+}
+
+// JobRequest creates a job. No Name: the job's id.
+type JobRequest struct {
+	Name       string        `json:"name,omitempty"`
+	Dir        string        `json:"dir"`
+	Prompt     string        `json:"prompt"`
+	NoWorktree bool          `json:"no_worktree,omitempty"`
+	Every      time.Duration `json:"every,omitempty"`
+	MaxRuns    int           `json:"max_runs,omitempty"`
+}
+
+// JobFilter selects jobs. Empty fields match everything.
+type JobFilter struct {
+	Status JobStatus
+	Limit  int
+	Cursor string
 }
 
 // Daemon describes the running daemon.
@@ -167,6 +217,17 @@ func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
 // NewError creates an Error.
 func NewError(code Code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
+}
+
+// NewID returns a new short random id, for sessions and jobs.
+func NewID() string {
+	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 6)
+	rand.Read(b)
+	for i := range b {
+		b[i] = letters[int(b[i])%len(letters)]
+	}
+	return string(b)
 }
 
 // RefKinds are the @ references a message may use (expanded by the daemon),

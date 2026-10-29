@@ -24,6 +24,7 @@ blocked:                 # commands and files no agent may touch, Claude Code sy
 Commands:
 - `germes reserve on|off <engine>`: turn an engine's reserve on or off.
 - `germes ls`: list sessions. `germes stop <id>`: stop a session's turn.
+- `germes job add [--every 1h] [--max-runs n] [--name x] "<prompt>"`: run a prompt again and again in the current folder, a new session each round, until the agent ends a reply with [DONE]. `germes job ls|start|stop|rm <id>`.
 - `germes daemon restart`: restart the daemon (rarely needed; it updates and reloads itself).
 
 ## Other Germes files

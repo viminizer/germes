@@ -24,6 +24,7 @@ import (
 	"github.com/viminizer/germes/internal/engine/claude"
 	"github.com/viminizer/germes/internal/engine/loop"
 	"github.com/viminizer/germes/internal/env"
+	"github.com/viminizer/germes/internal/job"
 	"github.com/viminizer/germes/internal/llm/codex"
 	"github.com/viminizer/germes/internal/memory"
 	"github.com/viminizer/germes/internal/prompt"
@@ -49,9 +50,12 @@ const usage = `usage:
   germes                start a new session in this folder
   germes -c             continue the last session in this folder
   germes --no-worktree  start a session in this folder instead of its own git worktree
-  germes attach <id>    open any session
+  germes attach <id>    open any session, or a job's latest round (follows new rounds)
   germes ls             list sessions
   germes stop <id>      stop a session's current step
+  germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"
+                        run a prompt again and again in this folder, a new session each round
+  germes job ls|start|stop|rm <id>  list, start, stop or delete jobs
   germes reserve on|off <engine>  keep or drop an engine's usage reserve
   germes daemon stop    stop the daemon
   germes daemon restart restart the daemon (it also updates itself when idle)`
@@ -66,6 +70,9 @@ func newPaths() paths {
 	if home == "" {
 		h, _ := os.UserHomeDir()
 		home = filepath.Join(h, ".germes")
+	}
+	if abs, err := filepath.Abs(home); err == nil {
+		home = abs // the same socket and files from any folder
 	}
 	socket := filepath.Join(home, "germes.sock")
 	// Unix socket paths are limited to about 104 bytes (macOS). A deep home
@@ -124,6 +131,11 @@ func run(args []string) error {
 			return errors.New("usage: germes attach <id>")
 		}
 		return runTUI(ctx, p, client, args[1], false, false)
+	case "job":
+		if err := ensureDaemon(ctx, p, client); err != nil {
+			return err
+		}
+		return jobCommand(ctx, client, args[1:])
 	case "reserve":
 		return reserveCommand(p, args[1:])
 	case "help", "-h", "--help":
@@ -172,15 +184,29 @@ func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, 
 		}
 		sessionID = page.Items[0].ID
 	}
+	jobID := ""
 	if sessionID != "" {
 		s, err := client.GetSession(ctx, sessionID)
+		var e *api.Error
+		if errors.As(err, &e) && e.Code == api.CodeNotFound {
+			// Not a session: maybe a job. Open its latest round.
+			j, jerr := client.GetJob(ctx, sessionID)
+			if jerr != nil {
+				return fmt.Errorf("no session or job %q", sessionID)
+			}
+			if j.SessionID == "" {
+				return fmt.Errorf("job %s has not started a round yet; try again in a moment", j.Name)
+			}
+			jobID, sessionID = j.ID, j.SessionID
+			s, err = client.GetSession(ctx, sessionID)
+		}
 		if err != nil {
 			return err
 		}
 		dir, project = s.Dir, s.Project
 	}
 	t := tui.New(client, tui.Options{
-		Dir: dir, Project: project, SessionID: sessionID, Version: version, Engine: engineName, NoWorktree: noWorktree,
+		Dir: dir, Project: project, SessionID: sessionID, JobID: jobID, Version: version, Engine: engineName, NoWorktree: noWorktree,
 		EnsureDaemon: func(ctx context.Context) error { return ensureDaemon(ctx, p, client) },
 	})
 	return t.Run(ctx)
@@ -229,7 +255,8 @@ func runDaemon(p paths) error {
 		return err
 	}
 	sessions := session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg)})
-	err = daemon.New(sessions, version, p.config).Run(context.Background(), p.socket, p.lock)
+	jobs := job.NewScheduler(st, sessions)
+	err = daemon.New(sessions, jobs, version, p.config).Run(context.Background(), p.socket, p.lock)
 	if !errors.Is(err, daemon.ErrUpdated) {
 		return err
 	}
@@ -360,6 +387,39 @@ func codexDir() string {
 	}
 	h, _ := os.UserHomeDir()
 	return filepath.Join(h, ".codex")
+}
+
+// jobCommand runs `germes job ...`.
+func jobCommand(ctx context.Context, client *api.Client, args []string) error {
+	if len(args) == 0 {
+		return errors.New(usage)
+	}
+	switch args[0] {
+	case "ls":
+		return cli.ListJobs(ctx, client, os.Stdout)
+	case "add":
+		fs := flag.NewFlagSet("job add", flag.ContinueOnError)
+		every := fs.Duration("every", 0, "time between round starts (0 = back to back)")
+		maxRuns := fs.Int("max-runs", 0, "stop after this many rounds (0 = no limit)")
+		name := fs.String("name", "", "a name to attach to it by")
+		noWorktree := fs.Bool("no-worktree", false, "work in this folder, not in the job's own git worktree")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return errors.New(`usage: germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"`)
+		}
+		dir, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return cli.CreateJob(ctx, client, api.JobRequest{Name: *name, Dir: dir, Prompt: fs.Arg(0),
+			NoWorktree: *noWorktree, Every: *every, MaxRuns: *maxRuns}, os.Stdout)
+	}
+	if len(args) != 2 {
+		return fmt.Errorf("usage: germes job %s <id>", args[0])
+	}
+	return cli.UpdateJob(ctx, client, args[0], args[1], os.Stdout)
 }
 
 // reserveCommand turns an engine's reserve on or off in the config. The

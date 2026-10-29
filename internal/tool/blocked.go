@@ -39,9 +39,10 @@ func (r *Registry) isBlocked(t Tool, c Call) (string, bool) {
 		if rl.pattern == "" {
 			return rl.raw, true
 		}
-		var args map[string]any
-		json.Unmarshal(c.Args, &args)
-		value, _ := args[t.MatchArg].(string)
+		value, err := protectedArgument(c.Args, t.MatchArg)
+		if err != nil {
+			return fmt.Sprintf("%s: %v", rl.raw, err), true
+		}
 		if value == "" {
 			continue
 		}
@@ -52,6 +53,47 @@ func (r *Registry) isBlocked(t Tool, c Call) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// protectedArgument refuses ambiguous keys rather than guessing how a handler
+// decodes them. Struct decoding accepts case aliases and retains strings on null;
+// map decoding loses that ordering, so it cannot safely check duplicate keys.
+func protectedArgument(raw json.RawMessage, arg string) (string, error) {
+	if !json.Valid(raw) {
+		return "", fmt.Errorf("invalid argument JSON")
+	}
+	d := json.NewDecoder(strings.NewReader(string(raw)))
+	first, err := d.Token()
+	if err != nil || first != json.Delim('{') {
+		return "", fmt.Errorf("arguments must be an object")
+	}
+	var value string
+	seen := false
+	for d.More() {
+		token, err := d.Token()
+		if err != nil {
+			return "", fmt.Errorf("read argument key: %w", err)
+		}
+		key, ok := token.(string)
+		if !ok {
+			return "", fmt.Errorf("argument key must be a string")
+		}
+		var field json.RawMessage
+		if err := d.Decode(&field); err != nil {
+			return "", fmt.Errorf("read argument value: %w", err)
+		}
+		if !strings.EqualFold(key, arg) {
+			continue
+		}
+		if key != arg || seen {
+			return "", fmt.Errorf("protected argument %q must occur once with canonical spelling", arg)
+		}
+		seen = true
+		if err := json.Unmarshal(field, &value); err != nil {
+			return "", fmt.Errorf("protected argument %q must be a string", arg)
+		}
+	}
+	return value, nil
 }
 
 // candidates are the strings a pattern is checked against. A shell command is

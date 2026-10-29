@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -130,6 +131,49 @@ func TestBlockListWildcardMatchesNewlines(t *testing.T) {
 				t.Fatalf("blocked=%v called=%v result=%+v", tc.blocked, called, res)
 			}
 		})
+	}
+}
+
+func TestBlockListProtectedArgumentKeys(t *testing.T) {
+	for _, toolName := range []string{"Read", "Write", "Edit", "Bash"} {
+		arg, denied, allowed := "file_path", "private.txt", "public.txt"
+		if toolName == "Bash" {
+			arg, denied, allowed = "command", "restricted action", "echo hello"
+		}
+		for _, tc := range []struct {
+			name, args string
+			blocked    bool
+		}{
+			{"malformed", `{"broken":`, true},
+			{"nonobject", `[]`, true},
+			{"wrong type", fmt.Sprintf(`{"%s":42}`, arg), true},
+			{"canonical denied", fmt.Sprintf(`{"%s":%q}`, arg, denied), true},
+			{"uppercase", fmt.Sprintf(`{"%s":%q}`, strings.ToUpper(arg), denied), true},
+			{"mixed case", fmt.Sprintf(`{"%s":%q}`, strings.ToUpper(arg[:1])+arg[1:], denied), true},
+			{"conflicting alias last", fmt.Sprintf(`{"%s":%q,"%s":%q}`, arg, allowed, strings.ToUpper(arg), denied), true},
+			{"conflicting canonical last", fmt.Sprintf(`{"%s":%q,"%s":%q}`, strings.ToUpper(arg), denied, arg, allowed), true},
+			{"duplicate null", fmt.Sprintf(`{"%s":%q,"%s":null}`, arg, denied, arg), true},
+			{"duplicate string", fmt.Sprintf(`{"%s":%q,"%s":%q}`, arg, denied, arg, allowed), true},
+			{"canonical allowed", fmt.Sprintf(`{"%s":%q,"other":{"command":"ignored"}}`, arg, allowed), false},
+		} {
+			t.Run(toolName+"/"+tc.name, func(t *testing.T) {
+				called := false
+				r, err := NewRegistry([]Tool{{Name: toolName, MatchArg: arg, Run: NewRun(func(_ context.Context, _ Call, a struct {
+					FilePath string `json:"file_path"`
+					Command  string `json:"command"`
+				}) (string, error) {
+					called = true
+					return a.FilePath + a.Command, nil
+				})}}, nil, []string{toolName + "(" + denied + ")"}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				res := run(r, toolName, tc.args)
+				if res.IsError != tc.blocked || called == tc.blocked {
+					t.Fatalf("blocked=%v called=%v result=%+v", tc.blocked, called, res)
+				}
+			})
+		}
 	}
 }
 

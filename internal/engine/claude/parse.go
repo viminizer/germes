@@ -21,6 +21,7 @@ const (
 // parser turns claude's stream-json lines into engine events.
 type parser struct {
 	sessionID string
+	denied    []string // paths of tool calls Claude was not allowed to make
 }
 
 type line struct {
@@ -32,6 +33,9 @@ type line struct {
 	RateLimit *rateLimitInfo  `json:"rate_limit_info"`
 	IsError   bool            `json:"is_error"`
 	Result    json.RawMessage `json:"result"`
+	Denials   []struct {
+		Input map[string]any `json:"tool_input"`
+	} `json:"permission_denials"`
 }
 
 type streamEvent struct {
@@ -90,6 +94,13 @@ func (p *parser) parse(raw []byte) []engine.Event {
 	case "result":
 		if l.IsError {
 			return []engine.Event{{Kind: engine.KindError, Err: errors.New(textOf(l.Result))}}
+		}
+		for _, d := range l.Denials {
+			for _, k := range []string{"file_path", "path", "notebook_path"} {
+				if path, ok := d.Input[k].(string); ok && path != "" {
+					p.denied = append(p.denied, path)
+				}
+			}
 		}
 		return []engine.Event{{Kind: engine.KindDone, ResumeID: p.sessionID, Engine: Name}}
 	}

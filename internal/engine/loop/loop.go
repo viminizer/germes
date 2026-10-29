@@ -112,7 +112,7 @@ func (l *Loop) system(ctx context.Context, t engine.Turn) (string, error) {
 	if s, ok := l.frozen[key]; ok {
 		return s, nil
 	}
-	p, err := l.prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.RoleOf(t.Overseer))
+	p, err := l.prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.NewRole(t.Overseer))
 	if err != nil {
 		return "", err
 	}

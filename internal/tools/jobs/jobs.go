@@ -15,11 +15,7 @@ import (
 
 // New returns the job tools.
 func New(svc api.Service) []tool.Tool {
-	idSchema := json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"job id or name"}},"required":["id"],"additionalProperties":false}`)
-	type idArgs struct {
-		ID string `json:"id"`
-	}
-	return []tool.Tool{
+	tools := []tool.Tool{
 		{
 			Name: "job_create", Toolset: "jobs",
 			Description: "Create and start a job in a project folder: a prompt that runs round after round in a new session each time (until the agent replies [DONE]), " +
@@ -68,9 +64,15 @@ func New(svc api.Service) []tool.Tool {
 				for _, j := range page.Items {
 					fmt.Fprintf(&b, "%s  %s  %s  runs %d", j.ID, j.Name, j.Status, j.Runs)
 					if j.Workflow != "" {
-						fmt.Fprintf(&b, "  workflow %s:%s", j.Workflow, j.Step)
+						fmt.Fprintf(&b, "  workflow %s", j.Workflow)
+						if j.Step != "" {
+							fmt.Fprintf(&b, " (step %s)", j.Step)
+						}
 					}
-					fmt.Fprintf(&b, "  session %s  %s", j.SessionID, j.Dir)
+					if j.SessionID != "" {
+						fmt.Fprintf(&b, "  session %s", j.SessionID)
+					}
+					fmt.Fprintf(&b, "  in %s", j.Dir)
 					if j.Error != "" {
 						fmt.Fprintf(&b, "  error: %s", j.Error)
 					}
@@ -79,23 +81,23 @@ func New(svc api.Service) []tool.Tool {
 				return b.String(), nil
 			}),
 		},
-		{
-			Name: "job_start", Toolset: "jobs", Description: "Start a stopped, done or failed job again.", Schema: idSchema,
-			Run: tool.NewRun(func(ctx context.Context, c tool.Call, a idArgs) (string, error) {
-				return "started " + a.ID, svc.StartJob(ctx, a.ID)
-			}),
-		},
-		{
-			Name: "job_stop", Toolset: "jobs", Description: "Stop a job and its running round.", Schema: idSchema,
-			Run: tool.NewRun(func(ctx context.Context, c tool.Call, a idArgs) (string, error) {
-				return "stopped " + a.ID, svc.StopJob(ctx, a.ID)
-			}),
-		},
-		{
-			Name: "job_delete", Toolset: "jobs", Description: "Stop and delete a job. Its round sessions stay.", Schema: idSchema,
-			Run: tool.NewRun(func(ctx context.Context, c tool.Call, a idArgs) (string, error) {
-				return "deleted " + a.ID, svc.DeleteJob(ctx, a.ID)
-			}),
-		},
 	}
+	// The tools that only take a job and change it.
+	idSchema := json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"job id or name"}},"required":["id"],"additionalProperties":false}`)
+	for _, c := range []struct {
+		name, help, done string
+		call             func(context.Context, string) error
+	}{
+		{"job_start", "Start a stopped, done or failed job again.", "started", svc.StartJob},
+		{"job_stop", "Stop a job and its running round.", "stopped", svc.StopJob},
+		{"job_delete", "Stop and delete a job. Its round sessions stay.", "deleted", svc.DeleteJob},
+	} {
+		tools = append(tools, tool.Tool{Name: c.name, Toolset: "jobs", Description: c.help, Schema: idSchema,
+			Run: tool.NewRun(func(ctx context.Context, _ tool.Call, a struct {
+				ID string `json:"id"`
+			}) (string, error) {
+				return c.done + " " + a.ID, c.call(ctx, a.ID)
+			})})
+	}
+	return tools
 }

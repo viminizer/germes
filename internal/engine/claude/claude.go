@@ -58,7 +58,7 @@ func (c *Claude) Name() string { return Name }
 func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
 	extra := t.Extra
 	if c.opts.Prompts != nil {
-		p, err := c.opts.Prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.RoleOf(t.Overseer))
+		p, err := c.opts.Prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.NewRole(t.Overseer))
 		if err != nil {
 			return nil, fmt.Errorf("build prompt: %w", err)
 		}

@@ -43,8 +43,8 @@ const (
 	RoleOverseer Role = "overseer"
 )
 
-// RoleOf is the role of a turn: the overseer's, or a project's.
-func RoleOf(overseer bool) Role {
+// NewRole returns the role of a turn: the overseer's, or a project's.
+func NewRole(overseer bool) Role {
 	if overseer {
 		return RoleOverseer
 	}

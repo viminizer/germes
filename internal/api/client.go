@@ -78,8 +78,8 @@ func (c *Client) SendMessage(ctx context.Context, r MessageRequest) (MessageResu
 }
 
 // StopSession stops the current step of a session.
-func (c *Client) StopSession(ctx context.Context, id string) error {
-	return c.call(ctx, "POST", "/sessions/"+url.PathEscape(id)+"/stop", nil, nil)
+func (c *Client) StopSession(ctx context.Context, r StopRequest) error {
+	return c.call(ctx, "POST", "/sessions/"+url.PathEscape(r.ID)+"/stop", r, nil)
 }
 
 // ListEvents lists stored events.

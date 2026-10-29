@@ -44,8 +44,8 @@ func (d *Daemon) SendMessage(ctx context.Context, r api.MessageRequest) (api.Mes
 }
 
 // StopSession stops the current step of a session.
-func (d *Daemon) StopSession(ctx context.Context, id string) error {
-	return d.sessions.StopSession(ctx, id)
+func (d *Daemon) StopSession(ctx context.Context, r api.StopRequest) error {
+	return d.sessions.StopSession(ctx, r)
 }
 
 // ListEvents lists stored events.

@@ -37,7 +37,12 @@ func NewHandler(svc Service) http.Handler {
 		reply(w, r, func() (any, error) { return nil, svc.DeleteSession(r.Context(), r.PathValue("id")) })
 	})
 	mux.HandleFunc("POST /sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, r, func() (any, error) { return nil, svc.StopSession(r.Context(), r.PathValue("id")) })
+		var s StopRequest
+		if !decode(w, r, &s) {
+			return
+		}
+		s.ID = r.PathValue("id")
+		reply(w, r, func() (any, error) { return nil, svc.StopSession(r.Context(), s) })
 	})
 	mux.HandleFunc("POST /messages", func(w http.ResponseWriter, r *http.Request) {
 		var m MessageRequest

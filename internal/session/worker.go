@@ -108,11 +108,14 @@ func (w *worker) exit() bool {
 	return true
 }
 
-// stopTurn stops the running turn and drops the queued messages (Esc).
-func (w *worker) stopTurn() {
+// stopTurn stops the running turn. With dropQueue the queued messages are
+// dropped; without it they run next, right away.
+func (w *worker) stopTurn(dropQueue bool) {
 	w.mu.Lock()
-	dropped := len(w.queue) > 0
-	w.queue = nil
+	dropped := dropQueue && len(w.queue) > 0
+	if dropQueue {
+		w.queue = nil
+	}
 	if w.cancel != nil {
 		w.cancel()
 	}

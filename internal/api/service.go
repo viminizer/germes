@@ -13,7 +13,7 @@ type Service interface {
 	UpdateSession(ctx context.Context, u SessionUpdate) error
 	DeleteSession(ctx context.Context, id string) error
 	SendMessage(ctx context.Context, r MessageRequest) (MessageResult, error)
-	StopSession(ctx context.Context, id string) error
+	StopSession(ctx context.Context, r StopRequest) error
 
 	ListEvents(ctx context.Context, f EventFilter) (Page[Event], error)
 	Watch(ctx context.Context, f WatchFilter) (<-chan Event, error)

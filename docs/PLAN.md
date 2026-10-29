@@ -1132,7 +1132,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - `Watch` stream drops: reconnect with `afterSeq`; nothing is missed.
 - Client too slow: its stream is closed; it reconnects and catches up.
 - Daemon dies while the TUI is open: show "daemon stopped", start it again, reconnect.
-- Message while busy: waits in the session's queue (max 100), shown above the status bar (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). Esc stops the turn and drops the queue.
+- Message while busy: waits in the session's queue (max 100), shown above the status bar (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). Esc stops the turn and drops the queue. Esc Esc (within 400 ms) stops the turn and sends the queue right away (`StopSession` with `SendQueue`). With an empty queue, Esc stops at once (no wait).
 - Daemon stops with messages still queued: the queue lives in memory, so they are lost. Later: save the queue, if this happens in practice.
 
 ### Engines and models

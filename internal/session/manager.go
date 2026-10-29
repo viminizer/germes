@@ -127,13 +127,14 @@ func (m *Manager) SendMessage(ctx context.Context, r api.MessageRequest) (api.Me
 	return api.MessageResult{SessionID: id}, nil
 }
 
-// StopSession stops the current step of a session and drops its queue (Esc).
-func (m *Manager) StopSession(ctx context.Context, id string) error {
+// StopSession stops the current step of a session. The queue is dropped (Esc)
+// or, with SendQueue, runs right away as the next turn (Esc Esc).
+func (m *Manager) StopSession(ctx context.Context, r api.StopRequest) error {
 	m.mu.Lock()
-	w, ok := m.workers[id]
+	w, ok := m.workers[r.ID]
 	m.mu.Unlock()
 	if ok {
-		w.stopTurn()
+		w.stopTurn(!r.SendQueue)
 	}
 	return nil
 }
@@ -181,7 +182,7 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	w, ok := m.workers[id]
 	m.mu.Unlock()
 	if ok {
-		w.stopTurn()
+		w.stopTurn(true)
 	}
 	return m.store.DeleteSession(ctx, id)
 }

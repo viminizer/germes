@@ -29,9 +29,13 @@ type (
 		ch  <-chan api.Event
 		ev  api.Event
 	}
-	watchEndMsg  struct{ gen int }
-	reconnectMsg struct{ gen int }
+	watchEndMsg   struct{ gen int }
+	escTimeoutMsg struct{ gen int }
+	reconnectMsg  struct{ gen int }
 )
+
+// doubleEscWindow is how long a second Esc may follow the first.
+const doubleEscWindow = 400 * time.Millisecond
 
 // model is the root: it owns the components and talks to the Service.
 type model struct {
@@ -45,6 +49,9 @@ type model struct {
 
 	gen         int // watch generation; events from older watches are ignored
 	watchCancel context.CancelFunc
+
+	escPending bool // one Esc pressed with a queue; a second sends the queue
+	escGen     int  // ignores timeouts of older Esc presses
 
 	transcript transcript
 	queue      queueView
@@ -128,6 +135,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.watch()
 
+	case escTimeoutMsg:
+		if !m.escPending || msg.gen != m.escGen {
+			return m, nil
+		}
+		m.escPending = false
+		return m, m.stop(false) // single Esc: stop and drop the queue
+
 	case tickMsg:
 		m.status.Frame++
 		if m.status.Busy {
@@ -147,16 +161,22 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.stopWatch()
 		return m, tea.Quit
 	case "esc":
-		if (m.status.Busy || len(m.queue.items) > 0) && m.sessionID != "" {
-			id := m.sessionID
-			return m, func() tea.Msg {
-				if err := m.svc.StopSession(m.ctx, id); err != nil {
-					return printMsg{[]message{{Kind: kindError, Text: err.Error()}}}
-				}
-				return nil
-			}
+		if (!m.status.Busy && len(m.queue.items) == 0) || m.sessionID == "" {
+			return m, nil
 		}
-		return m, nil
+		if m.escPending {
+			// Second Esc in time: stop and send the queue right away.
+			m.escPending = false
+			return m, m.stop(true)
+		}
+		if len(m.queue.items) == 0 {
+			return m, m.stop(false) // nothing queued: no reason to wait
+		}
+		// First Esc with a queue: wait a moment for a second Esc.
+		m.escPending = true
+		m.escGen++
+		gen := m.escGen
+		return m, tea.Tick(doubleEscWindow, func(time.Time) tea.Msg { return escTimeoutMsg{gen: gen} })
 	case "enter":
 		text := m.composer.value()
 		if text == "" {
@@ -193,6 +213,18 @@ func (m *model) track(ev api.Event) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// stop stops the current turn. sendQueue runs the queue right away instead
+// of dropping it.
+func (m *model) stop(sendQueue bool) tea.Cmd {
+	req := api.StopRequest{ID: m.sessionID, SendQueue: sendQueue}
+	return func() tea.Msg {
+		if err := m.svc.StopSession(m.ctx, req); err != nil {
+			return printMsg{[]message{{Kind: kindError, Text: err.Error()}}}
+		}
+		return nil
+	}
 }
 
 func (m *model) send(text string) tea.Cmd {

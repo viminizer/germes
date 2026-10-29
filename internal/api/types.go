@@ -110,6 +110,13 @@ type MessageResult struct {
 	SessionID string `json:"session_id"`
 }
 
+// StopRequest stops a session's current step. The queue is dropped, unless
+// SendQueue is set: then the queued messages run right away (Esc Esc).
+type StopRequest struct {
+	ID        string `json:"id"`
+	SendQueue bool   `json:"send_queue,omitempty"`
+}
+
 // SessionUpdate changes a session. Only Title for now.
 type SessionUpdate struct {
 	ID    string `json:"id"`

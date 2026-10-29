@@ -29,6 +29,6 @@ func (q queueView) view(width int) string {
 		}
 		lines = append(lines, styleLabel.Render("↳ ")+styleMuted.Render(ansi.Truncate(firstLine(item), max(width-2, 10), "…")))
 	}
-	lines = append(lines, styleDim.Render(ansi.Truncate("  queued: sent together when this turn ends · Esc drops them", max(width, 10), "…")))
+	lines = append(lines, styleDim.Render(ansi.Truncate("  queued: sent together when this turn ends · Esc drops them · Esc Esc sends now", max(width, 10), "…")))
 	return strings.Join(lines, "\n")
 }

@@ -32,7 +32,7 @@ func ListSessions(ctx context.Context, svc api.Service, out io.Writer) error {
 
 // StopSession stops the current step of a session.
 func StopSession(ctx context.Context, svc api.Service, id string, out io.Writer) error {
-	if err := svc.StopSession(ctx, id); err != nil {
+	if err := svc.StopSession(ctx, api.StopRequest{ID: id}); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "stopped", id)

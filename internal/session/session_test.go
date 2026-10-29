@@ -119,7 +119,7 @@ func TestStopSession(t *testing.T) {
 	}
 	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
 	next(t, ch, api.KindUserMessage)
-	m.StopSession(ctx, res.SessionID)
+	m.StopSession(ctx, api.StopRequest{ID: res.SessionID})
 	if ev := next(t, ch, api.KindError); ev.Text != "stopped" {
 		t.Fatalf("error = %q", ev.Text)
 	}
@@ -162,9 +162,27 @@ func TestStopDropsQueue(t *testing.T) {
 	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
 	next(t, ch, api.KindUserMessage)
 	m.SendMessage(ctx, api.MessageRequest{SessionID: res.SessionID, Text: "b"})
-	m.StopSession(ctx, res.SessionID)
+	m.StopSession(ctx, api.StopRequest{ID: res.SessionID})
 	next(t, ch, api.KindTurnDone)
 	if s, _ := m.GetSession(ctx, res.SessionID); len(s.Queued) != 0 {
 		t.Fatalf("queue kept after stop: %v", s.Queued)
+	}
+}
+
+func TestStopAndSendQueue(t *testing.T) {
+	ctx := context.Background()
+	r := fakeRunner{block: make(chan struct{}), prompts: make(chan string, 10)}
+	m := newTestManager(t, r)
+	res, _ := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: "a"})
+	<-r.prompts
+	m.SendMessage(ctx, api.MessageRequest{SessionID: res.SessionID, Text: "b"})
+	m.StopSession(ctx, api.StopRequest{ID: res.SessionID, SendQueue: true})
+	select {
+	case p := <-r.prompts:
+		if p != "b" {
+			t.Fatalf("next prompt = %q, want the queued b", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("queue was not sent after stop")
 	}
 }

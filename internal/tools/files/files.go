@@ -25,19 +25,19 @@ const (
 // New returns the file tools.
 func New() []tool.Tool {
 	return []tool.Tool{
-		{Name: "Read", Toolset: "files", MatchArg: "file_path", Run: read,
+		{Name: "Read", Toolset: "files", MatchArg: "file_path", Run: tool.NewRun(read),
 			Description: "Read a text file. Returns numbered lines. Use offset and limit for big files.",
 			Schema:      schema(`"file_path":{"type":"string","description":"path, absolute or relative to the project"},"offset":{"type":"integer","description":"first line, 1-based"},"limit":{"type":"integer"}`, "file_path")},
-		{Name: "Write", Toolset: "files", MatchArg: "file_path", Run: write,
+		{Name: "Write", Toolset: "files", MatchArg: "file_path", Run: tool.NewRun(write),
 			Description: "Create or overwrite a file with the given content. Creates missing folders.",
 			Schema:      schema(`"file_path":{"type":"string"},"content":{"type":"string"}`, "file_path", "content")},
-		{Name: "Edit", Toolset: "files", MatchArg: "file_path", Run: edit,
+		{Name: "Edit", Toolset: "files", MatchArg: "file_path", Run: tool.NewRun(edit),
 			Description: "Replace old_string with new_string in a file. old_string must match exactly and be unique, unless replace_all is true. Read the file first.",
 			Schema:      schema(`"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}`, "file_path", "old_string", "new_string")},
-		{Name: "Glob", Toolset: "files", MatchArg: "pattern", Run: glob,
+		{Name: "Glob", Toolset: "files", MatchArg: "pattern", Run: tool.NewRun(glob),
 			Description: "Find files by name pattern, like **/*.go. Returns paths relative to the search folder.",
 			Schema:      schema(`"pattern":{"type":"string"},"path":{"type":"string","description":"folder to search, default the project"}`, "pattern")},
-		{Name: "Grep", Toolset: "files", MatchArg: "pattern", Run: grep,
+		{Name: "Grep", Toolset: "files", MatchArg: "pattern", Run: tool.NewRun(grep),
 			Description: "Search file contents with a regular expression. Returns file:line: text.",
 			Schema:      schema(`"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"only files matching this, like *.go"}`, "pattern")},
 	}
@@ -64,14 +64,12 @@ func resolve(dir, p string) string {
 	return filepath.Join(dir, p)
 }
 
-func read(ctx context.Context, c tool.Call) (string, error) {
-	var a struct {
-		FilePath      string `json:"file_path"`
-		Offset, Limit int
-	}
-	if err := json.Unmarshal(c.Args, &a); err != nil {
-		return "", fmt.Errorf("bad arguments: %w", err)
-	}
+type readArgs struct {
+	FilePath      string `json:"file_path"`
+	Offset, Limit int
+}
+
+func read(ctx context.Context, c tool.Call, a readArgs) (string, error) {
 	f, err := os.Open(resolve(c.Dir, a.FilePath))
 	if err != nil {
 		return "", err
@@ -108,14 +106,12 @@ func read(ctx context.Context, c tool.Call) (string, error) {
 	return b.String(), nil
 }
 
-func write(ctx context.Context, c tool.Call) (string, error) {
-	var a struct {
-		FilePath string `json:"file_path"`
-		Content  string `json:"content"`
-	}
-	if err := json.Unmarshal(c.Args, &a); err != nil {
-		return "", fmt.Errorf("bad arguments: %w", err)
-	}
+type writeArgs struct {
+	FilePath string `json:"file_path"`
+	Content  string `json:"content"`
+}
+
+func write(ctx context.Context, c tool.Call, a writeArgs) (string, error) {
 	p := resolve(c.Dir, a.FilePath)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return "", err
@@ -126,16 +122,14 @@ func write(ctx context.Context, c tool.Call) (string, error) {
 	return fmt.Sprintf("wrote %s (%d lines)", a.FilePath, strings.Count(a.Content, "\n")+1), nil
 }
 
-func edit(ctx context.Context, c tool.Call) (string, error) {
-	var a struct {
-		FilePath   string `json:"file_path"`
-		OldString  string `json:"old_string"`
-		NewString  string `json:"new_string"`
-		ReplaceAll bool   `json:"replace_all"`
-	}
-	if err := json.Unmarshal(c.Args, &a); err != nil {
-		return "", fmt.Errorf("bad arguments: %w", err)
-	}
+type editArgs struct {
+	FilePath   string `json:"file_path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all"`
+}
+
+func edit(ctx context.Context, c tool.Call, a editArgs) (string, error) {
 	if a.OldString == "" || a.OldString == a.NewString {
 		return "", errors.New("old_string must be non-empty and differ from new_string")
 	}
@@ -179,11 +173,9 @@ func skipDir(name string) bool {
 	return name == ".git" || name == "node_modules" || name == ".claude"
 }
 
-func glob(ctx context.Context, c tool.Call) (string, error) {
-	var a struct{ Pattern, Path string }
-	if err := json.Unmarshal(c.Args, &a); err != nil {
-		return "", fmt.Errorf("bad arguments: %w", err)
-	}
+type globArgs struct{ Pattern, Path string }
+
+func glob(ctx context.Context, c tool.Call, a globArgs) (string, error) {
 	root := resolve(c.Dir, a.Path)
 	re, err := globRegexp(a.Pattern)
 	if err != nil {
@@ -205,11 +197,9 @@ func glob(ctx context.Context, c tool.Call) (string, error) {
 	return strings.Join(out, "\n"), nil
 }
 
-func grep(ctx context.Context, c tool.Call) (string, error) {
-	var a struct{ Pattern, Path, Glob string }
-	if err := json.Unmarshal(c.Args, &a); err != nil {
-		return "", fmt.Errorf("bad arguments: %w", err)
-	}
+type grepArgs struct{ Pattern, Path, Glob string }
+
+func grep(ctx context.Context, c tool.Call, a grepArgs) (string, error) {
 	re, err := regexp.Compile(a.Pattern)
 	if err != nil {
 		return "", fmt.Errorf("bad pattern: %w", err)

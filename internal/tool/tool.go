@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 // Tool is one thing the model can call.
@@ -34,4 +35,17 @@ type Result struct {
 type Toolset struct {
 	Tools    []string
 	Includes []string
+}
+
+// NewRun builds a tool's Run from a function that takes typed arguments:
+// the JSON arguments are decoded into A first, and bad ones become an error
+// the model can read.
+func NewRun[A any](fn func(ctx context.Context, c Call, args A) (string, error)) func(context.Context, Call) (string, error) {
+	return func(ctx context.Context, c Call) (string, error) {
+		var args A
+		if err := json.Unmarshal(c.Args, &args); err != nil {
+			return "", fmt.Errorf("bad arguments: %w", err)
+		}
+		return fn(ctx, c, args)
+	}
 }

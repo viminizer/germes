@@ -24,14 +24,10 @@ func New(e env.Environment) []tool.Tool {
 		Description: "Run a bash command in the project folder. Each call is a fresh shell: cd and export do not carry over. Default timeout 2 minutes, max 10.",
 		Schema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer"}},` +
 			`"required":["command"],"additionalProperties":false}`),
-		Run: func(ctx context.Context, c tool.Call) (string, error) {
-			var a struct {
-				Command        string `json:"command"`
-				TimeoutSeconds int    `json:"timeout_seconds"`
-			}
-			if err := json.Unmarshal(c.Args, &a); err != nil {
-				return "", fmt.Errorf("bad arguments: %w", err)
-			}
+		Run: tool.NewRun(func(ctx context.Context, c tool.Call, a struct {
+			Command        string `json:"command"`
+			TimeoutSeconds int    `json:"timeout_seconds"`
+		}) (string, error) {
 			if strings.TrimSpace(a.Command) == "" {
 				return "", fmt.Errorf("empty command")
 			}
@@ -54,6 +50,6 @@ func New(e env.Environment) []tool.Tool {
 				out = "(no output)"
 			}
 			return out, nil
-		},
+		}),
 	}}
 }

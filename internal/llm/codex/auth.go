@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/file"
 	"io"
 	"log/slog"
 	"net/http"
@@ -115,11 +116,7 @@ func (a *auth) writeBack(t tokens) error {
 	if err != nil {
 		return err
 	}
-	tmp := a.codexFile + ".germes.tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, a.codexFile)
+	return file.Save(a.codexFile, out, 0o600)
 }
 
 // load reads Germes' copy, or imports the Codex CLI login on first use.
@@ -159,11 +156,7 @@ func (a *auth) save(t tokens) error {
 	if err := os.MkdirAll(filepath.Dir(a.germesFile), 0o700); err != nil {
 		return err
 	}
-	tmp := a.germesFile + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, a.germesFile)
+	return file.Save(a.germesFile, b, 0o600)
 }
 
 func (a *auth) refresh(ctx context.Context, t tokens) (tokens, error) {

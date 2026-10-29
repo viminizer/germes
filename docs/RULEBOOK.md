@@ -84,10 +84,10 @@ Every failure is handled: recover when possible, otherwise tell the user what ha
 
 ## R27. Context first
 
-`context.Context` is the first parameter of every function that blocks or does I/O.
+`context.Context` is the first parameter of every function that can block: network calls, running processes, waiting on channels or locks, calling other modules. Quick local file reads at startup (config, database open) do not need it.
 
-- From: Kevin, 2026-10-29, chat (approved Go practices)
-- Check: functions doing I/O, waiting or calling other modules take `ctx` first.
+- From: Kevin, 2026-10-29, chat (approved Go practices). Narrowed by Kevin 2026-10-29, audit (option a).
+- Check: functions that call the network, run processes, wait, or call another module take `ctx` first.
 - Example: none yet
 
 ## R28. No leaked goroutines
@@ -182,13 +182,14 @@ Reuse a helper already in the project, then the Go standard library, then a depe
 - Check: every new line in `go.mod` has a reason in the commit message.
 - Example: none yet
 
-## R8. No duplication
+## R8. No duplicate logic
 
-The same logic in two places moves into one place, owned by the module whose job it is.
+Kevin does not want duplicate logic. If it can be avoided, it must be avoided: the same logic lives in one place, owned by the module whose job it is, and everyone else calls it. Duplicate logic is allowed only in very rare cases, with a comment saying why it cannot be shared.
 
-- From: default rulebook
-- Check: look for repeated blocks across packages.
-- Example: none yet
+- From: default rulebook. Strengthened by Kevin 2026-10-29, audit: "i do not want duplicate logic, if it can be avoided, we must avoid it, otherwise, we can create duplicate logic in very rare cases"
+- Check: `go run github.com/mibk/dupl@latest -t 40 ./internal ./cmd` for copied blocks, and search by meaning (the same job done twice with other words), e.g. channel sends, safe file writes, argument decoding, text cutting, event paging.
+- Shared pieces today: `stream.Send`, `file.Save`, `text.Shorten`, `text.Transcript`, `api.ListAllEvents`, `tool.NewRun`.
+- Example: `internal/text/text.go`
 
 ## R9. No dead code
 

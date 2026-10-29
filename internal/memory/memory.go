@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/file"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -138,12 +139,7 @@ func (s *Store) change(t Target, fn func([]string) ([]string, error)) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return err
 	}
-	path := filepath.Join(s.dir, name)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(text+"\n"), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return file.Save(filepath.Join(s.dir, name), []byte(text+"\n"), 0o600)
 }
 
 func (s *Store) read(t Target) ([]string, error) {

@@ -78,9 +78,15 @@ services              prompt                               → memory, skill
                       llm                                  → (none)
                       llm/codex                            → llm
 
-leaves                api, config, engine, tool, env,      → (none)
-                      memory, skill
+shared pieces         text                                 → api
+                      stream, file                         → (none)
+
+leaves                api                                  → stream
+                      config, memory, skill                → file
+                      engine, tool, env                    → (none)
 ```
+
+Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `file.Save` (safe write), `text.Shorten` and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `tool.NewRun` (decode tool arguments). Also imported by: llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text).
 
 Notes:
 - Shared plain types live low: `api` (Session, Event, Job, Page, filters), `engine` (Turn, Event, Usage). Higher modules and `store` use them, so nothing imports upward.

@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/file"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -66,11 +67,10 @@ func Save(path string, c Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := file.Save(path, b, 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
-	return os.Rename(tmp, path)
+	return nil
 }
 
 // GetEngine returns the config of the named engine, or an empty one.

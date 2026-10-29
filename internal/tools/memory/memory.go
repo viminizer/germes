@@ -22,16 +22,12 @@ func New(store *memory.Store) []tool.Tool {
 			`"target":{"type":"string","enum":["agent","user"]},` +
 			`"text":{"type":"string"},"old_text":{"type":"string"}},` +
 			`"required":["action","target"],"additionalProperties":false}`),
-		Run: func(ctx context.Context, c tool.Call) (string, error) {
-			var a struct {
-				Action  string `json:"action"`
-				Target  string `json:"target"`
-				Text    string `json:"text"`
-				OldText string `json:"old_text"`
-			}
-			if err := json.Unmarshal(c.Args, &a); err != nil {
-				return "", fmt.Errorf("bad arguments: %w", err)
-			}
+		Run: tool.NewRun(func(ctx context.Context, c tool.Call, a struct {
+			Action  string `json:"action"`
+			Target  string `json:"target"`
+			Text    string `json:"text"`
+			OldText string `json:"old_text"`
+		}) (string, error) {
 			t := memory.Target(a.Target)
 			var err error
 			switch a.Action {
@@ -48,6 +44,6 @@ func New(store *memory.Store) []tool.Tool {
 				return "", err
 			}
 			return "saved (it shows in the prompt from the next session)", nil
-		},
+		}),
 	}}
 }

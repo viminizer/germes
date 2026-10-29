@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/viminizer/germes/internal/stream"
 	"io"
 	"net"
 	"net/http"
@@ -122,9 +123,7 @@ func (c *Client) Watch(ctx context.Context, f WatchFilter) (<-chan Event, error)
 			if json.Unmarshal(sc.Bytes(), &ev) != nil {
 				continue
 			}
-			select {
-			case out <- ev:
-			case <-ctx.Done():
+			if !stream.Send(ctx, out, ev) {
 				return
 			}
 		}

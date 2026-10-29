@@ -10,18 +10,9 @@ import (
 
 // loadEvents reads every stored event of a session.
 func (l *Loop) loadEvents(ctx context.Context, sessionID string) ([]api.Event, error) {
-	var events []api.Event
-	var after int64
-	for {
-		page, err := l.history.ListEvents(ctx, api.EventFilter{SessionID: sessionID, AfterSeq: after, Limit: 1000})
-		if err != nil {
-			return nil, fmt.Errorf("load history: %w", err)
-		}
-		events = append(events, page.Items...)
-		if page.Next == "" || len(page.Items) == 0 {
-			break
-		}
-		after = page.Items[len(page.Items)-1].Seq
+	events, err := api.ListAllEvents(ctx, l.history, api.EventFilter{SessionID: sessionID})
+	if err != nil {
+		return nil, fmt.Errorf("load history: %w", err)
 	}
 	return events, nil
 }

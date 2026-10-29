@@ -72,7 +72,14 @@ func (s *Store) ListSessions(ctx context.Context, f api.SessionFilter) (api.Page
 	if limit <= 0 || limit > 500 {
 		limit = defaultLimit
 	}
-	offset, _ := strconv.Atoi(f.Cursor)
+	offset := 0
+	if f.Cursor != "" {
+		n, err := strconv.Atoi(f.Cursor)
+		if err != nil || n < 0 {
+			return api.Page[api.Session]{}, api.NewError(api.CodeInvalid, "bad page cursor %q", f.Cursor)
+		}
+		offset = n
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
 		WHERE (? = '' OR project = ?) AND (? = '' OR status = ?)
 		ORDER BY updated_at DESC LIMIT ? OFFSET ?`,

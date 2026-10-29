@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"github.com/viminizer/germes/internal/text"
 	"log/slog"
 	"runtime/debug"
 	"time"
@@ -64,7 +65,7 @@ func (l *Loop) review(sessionID, dir string) {
 			return
 		}
 		summary, kept := effective(events)
-		transcript := render(kept)
+		transcript := text.Transcript(kept).String()
 		if summary != "" {
 			transcript = "Earlier (summary): " + summary + "\n\n" + transcript
 		}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	textpkg "github.com/viminizer/germes/internal/text"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -223,10 +224,7 @@ func GetProjectRoot(dir string) string {
 // titleOf is the first line of the first message, cut to 40 characters.
 func titleOf(text string) string {
 	line, _, _ := strings.Cut(text, "\n")
-	if r := []rune(line); len(r) > 40 {
-		return string(r[:40]) + "…"
-	}
-	return line
+	return textpkg.Shorten(line, 40)
 }
 
 func newID() string {

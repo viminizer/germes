@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/file"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -86,13 +87,22 @@ func (s *Store) Load(ctx context.Context, name string) (Skill, error) {
 			return Skill{}, err
 		}
 		sk := Skill{Summary: sum, Body: body}
-		filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
-			if err == nil && !d.IsDir() && d.Name() != "SKILL.md" {
-				rel, _ := filepath.Rel(path, p)
+		err = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() && d.Name() != "SKILL.md" {
+				rel, err := filepath.Rel(path, p)
+				if err != nil {
+					return err
+				}
 				sk.Files = append(sk.Files, rel)
 			}
 			return nil
 		})
+		if err != nil {
+			return Skill{}, fmt.Errorf("skill %s: list its files: %w", name, err)
+		}
 		return sk, nil
 	}
 	return Skill{}, fmt.Errorf("no skill named %q", name)
@@ -119,12 +129,7 @@ func (s *Store) Save(ctx context.Context, sk Skill) error {
 		return err
 	}
 	text := "---\n" + string(front) + "---\n\n" + strings.TrimSpace(sk.Body) + "\n"
-	path := filepath.Join(dir, "SKILL.md")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(text), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return file.Save(filepath.Join(dir, "SKILL.md"), []byte(text), 0o644)
 }
 
 // Delete removes a skill from the write folder. Read-only skills stay.

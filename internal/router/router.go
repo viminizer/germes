@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/stream"
 	"log/slog"
 	"strings"
 	"sync"
@@ -96,7 +97,7 @@ func (r *Router) run(ctx context.Context, t engine.Turn, eng engine.Engine, why 
 			case eng == r.engines[0]:
 				text += " (first choice is free again)"
 			}
-			send(ctx, out, engine.Event{Kind: engine.KindSwitched, Engine: eng.Name(), Text: text})
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindSwitched, Engine: eng.Name(), Text: text})
 		}
 		turn := t
 		if last != "" && last != eng.Name() {
@@ -109,7 +110,7 @@ func (r *Router) run(ctx context.Context, t engine.Turn, eng engine.Engine, why 
 		last = eng.Name()
 		next, nextWhy, err := r.pick(tried)
 		if err != nil {
-			send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
 			return
 		}
 		eng, why = next, last+" hit its usage limit"
@@ -127,7 +128,7 @@ func (r *Router) runOne(ctx context.Context, eng engine.Engine, t engine.Turn, o
 		// The engine cannot even start (not installed, logged out): treat it
 		// like a limit so the turn moves on, and tell the user why.
 		slog.Warn("engine failed to start", "engine", eng.Name(), "err", err)
-		send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("%s: %w", eng.Name(), err)})
+		stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("%s: %w", eng.Name(), err)})
 		r.markLimited(eng.Name(), time.Time{})
 		return true, false
 	}
@@ -142,7 +143,7 @@ func (r *Router) runOne(ctx context.Context, eng engine.Engine, t engine.Turn, o
 		case engine.KindDone:
 			done = true
 		}
-		send(ctx, out, ev)
+		stream.Send(ctx, out, ev)
 	}
 	return limited, done
 }
@@ -230,11 +231,4 @@ func (r *Router) setUsage(u engine.Usage) {
 		r.usage[u.Engine] = map[string]engine.Usage{}
 	}
 	r.usage[u.Engine][u.Window] = u
-}
-
-func send(ctx context.Context, out chan<- engine.Event, ev engine.Event) {
-	select {
-	case out <- ev:
-	case <-ctx.Done():
-	}
 }

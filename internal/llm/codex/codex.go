@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/stream"
+	"github.com/viminizer/germes/internal/text"
 	"io"
 	"log/slog"
 	"net/http"
@@ -101,9 +103,9 @@ func (c *Client) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, err
 			return
 		}
 		for _, u := range c.usage(ctx, tok) {
-			send(ctx, out, llm.Chunk{Kind: llm.KindUsage, Usage: &u})
+			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindUsage, Usage: &u})
 		}
-		send(ctx, out, llm.Chunk{Kind: llm.KindDone})
+		stream.Send(ctx, out, llm.Chunk{Kind: llm.KindDone})
 	}()
 	return out, nil
 }
@@ -206,20 +208,7 @@ func parseLimit(body []byte, h http.Header) *limitError {
 	return &limitError{resetAt: reset, msg: e.Message}
 }
 
-func short(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	if len(s) > 300 {
-		s = s[:300] + "…"
-	}
-	return s
-}
-
-func send(ctx context.Context, out chan<- llm.Chunk, ch llm.Chunk) {
-	select {
-	case out <- ch:
-	case <-ctx.Done():
-	}
-}
+func short(b []byte) string { return text.Shorten(strings.TrimSpace(string(b)), 300) }
 
 // body is the Responses API request.
 func (c *Client) body(r llm.Request) map[string]any {
@@ -323,10 +312,10 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 		}
 		switch ev.Type {
 		case "response.output_text.delta":
-			send(ctx, out, llm.Chunk{Kind: llm.KindTextDelta, Text: ev.Delta})
+			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindTextDelta, Text: ev.Delta})
 		case "response.output_item.done":
 			if ch, ok := itemChunk(ev.Item); ok {
-				send(ctx, out, ch)
+				stream.Send(ctx, out, ch)
 			}
 		case "response.completed", "response.incomplete":
 			return true
@@ -335,14 +324,14 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 			if e := ev.Response.Error; e != nil {
 				msg = e.Code + ": " + e.Message
 				if e.Code == "usage_limit_reached" {
-					send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, Err: errors.New(msg)})
+					stream.Send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, Err: errors.New(msg)})
 					return false
 				}
 			}
-			send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + msg)})
+			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + msg)})
 			return false
 		case "error":
-			send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex: %s %s", ev.Code, ev.Message)})
+			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex: %s %s", ev.Code, ev.Message)})
 			return false
 		}
 	}
@@ -353,7 +342,7 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 	if err == nil {
 		err = errors.New("stream ended early")
 	}
-	send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex stream: %w", err)})
+	stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex stream: %w", err)})
 	return false
 }
 

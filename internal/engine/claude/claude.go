@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/stream"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -90,7 +91,7 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 		if msg == "" && waitErr != nil {
 			msg = waitErr.Error()
 		}
-		send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("claude stopped without a result: %s", lastLine(msg))})
+		stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("claude stopped without a result: %s", lastLine(msg))})
 	}()
 	return out, nil
 }
@@ -138,21 +139,14 @@ func (c *Claude) stream(ctx context.Context, cancel context.CancelFunc, r io.Rea
 			if ev.Kind == engine.KindDone || ev.Kind == engine.KindError {
 				ended = true
 			}
-			send(ctx, out, ev)
+			stream.Send(ctx, out, ev)
 		}
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
-		send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("read claude output: %w", err)})
+		stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("read claude output: %w", err)})
 		return true
 	}
 	return ended
-}
-
-func send(ctx context.Context, out chan<- engine.Event, ev engine.Event) {
-	select {
-	case out <- ev:
-	case <-ctx.Done():
-	}
 }
 
 func lastLine(s string) string {

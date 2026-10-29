@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/viminizer/germes/internal/stream"
 	"sync"
 
 	"github.com/viminizer/germes/internal/api"
@@ -66,29 +67,16 @@ func (m *Manager) Watch(ctx context.Context, f api.WatchFilter) (<-chan api.Even
 		defer close(out)
 		defer m.hub.unsubscribe(live)
 		last := f.AfterSeq
-		send := func(ev api.Event) bool {
-			select {
-			case out <- ev:
-				return true
-			case <-ctx.Done():
-				return false
-			}
-		}
 		if f.SessionID != "" {
-			for {
-				page, err := m.store.ListEvents(ctx, api.EventFilter{SessionID: f.SessionID, AfterSeq: last})
-				if err != nil {
+			history, err := api.ListAllEvents(ctx, m.store, api.EventFilter{SessionID: f.SessionID, AfterSeq: last})
+			if err != nil {
+				return
+			}
+			for _, ev := range history {
+				if !stream.Send(ctx, out, ev) {
 					return
 				}
-				for _, ev := range page.Items {
-					if !send(ev) {
-						return
-					}
-					last = ev.Seq
-				}
-				if page.Next == "" {
-					break
-				}
+				last = ev.Seq
 			}
 		}
 		for {
@@ -101,7 +89,7 @@ func (m *Manager) Watch(ctx context.Context, f api.WatchFilter) (<-chan api.Even
 				if f.SessionID != "" && ev.Seq != 0 && ev.Seq <= last {
 					continue // already sent from history
 				}
-				if !send(ev) {
+				if !stream.Send(ctx, out, ev) {
 					return
 				}
 				if f.SessionID != "" && ev.Seq != 0 {

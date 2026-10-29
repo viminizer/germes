@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/viminizer/germes/internal/stream"
 	"log/slog"
 	"runtime/debug"
 	"sync"
@@ -81,7 +82,7 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 		defer func() {
 			if p := recover(); p != nil {
 				slog.Error("loop panicked", "session", t.SessionID, "panic", p, "stack", string(debug.Stack()))
-				l.send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("internal error: %v", p)})
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("internal error: %v", p)})
 			}
 		}()
 		summary, keepFrom, ok, err := l.compact(ctx, system, events)
@@ -92,7 +93,7 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 		if ok {
 			// Saved by the session before anything else of this turn, so the
 			// next turn loads the summary plus the kept events.
-			l.send(ctx, out, engine.Event{Kind: engine.KindCompacted, Text: summary, KeepFrom: keepFrom})
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindCompacted, Text: summary, KeepFrom: keepFrom})
 			events = append(events, api.Event{Kind: api.KindCompacted, Text: summary, KeepFrom: keepFrom})
 		}
 		l.turn(ctx, t, system, messages(events), out)
@@ -153,19 +154,19 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		for ch := range chunks {
 			switch ch.Kind {
 			case llm.KindTextDelta:
-				l.send(ctx, out, engine.Event{Kind: engine.KindTextDelta, Text: ch.Text})
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindTextDelta, Text: ch.Text})
 			case llm.KindText:
 				texts = append(texts, ch.Text)
-				l.send(ctx, out, engine.Event{Kind: engine.KindText, Text: ch.Text})
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindText, Text: ch.Text})
 			case llm.KindToolCall:
 				calls = append(calls, *ch.ToolCall)
 			case llm.KindRaw:
 				raws = append(raws, llm.Message{Role: llm.RoleRaw, Raw: ch.Raw})
 			case llm.KindUsage:
 				u := ch.Usage
-				l.send(ctx, out, engine.Event{Kind: engine.KindUsage, Usage: &engine.Usage{Engine: l.opts.Name, Window: u.Window, UsedPercent: u.UsedPercent, ResetAt: u.ResetAt}})
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindUsage, Usage: &engine.Usage{Engine: l.opts.Name, Window: u.Window, UsedPercent: u.UsedPercent, ResetAt: u.ResetAt}})
 			case llm.KindLimitHit:
-				l.send(ctx, out, engine.Event{Kind: engine.KindLimitHit, ResetAt: ch.ResetAt, Err: ch.Err})
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindLimitHit, ResetAt: ch.ResetAt, Err: ch.Err})
 				return
 			case llm.KindError:
 				l.fail(ctx, out, ch.Err)
@@ -181,7 +182,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Text: text})
 		}
 		if len(calls) == 0 {
-			l.send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
 			return
 		}
 		if l.countSteps(t.SessionID, calls) {
@@ -190,28 +191,21 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})
 		for _, call := range calls {
 			// The session saves the call before it runs.
-			l.send(ctx, out, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args}})
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args}})
 			res := l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
 			if ctx.Err() != nil {
 				return
 			}
-			l.send(ctx, out, engine.Event{Kind: engine.KindToolResult, Tool: &engine.ToolCall{ID: call.ID, Output: res.Output, IsError: res.IsError}})
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolResult, Tool: &engine.ToolCall{ID: call.ID, Output: res.Output, IsError: res.IsError}})
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Text: res.Output})
 		}
 	}
-	l.send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
+	stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
 }
 
 func (l *Loop) fail(ctx context.Context, out chan<- engine.Event, err error) {
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return
 	}
-	l.send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
-}
-
-func (l *Loop) send(ctx context.Context, out chan<- engine.Event, ev engine.Event) {
-	select {
-	case out <- ev:
-	case <-ctx.Done():
-	}
+	stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
 }

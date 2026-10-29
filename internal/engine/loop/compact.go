@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"github.com/viminizer/germes/internal/text"
 	"strings"
 
 	"github.com/viminizer/germes/internal/api"
@@ -57,7 +58,7 @@ func (l *Loop) compact(ctx context.Context, system string, events []api.Event) (
 	if cut == 0 || cut >= len(kept) {
 		return "", 0, false, nil // nothing old enough to summarize
 	}
-	transcript := render(kept[:cut])
+	transcript := text.Transcript(kept[:cut]).String()
 	if prev != "" {
 		transcript = "Summary of what came before:\n" + prev + "\n\n" + transcript
 	}
@@ -81,30 +82,6 @@ func prune(msgs []llm.Message, keep int) {
 	}
 }
 
-// render writes events as plain text for a summary or a review.
-func render(events []api.Event) string {
-	var b strings.Builder
-	for _, ev := range events {
-		switch ev.Kind {
-		case api.KindUserMessage:
-			fmt.Fprintf(&b, "User: %s\n", ev.Text)
-		case api.KindText:
-			fmt.Fprintf(&b, "Assistant: %s\n", ev.Text)
-		case api.KindToolCall:
-			if ev.Tool != nil {
-				fmt.Fprintf(&b, "Tool call: %s %s\n", ev.Tool.Name, clip(string(ev.Tool.Args), 500))
-			}
-		case api.KindToolResult:
-			if ev.Tool != nil {
-				fmt.Fprintf(&b, "Tool result: %s\n", clip(ev.Tool.Output, 800))
-			}
-		case api.KindError:
-			fmt.Fprintf(&b, "Error: %s\n", ev.Text)
-		}
-	}
-	return b.String()
-}
-
 // ask makes one model call without tools and returns its text.
 func (l *Loop) ask(ctx context.Context, system, user string) (string, error) {
 	ch, err := l.client.Send(ctx, llm.Request{System: system, Messages: []llm.Message{{Role: llm.RoleUser, Text: user}}})
@@ -124,11 +101,4 @@ func (l *Loop) ask(ctx context.Context, system, user string) (string, error) {
 		return "", fmt.Errorf("empty answer")
 	}
 	return strings.Join(text, "\n"), nil
-}
-
-func clip(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…"
-	}
-	return s
 }

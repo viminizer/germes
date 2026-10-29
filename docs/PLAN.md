@@ -881,7 +881,7 @@ Run:
 5. SIGTERM or `StopDaemon`: stop accepting requests, stop sessions (interrupted turns are saved), stop jobs, exit.
 
 - Auto-start (client side): `germes` runs `germes daemon` detached in its own process group. Logs: `~/.germes/logs/daemon.log`.
-- Upgrade: no "restart when idle". `germes daemon restart` stops it cleanly; the next `germes` starts the new version. Jobs continue on their own.
+- Self-update: every 3 s the daemon checks its own binary. When it was replaced (`make install`) and no session is working, it stops cleanly and execs the new binary in its place (same process id, about 0.25 s). Open TUIs reconnect on their own. A running turn is never cut: the update waits until it ends. `germes daemon restart` still works.
 
 Files: `daemon.go` (lock, socket, run, shutdown), `service.go` (`Service` methods).
 
@@ -1081,7 +1081,7 @@ Rule: startup only reads local files. Slow work happens after the TUI is visible
 ### Not-so-fresh install
 1. Load config.
 2. Connect to the socket. Daemon running: connect. Socket file but no answer: delete it, start a daemon. No daemon: start one. A new daemon migrates the database, restarts running loops, cleans old chats.
-3. Older daemon after an upgrade: do not kill it. Show a note; I run `germes daemon restart`.
+3. Older daemon after an upgrade: nothing to do. It updates itself as soon as no session is working.
 4. Always an empty chat. With `-c`, `--resume` or `attach`: show that session's recent history and status (live if a loop runs).
 5. Header shows engine status, for example `codex limited until 14:00 -> using claude`.
 
@@ -1121,7 +1121,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Leftover socket file: delete it, start a new daemon.
 - Socket path too long (macOS limit about 104 bytes, deep `GERMES_HOME`): use `/tmp/germes-<uid>-<hash>.sock`.
 - Two daemons start at once: the lock lets one win; the other exits; the client connects to the winner.
-- Old daemon after an upgrade: API returns `version_mismatch`; the TUI says to run `germes daemon restart`.
+- Old daemon after an upgrade: it replaces itself with the new binary once idle. If the exec fails, it exits; the next `germes` starts the new version.
 - Daemon crash in the middle of a turn: on restart the turn is saved as `interrupted`. Jobs continue; advance-before-run means no double round.
 - A goroutine panics (worker, job, telegram): recover it, save an `error` event, the session goes idle. The daemon keeps running.
 - Migration fails or database broken: refuse to start, do not touch the file. Never delete data automatically.

@@ -19,6 +19,14 @@ import (
 	"github.com/viminizer/germes/internal/session"
 )
 
+// ErrUpdated is returned by Run when the germes binary was replaced (for
+// example by `make install`) and no session was working. The caller starts
+// the new binary in its place.
+var ErrUpdated = errors.New("germes binary updated")
+
+// updateCheck is how often the daemon looks for a new binary.
+const updateCheck = 3 * time.Second
+
 // Daemon serves the sessions.
 type Daemon struct {
 	sessions  *session.Manager
@@ -71,9 +79,14 @@ func (d *Daemon) Run(ctx context.Context, socketPath, lockPath string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sig)
+	updated := d.watchBinary(serveCtx)
+	result := error(nil)
 	select {
 	case <-ctx.Done():
 	case <-d.stop:
+	case <-updated:
+		slog.Info("new germes binary, restarting into it")
+		result = ErrUpdated
 	case s := <-sig:
 		slog.Info("signal", "signal", s.String())
 	case err := <-serveErr:
@@ -90,7 +103,45 @@ func (d *Daemon) Run(ctx context.Context, socketPath, lockPath string) error {
 	if err := d.sessions.Stop(shutdownCtx); err != nil {
 		slog.Warn("stop sessions", "err", err)
 	}
-	return nil
+	return result
+}
+
+// watchBinary closes the returned channel once the germes binary on disk is
+// replaced and no session is working, so an update never cuts a turn.
+func (d *Daemon) watchBinary(ctx context.Context) <-chan struct{} {
+	updated := make(chan struct{})
+	exe, err := os.Executable()
+	if err != nil {
+		slog.Warn("cannot watch for updates", "err", err)
+		return updated
+	}
+	start, err := os.Stat(exe)
+	if err != nil {
+		slog.Warn("cannot watch for updates", "err", err)
+		return updated
+	}
+	go func() {
+		t := time.NewTicker(updateCheck)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			now, err := os.Stat(exe)
+			if err != nil || (os.SameFile(start, now) && now.ModTime().Equal(start.ModTime())) {
+				continue // missing for a moment while it is written, or unchanged
+			}
+			busy, err := d.sessions.ListSessions(ctx, api.SessionFilter{Status: api.StatusWorking, Limit: 1})
+			if err != nil || len(busy.Items) > 0 {
+				continue // wait until no turn is running
+			}
+			close(updated)
+			return
+		}
+	}()
+	return updated
 }
 
 // lock takes an exclusive lock on path, or fails if another daemon has it.

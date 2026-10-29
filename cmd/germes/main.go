@@ -36,7 +36,7 @@ const usage = `usage:
   germes ls             list sessions
   germes stop <id>      stop a session's current step
   germes daemon stop    stop the daemon
-  germes daemon restart restart the daemon (after an upgrade)`
+  germes daemon restart restart the daemon (it also updates itself when idle)`
 
 // paths are the files under the Germes home folder.
 type paths struct {
@@ -199,15 +199,25 @@ func runDaemon(p paths) error {
 
 	eng := claude.New(claude.Options{Model: cfg.GetEngine(claude.Name).Model, Blocked: cfg.Blocked})
 	sessions := session.NewManager(st, eng)
-	return daemon.New(sessions, version).Run(context.Background(), p.socket, p.lock)
+	err = daemon.New(sessions, version).Run(context.Background(), p.socket, p.lock)
+	if !errors.Is(err, daemon.ErrUpdated) {
+		return err
+	}
+	// Replace this process with the new binary. Exec skips deferred calls,
+	// so close the database first. Clients reconnect on their own.
+	st.Close()
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(exe, []string{exe, "daemon"}, os.Environ())
 }
 
 // ensureDaemon connects to the daemon, or starts it in the background and
 // waits for its socket.
 func ensureDaemon(ctx context.Context, p paths, client *api.Client) error {
-	if d, err := ping(ctx, client); err == nil {
-		warnVersion(d)
-		return nil
+	if _, err := ping(ctx, client); err == nil {
+		return nil // an older daemon updates itself when idle
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -251,13 +261,4 @@ func waitDaemonGone(ctx context.Context, client *api.Client) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return errors.New("the old daemon did not stop")
-}
-
-var warned bool
-
-func warnVersion(d api.Daemon) {
-	if d.Version != version && !warned {
-		warned = true
-		fmt.Fprintf(os.Stderr, "note: the daemon runs version %s, this is %s. Run `germes daemon restart`.\n", d.Version, version)
-	}
 }

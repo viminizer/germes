@@ -69,7 +69,7 @@ func LoadWorkflow(dirs []string, name string) (Workflow, error) {
 			if err != nil {
 				return Workflow{}, err
 			}
-			return ParseWorkflow(b)
+			return parseWorkflow(b)
 		}
 	}
 	return Workflow{}, fmt.Errorf("no workflow %q in %s", name, strings.Join(dirs, ", "))
@@ -93,8 +93,8 @@ func ListWorkflows(dirs []string) []string {
 	return names
 }
 
-// ParseWorkflow reads and checks a workflow file.
-func ParseWorkflow(b []byte) (Workflow, error) {
+// parseWorkflow reads and checks a workflow file.
+func parseWorkflow(b []byte) (Workflow, error) {
 	var w Workflow
 	if err := yaml.Unmarshal(b, &w); err != nil {
 		return w, fmt.Errorf("bad YAML: %w", err)
@@ -154,7 +154,7 @@ func (w Workflow) check() error {
 		if s.MaxRetries != nil && *s.MaxRetries < 0 {
 			add("%s: max_retries must not be negative", where)
 		}
-		if name, _, _ := strings.Cut(strings.TrimSpace(s.Run), " "); name == builtinNotify && strings.TrimSpace(s.Run) == builtinNotify {
+		if strings.TrimSpace(s.Run) == builtinNotify {
 			add(`%s: notify needs a text, like notify "tests pass"`, where)
 		}
 	}

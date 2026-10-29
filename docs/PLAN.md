@@ -867,9 +867,9 @@ steps:
 - Runs in the `job` module. No new imports (only `api`).
 
 Creating a workflow:
-- `germes workflow new` (or `/workflow new` in the TUI): describe it in words. An agent writes the YAML, checks it, shows it to me, and saves it after I agree.
+- `germes workflow new` (or just ask any session: every agent knows the format from its Germes notes): describe it in words. An agent writes the YAML, checks it, shows it to me, and saves it after I agree.
 - Or write the YAML by hand.
-- `germes workflow check <name>`: validates the file (unknown step ids, missing `next`, unknown built-ins). Also runs automatically on save and on `job add`.
+- `germes workflow check <name>`: validates the file (unknown or repeated step ids, missing `next`, a step with no or two kinds, bad tokens, `notify` without text). Also runs on `job add` and at each round start. Any `run` that is not a built-in is a shell command.
 
 Decisions:
 - Built-in actions (`run: <name>`):
@@ -1063,7 +1063,7 @@ Go's standard `flag` package with a switch on the subcommand. No Cobra.
 | `germes daemon` | wires everything, `daemon.Run` |
 | `germes mcp --session <id>` | MCP server |
 | `ls`, `stop`, `job add/ls/start/stop/rm`, `reserve on/off`, `daemon restart`, `pin` | `internal/cli` |
-| `workflow check/ls` | `internal/cli` |
+| `workflow check/ls` | `main.go` with `job.LoadWorkflow` / `job.ListWorkflows` (they read files, no daemon) |
 | `workflow new` | TUI (a session that writes the workflow with me) |
 | `setup telegram` | `main.go` itself (writes the config; `internal/cli` may only import `api`) |
 

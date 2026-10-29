@@ -46,7 +46,7 @@ type Sessions interface {
 }
 
 // Tools runs a workflow's commands, like an agent's tool call (the block
-// list applies).
+// list applies), in the session's folder or r.Dir.
 type Tools interface {
 	RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error)
 }
@@ -87,9 +87,9 @@ func NewScheduler(store Store, sessions Sessions, opts Options) *Scheduler {
 	return &Scheduler{store: store, sessions: sessions, opts: opts, ctx: ctx, cancel: cancel, running: map[string]*runner{}}
 }
 
-// WorkflowDirs are the folders a job in dir loads workflows from, first
+// ListWorkflowDirs lists the folders a job in dir loads workflows from, first
 // match wins: the project's .germes/workflows, then the user's folder.
-func WorkflowDirs(userDir, dir string) []string {
+func ListWorkflowDirs(userDir, dir string) []string {
 	return []string{filepath.Join(dir, ".germes", "workflows"), userDir}
 }
 
@@ -135,7 +135,7 @@ func (s *Scheduler) CreateJob(ctx context.Context, r api.JobRequest) (api.Job, e
 		return api.Job{}, api.NewError(api.CodeInvalid, "folder %q does not exist", r.Dir)
 	}
 	if r.Workflow != "" {
-		if _, err := LoadWorkflow(WorkflowDirs(s.opts.Workflows, r.Dir), r.Workflow); err != nil {
+		if _, err := LoadWorkflow(ListWorkflowDirs(s.opts.Workflows, r.Dir), r.Workflow); err != nil {
 			return api.Job{}, api.NewError(api.CodeInvalid, "workflow %s: %v", r.Workflow, err)
 		}
 	}

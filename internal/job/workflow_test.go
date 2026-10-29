@@ -13,7 +13,7 @@ import (
 )
 
 func TestParseWorkflowFindsMistakes(t *testing.T) {
-	_, err := ParseWorkflow([]byte(`
+	_, err := parseWorkflow([]byte(`
 name: bad
 steps:
   - id: find

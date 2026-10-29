@@ -271,10 +271,11 @@ func runDaemon(p paths) error {
 	}
 	old := daemon.NewOldDaemons(filepath.Join(p.home, "old"))
 	sessions := session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg), Elsewhere: old})
-	jobs := job.NewScheduler(st, sessions, job.Options{Tools: registryTools{reg}, Workflows: filepath.Join(p.home, "workflows")})
+	tools := registryTools{reg: reg, sessions: sessions}
+	jobs := job.NewScheduler(st, sessions, job.Options{Tools: tools, Workflows: filepath.Join(p.home, "workflows")})
 	return daemon.New(sessions, jobs, old, daemon.Options{
 		Version: version, ConfigPath: p.config, SocketPath: p.socket, LockPath: p.lock, OldDir: filepath.Join(p.home, "old"),
-		StartNew: func() error { return startDaemon(p) }, Tools: registryTools{reg},
+		StartNew: func() error { return startDaemon(p) }, Tools: tools,
 	}).Run(context.Background())
 }
 
@@ -298,10 +299,27 @@ func ensureDaemon(ctx context.Context, p paths, client *api.Client) error {
 	return fmt.Errorf("the daemon did not start; see %s", p.log)
 }
 
-// registryTools runs tools for the daemon and jobs, with the block list.
-type registryTools struct{ reg *tool.Registry }
+// registryTools runs tools for the daemon and jobs, with the block list,
+// in the session's folder unless the request names one.
+type registryTools struct {
+	reg      *tool.Registry
+	sessions *session.Manager
+}
 
 func (t registryTools) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
+	if r.Name == "" {
+		return api.ToolResult{}, api.NewError(api.CodeInvalid, "no tool name")
+	}
+	if r.Dir == "" {
+		if r.SessionID == "" {
+			return api.ToolResult{}, api.NewError(api.CodeInvalid, "no session and no folder")
+		}
+		s, err := t.sessions.GetSession(ctx, r.SessionID)
+		if err != nil {
+			return api.ToolResult{}, err
+		}
+		r.Dir = s.Dir
+	}
 	res := t.reg.Run(ctx, r.Name, tool.Call{SessionID: r.SessionID, Dir: r.Dir, Args: r.Args})
 	return api.ToolResult{Output: res.Output, IsError: res.IsError}, nil
 }
@@ -457,7 +475,7 @@ func workflowCommand(ctx context.Context, p paths, client *api.Client, args []st
 		return err
 	}
 	userDir := filepath.Join(p.home, "workflows")
-	dirs := job.WorkflowDirs(userDir, session.GetProjectRoot(dir))
+	dirs := job.ListWorkflowDirs(userDir, session.GetProjectRoot(dir))
 	sub := ""
 	if len(args) > 0 {
 		sub = args[0]

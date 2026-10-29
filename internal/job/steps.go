@@ -22,7 +22,7 @@ const failureKey = "FAILURE"
 // or back to the first step (the round is over). The step, values and runs
 // are saved before each step, so a restart runs that step again.
 func (s *Scheduler) runWorkflow(ctx context.Context, j api.Job) round {
-	w, err := LoadWorkflow(WorkflowDirs(s.opts.Workflows, j.Dir), j.Workflow)
+	w, err := LoadWorkflow(ListWorkflowDirs(s.opts.Workflows, j.Dir), j.Workflow)
 	if err != nil {
 		return round{failure: "workflow " + j.Workflow + ": " + err.Error(), fatal: true}
 	}
@@ -258,13 +258,9 @@ echo "merged %[3]s into $main"`, project, shellQuote(sess.Branch), sess.Branch)
 // bash runs a command in the round's folder through the Bash tool.
 func (r *wfRound) bash(ctx context.Context, command string) (string, bool) {
 	args, _ := json.Marshal(map[string]any{"command": command, "timeout_seconds": runTimeout})
-	req := api.ToolRequest{SessionID: r.session(), Dir: r.j.Dir, Name: "Bash", Args: args}
-	if req.SessionID != "" {
-		sess, err := r.s.sessions.GetSession(ctx, req.SessionID)
-		if err != nil {
-			return err.Error(), false
-		}
-		req.Dir = sess.Dir
+	req := api.ToolRequest{SessionID: r.session(), Name: "Bash", Args: args}
+	if req.SessionID == "" {
+		req.Dir = r.j.Dir
 	}
 	res, err := r.s.opts.Tools.RunTool(ctx, req)
 	if err != nil {

@@ -44,7 +44,7 @@ type Options struct {
 	Tools      Tools
 }
 
-// Tools runs one tool for a client (a workflow command, later MCP).
+// Tools runs one tool for a client (later MCP), in the session's folder.
 type Tools interface {
 	RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error)
 }

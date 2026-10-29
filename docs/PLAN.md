@@ -1265,7 +1265,13 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - Overseer: the session with the fixed id `overseer`, in the home folder, created at daemon start, cannot be deleted. Its turns have `Turn.Overseer`: the role text (`internal/prompt/overseer.md`) and the `overseer` toolset (core, learn, session_search, `tools/sessions`, `tools/jobs`). Open it with `germes overseer` or `/overseer`.
    - `tools/sessions`: session_list, session_read, session_send (or start one in a folder), session_stop, session_rename, session_delete. `tools/jobs`: job_create (prompt or workflow), job_list, job_start, job_stop, job_delete. Both go through `api.NewClient(socket)`.
    - Checked live (Claude): a session called `worktree_exit` through MCP (worktree and branch gone); the overseer listed sessions, sent a message another session answered, and created a job that ran to done. Not checked live: the overseer on the Codex loop (Codex is near its reserve).
-8. Telegram.
+8. Telegram. Done:
+   - `germes setup telegram` asks for the bot token, the group chat id and my user id and saves them in `config.yaml` (`telegram:`; `api_base` for a self-hosted Bot API server; `code_dirs`, default `~/dev`). The daemon picks it up by itself (hand-over).
+   - `internal/telegram` (imports only `api`, reaches the daemon through its socket) runs as the daemon's `Gateway`: started after the daemon serves, stopped before a hand-over (one poller per bot; a 409 from an old poller is retried), restarted after a failed hand-over or a panic.
+   - Long polling with plain `net/http`; errors never contain the token. Only my user in my chat is heard.
+   - `/bind <name>` (a path, or a folder name among known projects and git repos under `code_dirs`, 3 levels; several matches: buttons; no name: recent projects), `/unbind`, `/new`, `/stop`, `/sessions`. A bound topic's messages go to its project's session (started on the first message, its own worktree; a deleted one is replaced); General and unbound topics go to the overseer. `telegram.json` keeps the bindings and the update offset.
+   - Out: the turn's last text goes to the topic that asked, split under 4096 characters, with "typing…" while it works; errors and limit pauses too. `notice` events (workflow notify, job done/failed/stopped) go to the topic bound to the session or its project, else General. A job with no session (only run steps) notifies General.
+   - Checked end to end against a fake Bot API (no bot token yet): a stranger's message was ignored, General reached the overseer and its answer came back, `/bind proj` found the project, the topic's question ran in a new session there and its answer came back to topic 7, typing was shown, a job notice arrived. Not checked: the real Telegram servers.
 
 Notes from M1:
 - `api.Service` has only the methods M1 needs; later milestones add theirs.

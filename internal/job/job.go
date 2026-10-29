@@ -215,6 +215,7 @@ func (s *Scheduler) DeleteJob(ctx context.Context, id string) error {
 }
 
 // update changes a job row under the lock. change may refuse with an error.
+// A job that stops running (done, failed, stopped) sends a notice.
 func (s *Scheduler) update(ctx context.Context, id string, change func(*api.Job) error) (api.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -222,11 +223,22 @@ func (s *Scheduler) update(ctx context.Context, id string, change func(*api.Job)
 	if err != nil {
 		return j, err
 	}
+	before := j.Status
 	if err := change(&j); err != nil {
 		return j, err
 	}
 	j.UpdatedAt = time.Now()
-	return j, s.store.UpdateJob(ctx, j)
+	if err := s.store.UpdateJob(ctx, j); err != nil {
+		return j, err
+	}
+	if before == api.JobRunning && j.Status != api.JobRunning {
+		text := "job " + j.Name + " is " + string(j.Status)
+		if j.Status == api.JobFailed {
+			text += ": " + j.Error
+		}
+		s.notify(j.SessionID, text)
+	}
+	return j, nil
 }
 
 // launch starts the job's goroutine unless it already runs.
@@ -348,9 +360,7 @@ func (s *Scheduler) advance(ctx context.Context, id string) (api.Job, bool) {
 
 // finish records how a round ended and reports whether the job runs on.
 func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
-	before := api.JobRunning
 	j, err := s.update(ctx, id, func(j *api.Job) error {
-		before = j.Status
 		if j.Status != api.JobRunning {
 			return nil
 		}
@@ -371,13 +381,6 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 	if err != nil {
 		slog.Error("job round", "job", id, "err", err)
 		return false
-	}
-	if before == api.JobRunning && j.Status != api.JobRunning {
-		text := "job " + j.Name + " is " + string(j.Status)
-		if j.Status == api.JobFailed {
-			text += ": " + j.Error
-		}
-		s.notify(j.SessionID, text)
 	}
 	return j.Status == api.JobRunning
 }

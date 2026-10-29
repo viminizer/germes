@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -42,6 +43,13 @@ type Options struct {
 	OldDir     string       // where an old daemon registers its private socket
 	StartNew   func() error // starts a new daemon process (detached)
 	Tools      Tools
+	Gateway    Gateway // nil = none; only one daemon at a time runs it
+}
+
+// Gateway is a long-running client inside the daemon (the Telegram bot). It
+// stops before a hand-over: Telegram allows one poller per bot.
+type Gateway interface {
+	Run(ctx context.Context) error
 }
 
 // Tools lists and runs tools for clients (MCP), in the session's folder.
@@ -67,6 +75,8 @@ type Daemon struct {
 	stop      chan struct{}
 	stopOnce  sync.Once
 	update    chan struct{} // a new binary or config: hand over (watchFiles, or a test)
+
+	stopGateway func() // stops the gateway and waits for it; nil = not running
 }
 
 var _ api.Service = (*Daemon)(nil)
@@ -126,6 +136,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sig)
 	go d.watchFiles(serveCtx)
+	d.startGateway()
+	defer d.endGateway()
 	for {
 		select {
 		case <-ctx.Done():
@@ -178,6 +190,7 @@ func (d *Daemon) handOver(ctx context.Context, unlock func()) (*privateServer, e
 	if err := d.jobs.Stop(stopCtx); err != nil {
 		return nil, fmt.Errorf("stop jobs: %w", err)
 	}
+	d.endGateway()
 	p, err := d.servePrivate()
 	if err != nil {
 		return nil, err
@@ -253,7 +266,46 @@ func (d *Daemon) keepServing(ctx context.Context) (func(), error) {
 	if err := d.jobs.Start(ctx); err != nil {
 		slog.Error("resume jobs", "err", err)
 	}
+	d.startGateway()
 	return unlock, nil
+}
+
+// startGateway runs the gateway in the background, restarting it after a
+// panic or an error.
+func (d *Daemon) startGateway() {
+	if d.opts.Gateway == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	d.stopGateway = func() { cancel(); <-done }
+	go func() {
+		defer close(done)
+		for ctx.Err() == nil {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("gateway panicked", "panic", r, "stack", string(debug.Stack()))
+					}
+				}()
+				if err := d.opts.Gateway.Run(ctx); err != nil {
+					slog.Error("gateway", "err", err)
+				}
+			}()
+			select {
+			case <-ctx.Done():
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}()
+}
+
+// endGateway stops the gateway and waits for it.
+func (d *Daemon) endGateway() {
+	if d.stopGateway != nil {
+		d.stopGateway()
+		d.stopGateway = nil
+	}
 }
 
 // finishTurns waits until no turn runs here, then stops. The new daemon

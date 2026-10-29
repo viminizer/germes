@@ -16,9 +16,24 @@ import (
 
 // Config is the whole config file.
 type Config struct {
-	Engines []Engine `yaml:"engines"`
-	Blocked []string `yaml:"blocked"`
+	Engines  []Engine `yaml:"engines"`
+	Blocked  []string `yaml:"blocked"`
+	CodeDirs []string `yaml:"code_dirs,omitempty"` // where projects live (Telegram /bind looks here); "" = ~/dev
+	Telegram Telegram `yaml:"telegram,omitempty"`  // empty = off
 }
+
+// Telegram is the bot for a group chat with topics. Only UserID in ChatID is
+// listened to.
+type Telegram struct {
+	Token  string `yaml:"token,omitempty"` // from @BotFather
+	ChatID int64  `yaml:"chat_id,omitempty"`
+	UserID int64  `yaml:"user_id,omitempty"`
+	// APIBase is a self-hosted Bot API server; "" = https://api.telegram.org.
+	APIBase string `yaml:"api_base,omitempty"`
+}
+
+// IsOn reports whether the bot is set up.
+func (t Telegram) IsOn() bool { return t.Token != "" }
 
 // Engine configures one engine.
 type Engine struct {
@@ -103,6 +118,9 @@ func (c Config) check() error {
 		if strings.TrimSpace(b) == "" {
 			return errors.New("config: empty entry in blocked")
 		}
+	}
+	if t := c.Telegram; t.IsOn() && (t.ChatID == 0 || t.UserID == 0) {
+		return errors.New("config: telegram needs token, chat_id and user_id (run `germes setup telegram`)")
 	}
 	return nil
 }

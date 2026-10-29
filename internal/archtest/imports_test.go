@@ -30,6 +30,7 @@ var allowed = map[string][]string{
 	"internal/job":            {"internal/api", "internal/stream"},
 	"internal/tui":            {"internal/api"},
 	"internal/mcp":            {"internal/api"},
+	"internal/telegram":       {"internal/api"},
 	"internal/tools/sessions": {"internal/tool", "internal/api", "internal/text"},
 	"internal/tools/jobs":     {"internal/tool", "internal/api"},
 	"internal/cli":            {"internal/api"},

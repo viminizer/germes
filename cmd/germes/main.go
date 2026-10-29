@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -35,6 +37,7 @@ import (
 	"github.com/viminizer/germes/internal/session"
 	"github.com/viminizer/germes/internal/skill"
 	"github.com/viminizer/germes/internal/store"
+	"github.com/viminizer/germes/internal/telegram"
 	"github.com/viminizer/germes/internal/tool"
 	"github.com/viminizer/germes/internal/tools/files"
 	jobstool "github.com/viminizer/germes/internal/tools/jobs"
@@ -55,6 +58,7 @@ const usage = `usage:
   germes -c             continue the last session in this folder
   germes --no-worktree  start a session in this folder instead of its own git worktree
   germes attach <id>    open any session, or a job's latest round (follows new rounds)
+  germes setup telegram talk to Germes from a Telegram group (topics bound to projects)
   germes overseer       open the overseer: one session that controls Germes (sessions, jobs) for you
   germes mcp --session <id>  MCP server with Germes' tools (claude starts it on its own)
   germes ls             list sessions
@@ -140,6 +144,11 @@ func run(args []string) error {
 			return errors.New("usage: germes attach <id>")
 		}
 		return runTUI(ctx, p, client, tuiStart{sessionID: args[1]})
+	case "setup":
+		if len(args) != 2 || args[1] != "telegram" {
+			return errors.New("usage: germes setup telegram")
+		}
+		return setupTelegram(p)
 	case "overseer":
 		return runTUI(ctx, p, client, tuiStart{sessionID: api.OverseerID})
 	case "mcp":
@@ -295,7 +304,7 @@ func runDaemon(p paths) error {
 	jobs := job.NewScheduler(st, sessions, job.Options{Tools: tools, Workflows: filepath.Join(p.home, "workflows")})
 	return daemon.New(sessions, jobs, old, daemon.Options{
 		Version: version, ConfigPath: p.config, SocketPath: p.socket, LockPath: p.lock, OldDir: filepath.Join(p.home, "old"),
-		StartNew: func() error { return startDaemon(p) }, Tools: tools,
+		StartNew: func() error { return startDaemon(p) }, Tools: tools, Gateway: newTelegram(p, cfg),
 	}).Run(context.Background())
 }
 
@@ -317,6 +326,52 @@ func ensureDaemon(ctx context.Context, p paths, client *api.Client) error {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("the daemon did not start; see %s", p.log)
+}
+
+// newTelegram builds the Telegram bot when it is set up. It talks to the
+// daemon through the socket, like any client. nil = off.
+func newTelegram(p paths, cfg config.Config) daemon.Gateway {
+	if !cfg.Telegram.IsOn() {
+		return nil
+	}
+	codeDirs := cfg.CodeDirs
+	if len(codeDirs) == 0 {
+		home, _ := os.UserHomeDir()
+		codeDirs = []string{filepath.Join(home, "dev")}
+	}
+	return telegram.New(api.NewClient(p.socket), telegram.Options{Token: cfg.Telegram.Token, ChatID: cfg.Telegram.ChatID,
+		UserID: cfg.Telegram.UserID, CodeDirs: codeDirs, StatePath: filepath.Join(p.home, "telegram.json"), APIBase: cfg.Telegram.APIBase})
+}
+
+// setupTelegram asks for the bot's token, the group chat and the user, and
+// saves them in the config. The daemon picks the change up on its own.
+func setupTelegram(p paths) error {
+	cfg, err := config.Load(p.config)
+	if err != nil {
+		return err
+	}
+	fmt.Println(`Telegram setup. You need:
+  1. A bot from @BotFather (/newbot gives the token). Turn its privacy mode off (/setprivacy -> Disable), or make it a group admin.
+  2. A group with topics turned on, with the bot added. Its chat id starts with -100 (forward a message to @RawDataBot to see it).
+  3. Your own user id (the same bot shows it).`)
+	in := bufio.NewScanner(os.Stdin)
+	ask := func(q string) string {
+		fmt.Print(q)
+		in.Scan()
+		return strings.TrimSpace(in.Text())
+	}
+	token := ask("Bot token: ")
+	chatID, err1 := strconv.ParseInt(ask("Group chat id: "), 10, 64)
+	userID, err2 := strconv.ParseInt(ask("Your user id: "), 10, 64)
+	if token == "" || err1 != nil || err2 != nil {
+		return errors.New("setup cancelled: the token and both ids are needed (ids are numbers)")
+	}
+	cfg.Telegram = config.Telegram{Token: token, ChatID: chatID, UserID: userID}
+	if err := config.Save(p.config, cfg); err != nil {
+		return err
+	}
+	fmt.Println("Saved. The daemon starts the bot within a few seconds. In a topic, /bind <project> binds it; General talks to the overseer.")
+	return nil
 }
 
 // registryTools runs tools for the daemon and jobs, with the block list,

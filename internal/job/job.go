@@ -45,12 +45,12 @@ type Sessions interface {
 type Scheduler struct {
 	store    Store
 	sessions Sessions
-	ctx      context.Context // cancelled by Stop
-	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 
-	mu      sync.Mutex // one read-modify-write of a job row at a time; guards running
+	mu      sync.Mutex // one read-modify-write of a job row at a time; guards the fields below
 	running map[string]*runner
+	ctx     context.Context // set by Start, cancelled by Stop
+	cancel  context.CancelFunc
 }
 
 // runner is one job's goroutine.
@@ -66,12 +66,18 @@ type round struct {
 // NewScheduler creates a scheduler.
 func NewScheduler(store Store, sessions Sessions) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // nothing runs before Start
 	return &Scheduler{store: store, sessions: sessions, ctx: ctx, cancel: cancel, running: map[string]*runner{}}
 }
 
 // Start resumes the jobs that were running when the daemon stopped. A round
-// missed while the daemon was off runs once, right away.
+// missed while the daemon was off runs once, right away. A round an old
+// daemon still runs (after an update) is waited for first. Start may follow
+// Stop.
 func (s *Scheduler) Start(ctx context.Context) error {
+	s.mu.Lock()
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.mu.Unlock()
 	page, err := s.store.ListJobs(ctx, api.JobFilter{Status: api.JobRunning, Limit: 500})
 	if err != nil {
 		return err
@@ -83,9 +89,13 @@ func (s *Scheduler) Start(ctx context.Context) error {
 }
 
 // Stop ends every job goroutine and waits for them. The jobs stay running
-// in the database, so the next start resumes them.
+// in the database, so the next start resumes them. Rounds already running
+// in sessions go on.
 func (s *Scheduler) Stop(ctx context.Context) error {
+	s.mu.Lock()
 	s.cancel()
+	s.running = map[string]*runner{}
+	s.mu.Unlock()
 	return stream.Wait(ctx, &s.wg)
 }
 
@@ -224,6 +234,9 @@ func (s *Scheduler) launch(id string) {
 
 // run runs rounds until the job stops being running.
 func (s *Scheduler) run(ctx context.Context, id string) {
+	if !s.finishRunningRound(ctx, id) {
+		return
+	}
 	for {
 		j, ok := s.advance(ctx, id)
 		if !ok {
@@ -237,6 +250,25 @@ func (s *Scheduler) run(ctx context.Context, id string) {
 			return
 		}
 	}
+}
+
+// finishRunningRound waits for a round that is still working when the job
+// goroutine starts (an old daemon finishes it after an update) and records
+// it. It reports whether the job runs on.
+func (s *Scheduler) finishRunningRound(ctx context.Context, id string) bool {
+	j, err := s.store.GetJob(ctx, id)
+	if err != nil || j.Status != api.JobRunning {
+		return false
+	}
+	if j.SessionID == "" {
+		return true
+	}
+	sess, err := s.sessions.GetSession(ctx, j.SessionID)
+	if err != nil || sess.Status == api.StatusIdle {
+		return true
+	}
+	res := s.waitRound(ctx, j.SessionID)
+	return ctx.Err() == nil && s.finish(ctx, id, res)
 }
 
 // advance waits for the next round, then counts it and sets the time of the

@@ -254,28 +254,39 @@ func runDaemon(p paths) error {
 	if err != nil {
 		return err
 	}
-	sessions := session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg)})
+	old := daemon.NewOldDaemons(filepath.Join(p.home, "old"))
+	sessions := session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg), Elsewhere: old})
 	jobs := job.NewScheduler(st, sessions)
-	err = daemon.New(sessions, jobs, version, p.config).Run(context.Background(), p.socket, p.lock)
-	if !errors.Is(err, daemon.ErrUpdated) {
-		return err
-	}
-	// Replace this process with the new binary. Exec skips deferred calls,
-	// so close the database first. Clients reconnect on their own.
-	st.Close()
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	return syscall.Exec(exe, []string{exe, "daemon"}, os.Environ())
+	return daemon.New(sessions, jobs, old, daemon.Options{
+		Version: version, ConfigPath: p.config, SocketPath: p.socket, LockPath: p.lock, OldDir: filepath.Join(p.home, "old"),
+		StartNew: func() error { return startDaemon(p) },
+	}).Run(context.Background())
 }
 
 // ensureDaemon connects to the daemon, or starts it in the background and
 // waits for its socket.
 func ensureDaemon(ctx context.Context, p paths, client *api.Client) error {
 	if _, err := ping(ctx, client); err == nil {
-		return nil // an older daemon updates itself when idle
+		return nil // an older daemon hands over to the new binary on its own
 	}
+	if err := startDaemon(p); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := ping(ctx, client); err == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("the daemon did not start; see %s", p.log)
+}
+
+// startDaemon starts `germes daemon` in the background, logging to the
+// daemon log. It does not wait for it to start; a goroutine collects its
+// exit, so a daemon that ends (after handing over) is not left as a zombie.
+func startDaemon(p paths) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -291,16 +302,8 @@ func ensureDaemon(ctx context.Context, p paths, client *api.Client) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start daemon: %w", err)
 	}
-	cmd.Process.Release()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := ping(ctx, client); err == nil {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return fmt.Errorf("the daemon did not start; see %s", p.log)
+	go cmd.Wait()
+	return nil
 }
 
 func ping(ctx context.Context, client *api.Client) (api.Daemon, error) {

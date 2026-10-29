@@ -25,9 +25,10 @@ type worker struct {
 	seq  int64
 	wake chan struct{} // a message was queued
 
-	mu     sync.Mutex
-	queue  []string           // messages waiting for the next turn
-	cancel context.CancelFunc // cancels the running turn
+	mu      sync.Mutex
+	queue   []string           // messages waiting for the next turn
+	cancel  context.CancelFunc // cancels the running turn
+	running bool               // turns are running
 }
 
 func (w *worker) run() {
@@ -37,10 +38,15 @@ func (w *worker) run() {
 	for {
 		select {
 		case <-w.wake:
+			if !w.waitElsewhere() {
+				return
+			}
+			w.setRunning(true)
 			// Everything queued while a turn ran becomes one turn.
 			for texts := w.take(); len(texts) > 0; texts = w.take() {
 				w.runTurn(strings.Join(texts, "\n\n"))
 			}
+			w.setRunning(false)
 			idle.Reset(idleTime)
 		case <-idle.C:
 			if w.exit() {
@@ -51,6 +57,53 @@ func (w *worker) run() {
 			return
 		}
 	}
+}
+
+// elsewhereCheck is how often a worker asks whether another process still
+// runs its session.
+const elsewhereCheck = 300 * time.Millisecond
+
+// waitElsewhere waits while another process (an old daemon after an
+// update) runs this session; the queue keeps filling meanwhile. Then it
+// reloads the session and its last seq, which that process changed. It
+// reports false when the manager stops.
+func (w *worker) waitElsewhere() bool {
+	el := w.m.opts.Elsewhere
+	if el == nil {
+		return true
+	}
+	for el.IsBusy(w.m.ctx, w.sess.ID) {
+		select {
+		case <-time.After(elsewhereCheck):
+		case <-w.m.ctx.Done():
+			return false
+		}
+	}
+	s, err := w.m.store.GetSession(w.m.ctx, w.sess.ID)
+	if err != nil {
+		slog.Error("reload session", "session", w.sess.ID, "err", err)
+		return true
+	}
+	seq, err := w.m.store.GetLastSeq(w.m.ctx, w.sess.ID)
+	if err != nil {
+		slog.Error("reload session", "session", w.sess.ID, "err", err)
+		return true
+	}
+	w.sess, w.seq = s, seq
+	return true
+}
+
+func (w *worker) setRunning(running bool) {
+	w.mu.Lock()
+	w.running = running
+	w.mu.Unlock()
+}
+
+// isBusy reports whether turns run or messages wait.
+func (w *worker) isBusy() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.running || len(w.queue) > 0
 }
 
 // enqueue adds a message for the next turn and wakes the worker.

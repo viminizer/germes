@@ -9,7 +9,7 @@ import (
 
 // GetDaemon describes this daemon.
 func (d *Daemon) GetDaemon(ctx context.Context) (api.Daemon, error) {
-	return api.Daemon{Version: d.version, PID: os.Getpid(), StartedAt: d.startedAt}, nil
+	return api.Daemon{Version: d.opts.Version, PID: os.Getpid(), StartedAt: d.startedAt, Busy: d.sessions.ListBusy()}, nil
 }
 
 // StopDaemon asks Run to shut down.
@@ -33,8 +33,9 @@ func (d *Daemon) UpdateSession(ctx context.Context, u api.SessionUpdate) error {
 	return d.sessions.UpdateSession(ctx, u)
 }
 
-// DeleteSession deletes a session.
+// DeleteSession deletes a session, after stopping its turn in an old daemon.
 func (d *Daemon) DeleteSession(ctx context.Context, id string) error {
+	d.old.stopSession(ctx, api.StopRequest{ID: id})
 	return d.sessions.DeleteSession(ctx, id)
 }
 
@@ -43,8 +44,10 @@ func (d *Daemon) SendMessage(ctx context.Context, r api.MessageRequest) (api.Mes
 	return d.sessions.SendMessage(ctx, r)
 }
 
-// StopSession stops the current step of a session.
+// StopSession stops the current step of a session, here or in an old daemon
+// that still runs it.
 func (d *Daemon) StopSession(ctx context.Context, r api.StopRequest) error {
+	d.old.stopSession(ctx, r)
 	return d.sessions.StopSession(ctx, r)
 }
 

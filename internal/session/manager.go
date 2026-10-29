@@ -61,10 +61,17 @@ type Expander interface {
 	Expand(ctx context.Context, msg, sessionID, dir string) string
 }
 
+// Elsewhere reports whether another process still runs a session: an old
+// daemon finishing its turns after an update.
+type Elsewhere interface {
+	IsBusy(ctx context.Context, sessionID string) bool
+}
+
 // Options configure the manager.
 type Options struct {
-	Worktrees string   // where session worktrees go; "" = no worktrees
-	Refs      Expander // nil = @ references stay plain text
+	Worktrees string    // where session worktrees go; "" = no worktrees
+	Refs      Expander  // nil = @ references stay plain text
+	Elsewhere Elsewhere // nil = only this process runs sessions
 }
 
 // NewManager creates a manager.
@@ -74,13 +81,17 @@ func NewManager(store Store, runner Runner, opts Options) *Manager {
 		workers: map[string]*worker{}, hub: hub{watchers: map[*watcher]struct{}{}}}
 }
 
-// Start marks turns that were running when the daemon stopped as interrupted.
+// Start marks turns that were running when the daemon stopped as
+// interrupted. Turns an old daemon still runs are left alone.
 func (m *Manager) Start(ctx context.Context) error {
 	page, err := m.store.ListSessions(ctx, api.SessionFilter{Status: api.StatusWorking, Limit: 500})
 	if err != nil {
 		return err
 	}
 	for _, s := range page.Items {
+		if m.opts.Elsewhere != nil && m.opts.Elsewhere.IsBusy(ctx, s.ID) {
+			continue
+		}
 		w, err := m.newWorker(ctx, s)
 		if err != nil {
 			slog.Error("recover session", "session", s.ID, "err", err)
@@ -98,6 +109,23 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.cancel()
 	return stream.Wait(ctx, &m.wg)
 }
+
+// ListBusy lists the sessions with a turn running or messages waiting.
+func (m *Manager) ListBusy() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	for id, w := range m.workers {
+		if w.isBusy() {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// SendEvent passes a live event from another process (an old daemon after
+// an update) on to this manager's watchers. That process saved it already.
+func (m *Manager) SendEvent(ev api.Event) { m.hub.publish(ev) }
 
 // SendMessage queues text for a session. No SessionID: a new session is
 // created in r.Dir.

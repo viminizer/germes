@@ -4,7 +4,7 @@ Germes is the user's harness. A background daemon owns all sessions; the TUI, th
 
 ## Configuration: `{{HOME}}/config.yaml`
 
-When the user asks you to change Germes' configuration, do it: edit this file (keep valid YAML), or run the matching `germes` command. The daemon reloads the config on its own as soon as no turn is running; there is nothing to restart.
+When the user asks you to change Germes' configuration, do it: edit this file (keep valid YAML), or run the matching `germes` command. The daemon reloads the config on its own at once (running turns finish on the old config); there is nothing to restart.
 
 ```yaml
 engines:                 # in order of preference; the router uses the first one that is free
@@ -25,7 +25,7 @@ Commands:
 - `germes reserve on|off <engine>`: turn an engine's reserve on or off.
 - `germes ls`: list sessions. `germes stop <id>`: stop a session's turn.
 - `germes job add [--every 1h] [--max-runs n] [--name x] "<prompt>"`: run a prompt again and again in the current folder, a new session each round, until the agent ends a reply with [DONE]. `germes job ls|start|stop|rm <id>`.
-- `germes daemon restart`: restart the daemon (rarely needed; it updates and reloads itself).
+- `germes daemon restart`: restart the daemon, cutting running turns (rarely needed; it updates and reloads itself without cutting anything).
 
 ## Other Germes files
 - Memory: `{{HOME}}/memories/MEMORY.md` (your notes) and `USER.md` (about the user). Entries are separated by a line with only `§`.

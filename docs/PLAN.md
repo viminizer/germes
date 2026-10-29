@@ -60,7 +60,7 @@ entry points          tui   cli   mcp   telegram          → api only (R5)
 server                daemon                               → api, session, job, router
 
 orchestration         session                              → api, engine
-                      job                                  → api
+                      job                                  → api, stream
                       router                               → api, engine, config
 
 engines               engine/loop                          → engine, llm, tool, prompt, api
@@ -88,7 +88,7 @@ leaves                api                                  → stream
                       engine, tool, env                    → (none)
 ```
 
-Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `file.Save` (safe write), `text.Shorten` and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `tool.NewRun` (decode tool arguments). Also imported by: llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text).
+Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `stream.Wait` (wait for goroutines unless cancelled), `file.Save` (safe write), `text.Shorten` and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `tool.NewRun` (decode tool arguments). Also imported by: job (stream), llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text).
 
 Notes:
 - Shared plain types live low: `api` (Session, Event, Job, Page, filters), `engine` (Turn, Event, Usage). Higher modules and `store` use them, so nothing imports upward.
@@ -902,8 +902,13 @@ Run:
 5. SIGTERM or `StopDaemon`: stop accepting requests, stop sessions (interrupted turns are saved), stop jobs, exit.
 
 - Auto-start (client side): `germes` runs `germes daemon` detached in its own process group. Logs: `~/.germes/logs/daemon.log`.
-- Config changes apply on their own: the daemon watches `config.yaml` like its binary and reloads when no turn is running.
-- Self-update: every 3 s the daemon checks its own binary. When it was replaced (`make install`) and no session is working, it stops cleanly and execs the new binary in its place (same process id, about 0.25 s). Open TUIs reconnect on their own. A running turn is never cut: the update waits until it ends. `germes daemon restart` still works.
+- Self-update (hand-over): every 3 s the daemon checks its own binary and `config.yaml`. When one changed (`make install`, a config edit), it hands over at once. Nobody waits, nothing is cut:
+  1. The old daemon stops its job goroutines (the jobs stay running in the database), serves the Service on a private socket (`/tmp/germes-<uid>-old-<id>.sock`) and lists it in `~/.germes/old/`.
+  2. It frees the lock and starts the new daemon, which takes the main socket. The old one waits until the new one answers there (15 s), then closes its main socket and its watch streams, so clients reconnect to the new daemon.
+  3. The new daemon reads `~/.germes/old/`: it leaves the old daemon's running sessions alone at start, passes their live events on to its own watchers, forwards Esc / Esc Esc and delete to the old daemon, and holds a session's next turn (the queue fills) until the old daemon no longer runs it. Its jobs first wait for a round still running in the old daemon.
+  4. The old daemon exits when it has no turn running and nothing queued. Several updates in a row chain the same way.
+  - Hand-over fails (the new daemon does not come up): the old daemon takes the lock back, resumes its jobs and keeps serving; the next change tries again.
+  - `germes daemon restart` still stops and starts, cutting running turns.
 
 Files: `daemon.go` (lock, socket, run, shutdown), `service.go` (`Service` methods).
 
@@ -1044,7 +1049,7 @@ tg  := telegram.New(svc, telegram.Options{Token: cfg.Telegram.Token, ...})
 ```
 
 - Modules that take a section import `config` for its type (`config` is a leaf). Exception: entry points (`telegram`) get their own `Options` struct, so they import only `api` (R5).
-- A config change needs `germes daemon restart`. No live reload.
+- A config change hands over to a new daemon at once (see "Daemon module"); running turns finish on the old config.
 
 ## CLI
 
@@ -1149,7 +1154,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Leftover socket file: delete it, start a new daemon.
 - Socket path too long (macOS limit about 104 bytes, deep `GERMES_HOME`): use `/tmp/germes-<uid>-<hash>.sock`.
 - Two daemons start at once: the lock lets one win; the other exits; the client connects to the winner.
-- Old daemon after an upgrade: it replaces itself with the new binary once idle. If the exec fails, it exits; the next `germes` starts the new version.
+- Old daemon after an upgrade: it hands over at once (see "Daemon module"). The new daemon does not come up: the old one keeps serving. An old daemon that crashes while finishing turns: the new daemon finds no answer on its private socket, drops it from `~/.germes/old/`, and those sessions are free again (their cut turns show the last saved events). Clients holding a kept-alive connection to the old daemon are moved: it closes its main socket and watch streams after the hand-over.
 - Daemon crash in the middle of a turn: on restart the turn is saved as `interrupted`. Jobs continue; advance-before-run means no double round.
 - A goroutine panics (worker, job, telegram): recover it, save an `error` event, the session goes idle. The daemon keeps running.
 - Migration fails or database broken: refuse to start, do not touch the file. Never delete data automatically.
@@ -1245,7 +1250,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - Ends: `[DONE]` (done), `MaxRuns` (done), 3 failed rounds in a row (failed, with the error in `job ls`), folder or last round gone (failed at once), `job stop` (also stops the running round). Daemon restart: running jobs resume; a missed round runs once.
    - `germes attach <job>` opens the latest round and follows new ones (checks the job every 2 s, prints `── round N ──`). `/switch` or `/clear` stops following.
    - Checked live: a 3-round job ended itself with `[DONE]`, rounds shared one worktree and `PROGRESS.md`; an attached TUI followed round 1 to round 2.
-   - Known: the daemon updates itself only when no session is working, so a back-to-back job delays a self-update until it ends or is stopped.
+   - Updates never wait for jobs or sessions: the daemon hands over (see "Daemon module"). Checked live: a 40 s turn finished in the old daemon while a queued message ran in the new one; Esc Esc stopped a turn in the old daemon through the new one; a job's round 1 ran in the old daemon and round 2 started in the new one 3 ms after it ended. Tests run two daemons on one database (`internal/daemon/handover_test.go`).
 7. MCP and the overseer.
 8. Telegram.
 

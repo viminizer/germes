@@ -191,6 +191,7 @@ type Daemon struct {
 	Version   string    `json:"version"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
+	Busy      []string  `json:"busy,omitempty"` // sessions with a turn running or messages waiting here
 }
 
 // Code is the kind of an Error.

@@ -47,6 +47,9 @@ func newTestScheduler(t *testing.T, replies ...string) (*Scheduler, *scriptRunne
 	r := &scriptRunner{replies: replies}
 	sessions := session.NewManager(st, r, session.Options{})
 	s := NewScheduler(st, sessions)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		s.Stop(context.Background())
 		sessions.Stop(context.Background())

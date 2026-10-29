@@ -27,7 +27,7 @@ var allowed = map[string][]string{
 	"internal/refs":           {"internal/tool", "internal/text"},
 	"internal/tools/worktree": {"internal/tool", "internal/api"},
 	"internal/daemon":         {"internal/api", "internal/session", "internal/job", "internal/router"},
-	"internal/job":            {"internal/api"},
+	"internal/job":            {"internal/api", "internal/stream"},
 	"internal/tui":            {"internal/api"},
 	"internal/cli":            {"internal/api"},
 	"internal/archtest":       {},

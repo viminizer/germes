@@ -40,7 +40,7 @@ type Options struct {
 	// Germes is the germes binary: claude starts `germes mcp --session <id>`
 	// as an MCP server, for Germes' own tools. "" = no MCP.
 	Germes     string
-	GermesHome string // GERMES_HOME for that server
+	GermesHome string // GERMES_HOME: for that server, and a folder Claude may edit
 }
 
 // Claude is the claude CLI engine.
@@ -112,6 +112,11 @@ func (c *Claude) args(t engine.Turn, extra string) []string {
 	}
 	if c.opts.Germes != "" {
 		args = append(args, "--mcp-config", c.mcpConfig(t.SessionID))
+	}
+	// Germes' own files (config, memory, skills, workflows) live outside
+	// the session's folder; without this, Claude may not read or edit them.
+	if c.opts.GermesHome != "" {
+		args = append(args, "--add-dir", c.opts.GermesHome)
 	}
 	if len(c.opts.Blocked) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(c.opts.Blocked, " "))

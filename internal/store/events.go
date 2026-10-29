@@ -21,8 +21,8 @@ func (s *Store) CreateEvent(ctx context.Context, ev api.Event) error {
 		}
 		tool = sql.NullString{String: string(b), Valid: true}
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO events (session_id, seq, time, kind, text, tool) VALUES (?, ?, ?, ?, ?, ?)`,
-		ev.SessionID, ev.Seq, ev.Time.UnixNano(), ev.Kind, ev.Text, tool)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO events (session_id, seq, time, kind, text, tool, engine) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ev.SessionID, ev.Seq, ev.Time.UnixNano(), ev.Kind, ev.Text, tool, ev.Engine)
 	if err != nil {
 		return fmt.Errorf("create event %s/%d: %w", ev.SessionID, ev.Seq, err)
 	}
@@ -35,7 +35,7 @@ func (s *Store) ListEvents(ctx context.Context, f api.EventFilter) (api.Page[api
 	if limit <= 0 || limit > 1000 {
 		limit = 500
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT session_id, seq, time, kind, text, tool FROM events
+	rows, err := s.db.QueryContext(ctx, `SELECT session_id, seq, time, kind, text, tool, engine FROM events
 		WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?`, f.SessionID, f.AfterSeq, limit+1)
 	if err != nil {
 		return api.Page[api.Event]{}, fmt.Errorf("list events: %w", err)
@@ -46,7 +46,7 @@ func (s *Store) ListEvents(ctx context.Context, f api.EventFilter) (api.Page[api
 		var ev api.Event
 		var t int64
 		var tool sql.NullString
-		if err := rows.Scan(&ev.SessionID, &ev.Seq, &t, &ev.Kind, &ev.Text, &tool); err != nil {
+		if err := rows.Scan(&ev.SessionID, &ev.Seq, &t, &ev.Kind, &ev.Text, &tool, &ev.Engine); err != nil {
 			return page, err
 		}
 		ev.Time = time.Unix(0, t)

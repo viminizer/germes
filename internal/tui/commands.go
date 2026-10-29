@@ -84,7 +84,7 @@ func (m *model) open(id string) tea.Cmd {
 	m.stopWatch()
 	m.gen++
 	m.sessionID = id
-	m.transcript = transcript{}
+	m.transcript = transcript{dir: m.opts.Dir}
 	m.queue = queueView{}
 	m.status.SessionID, m.status.Busy, m.status.Note = id, false, ""
 	if id == "" {

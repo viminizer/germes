@@ -387,7 +387,7 @@ engines:
 1. Every turn goes to the first engine that is not limited and not reserved.
 2. Limited: the engine hit a limit (5-hour or weekly). Blocked until its reset time. No reset time given: blocked 30 minutes, then try again.
 3. Reserved: what is left in a window is at or below its reserve. Blocked until that window resets. `reserve: 0` or no reserve = may hit the limit.
-4. Let it hit the limit sometimes: `germes reserve off codex` (or `/reserve off codex`). `germes reserve on codex` turns it back on.
+4. Let it hit the limit sometimes: `germes reserve off codex-api`. `germes reserve on codex-api` turns it back on.
 5. A reserved engine is never used automatically, even when all others are limited.
 6. All blocked: the session pauses and notifies me. It resumes at the earliest reset.
 7. Later: switch by work type.
@@ -456,6 +456,13 @@ type Turn struct {
     Extra       string            // handoff text, set by the router
 }
 ```
+
+### Built in M3
+
+- Switch notice in the TUI: `⇄ now on claude-cli: codex-api reserved (17% of seven_day left, keeping 20%)`. The status bar follows the engine (events carry `Engine`, saved since migration 003).
+- An engine that cannot start (not installed, logged out) is treated like a limit: the turn moves on.
+- `engine/loop` gets the handoff as a message, not in the system prompt, so the prompt cache stays valid.
+- Every engine blocked: `Run` returns `engine.UnavailableError`; the session shows "paused until ...", waits (Esc Esc stops waiting) and runs the message again.
 
 ### Files
 
@@ -882,6 +889,7 @@ Run:
 5. SIGTERM or `StopDaemon`: stop accepting requests, stop sessions (interrupted turns are saved), stop jobs, exit.
 
 - Auto-start (client side): `germes` runs `germes daemon` detached in its own process group. Logs: `~/.germes/logs/daemon.log`.
+- Config changes apply on their own: the daemon watches `config.yaml` like its binary and reloads when no turn is running.
 - Self-update: every 3 s the daemon checks its own binary. When it was replaced (`make install`) and no session is working, it stops cleanly and execs the new binary in its place (same process id, about 0.25 s). Open TUIs reconnect on their own. A running turn is never cut: the update waits until it ends. `germes daemon restart` still works.
 
 Files: `daemon.go` (lock, socket, run, shutdown), `service.go` (`Service` methods).
@@ -1186,7 +1194,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
 0. Skeleton: `go.mod`, `cmd/germes`, import test (R2), CI. Done.
 1. First working chat: TUI -> daemon -> session -> `engine/claude`, with `api`, `store`, minimal `config`, daemon auto-start, `ls`, `stop`, `-c`, `attach`. Done.
 2. Own loop: `llm/codex`, `engine/loop`, `tool`, `env`, file and shell tools, `prompt`. Done. Until the router, the daemon uses the first engine in config order that can run (Codex login found, or `claude` on PATH).
-3. Router: limits, reserves, handoff, Codex <-> Claude switching.
+3. Router: limits, reserves, handoff, Codex <-> Claude switching. Done. Shown live both ways: Codex -> Claude (Codex reserved at 83% weekly) and Claude -> Codex, with context kept.
 4. Memory and skills: `memory`, `skill`, search, compaction.
 5. Worktrees.
 6. Jobs, then workflows.

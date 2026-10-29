@@ -26,6 +26,7 @@ import (
 	"github.com/viminizer/germes/internal/env"
 	"github.com/viminizer/germes/internal/llm/codex"
 	"github.com/viminizer/germes/internal/prompt"
+	"github.com/viminizer/germes/internal/router"
 	"github.com/viminizer/germes/internal/session"
 	"github.com/viminizer/germes/internal/store"
 	"github.com/viminizer/germes/internal/tool"
@@ -43,6 +44,7 @@ const usage = `usage:
   germes attach <id>    open any session
   germes ls             list sessions
   germes stop <id>      stop a session's current step
+  germes reserve on|off <engine>  keep or drop an engine's usage reserve
   germes daemon stop    stop the daemon
   germes daemon restart restart the daemon (it also updates itself when idle)`
 
@@ -114,6 +116,8 @@ func run(args []string) error {
 			return errors.New("usage: germes attach <id>")
 		}
 		return runTUI(ctx, p, client, args[1], false)
+	case "reserve":
+		return reserveCommand(p, args[1:])
 	case "help", "-h", "--help":
 		fmt.Println(usage)
 		return nil
@@ -136,10 +140,11 @@ func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, 
 	if err != nil {
 		return err
 	}
-	engineName, ok := pickEngine(p, cfg)
-	if !ok {
+	engines := availableEngines(p, cfg)
+	if len(engines) == 0 {
 		return errors.New("no engine found: log in with `codex login`, or install Claude Code (https://claude.com/claude-code)")
 	}
+	engineName := engines[0] // the status bar follows the session's real engine
 	if err := ensureDaemon(ctx, p, client); err != nil {
 		return err
 	}
@@ -210,12 +215,12 @@ func runDaemon(p paths) error {
 	}
 	defer st.Close()
 
-	eng, err := newEngine(p, cfg, st)
+	rt, err := newRouter(p, cfg, st)
 	if err != nil {
 		return err
 	}
-	sessions := session.NewManager(st, eng)
-	err = daemon.New(sessions, version).Run(context.Background(), p.socket, p.lock)
+	sessions := session.NewManager(st, rt)
+	err = daemon.New(sessions, version, p.config).Run(context.Background(), p.socket, p.lock)
 	if !errors.Is(err, daemon.ErrUpdated) {
 		return err
 	}
@@ -279,45 +284,50 @@ func waitDaemonGone(ctx context.Context, client *api.Client) error {
 	return errors.New("the old daemon did not stop")
 }
 
-// pickEngine returns the first engine in config order that can run here.
-// ponytail: one engine per daemon until the router (milestone 3) switches.
-func pickEngine(p paths, cfg config.Config) (string, bool) {
+// availableEngines lists the engines in config order that can run here.
+func availableEngines(p paths, cfg config.Config) []string {
+	var names []string
 	for _, e := range cfg.Engines {
 		switch e.Name {
 		case "codex-api":
 			if codex.IsAvailable(p.home, codexDir()) {
-				return e.Name, true
+				names = append(names, e.Name)
 			}
 		case claude.Name:
 			if _, err := exec.LookPath("claude"); err == nil {
-				return e.Name, true
+				names = append(names, e.Name)
 			}
 		}
 	}
-	return "", false
+	return names
 }
 
-// newEngine builds the engine pickEngine chose, with its tools.
-func newEngine(p paths, cfg config.Config, st *store.Store) (engine.Engine, error) {
-	name, ok := pickEngine(p, cfg)
-	if !ok {
+// newRouter builds every available engine, in config order, behind the router.
+func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, error) {
+	names := availableEngines(p, cfg)
+	if len(names) == 0 {
 		return nil, errors.New("no engine found: log in with `codex login`, or install Claude Code")
 	}
-	ec := cfg.GetEngine(name)
-	if name == claude.Name {
-		return claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked}), nil
+	var engines []engine.Engine
+	for _, name := range names {
+		ec := cfg.GetEngine(name)
+		if name == claude.Name {
+			engines = append(engines, claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked}))
+			continue
+		}
+		tools := append(files.New(), shell.New(env.NewLocal())...)
+		toolsets := map[string]tool.Toolset{
+			"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
+			"project": {Includes: []string{"core"}},
+		}
+		reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
+		if err != nil {
+			return nil, err
+		}
+		client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
+		engines = append(engines, loop.New(client, reg, prompt.NewBuilder(p.home), st, loop.Options{Name: name, Toolsets: []string{"project"}}))
 	}
-	tools := append(files.New(), shell.New(env.NewLocal())...)
-	toolsets := map[string]tool.Toolset{
-		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
-		"project": {Includes: []string{"core"}},
-	}
-	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
-	if err != nil {
-		return nil, err
-	}
-	client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
-	return loop.New(client, reg, prompt.NewBuilder(p.home), st, loop.Options{Name: name, Toolsets: []string{"project"}}), nil
+	return router.New(engines, cfg.Engines, st, time.Now)
 }
 
 func codexDir() string {
@@ -326,4 +336,31 @@ func codexDir() string {
 	}
 	h, _ := os.UserHomeDir()
 	return filepath.Join(h, ".codex")
+}
+
+// reserveCommand turns an engine's reserve on or off in the config. The
+// daemon sees the change and reloads when no turn is running.
+func reserveCommand(p paths, args []string) error {
+	if len(args) != 2 || (args[0] != "on" && args[0] != "off") {
+		return errors.New("usage: germes reserve on|off <engine>")
+	}
+	cfg, err := config.Load(p.config)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range cfg.Engines {
+		if cfg.Engines[i].Name == args[1] {
+			cfg.Engines[i].ReserveOff = args[0] == "off"
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("no engine %q in %s", args[1], p.config)
+	}
+	if err := config.Save(p.config, cfg); err != nil {
+		return err
+	}
+	fmt.Printf("reserve %s for %s; the daemon applies it when no turn is running\n", args[0], args[1])
+	return nil
 }

@@ -63,8 +63,9 @@ type model struct {
 func newModel(ctx context.Context, svc api.Service, opts Options) *model {
 	return &model{
 		ctx: ctx, svc: svc, opts: opts, sessionID: opts.SessionID,
-		status:   statusBar{Engine: opts.Engine, SessionID: opts.SessionID, Project: opts.Project},
-		composer: newComposer(),
+		transcript: transcript{dir: opts.Dir},
+		status:     statusBar{Engine: opts.Engine, SessionID: opts.SessionID, Project: opts.Project},
+		composer:   newComposer(),
 	}
 }
 
@@ -194,6 +195,9 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // track updates the status bar from an event.
 func (m *model) track(ev api.Event) tea.Cmd {
+	if ev.Engine != "" {
+		m.status.Engine = ev.Engine
+	}
 	switch ev.Kind {
 	case api.KindUserMessage:
 		if !m.status.Busy {

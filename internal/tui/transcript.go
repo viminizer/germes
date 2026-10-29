@@ -9,6 +9,7 @@ import (
 // transcript turns session events into finished messages (printed above the
 // live area) and keeps the live part: streaming text and running tools.
 type transcript struct {
+	dir       string // project folder, for short paths
 	streaming strings.Builder
 	running   []*api.ToolCall // tool calls waiting for their result
 	lastSeq   int64
@@ -40,7 +41,7 @@ func (t *transcript) apply(ev api.Event) []message {
 		// Text streamed so far comes first, then the error under it.
 		return append(t.flushText(), message{Kind: kindError, Text: ev.Text})
 	case api.KindEngineSwitched:
-		return []message{{Kind: kindNotice, Text: ev.Text}}
+		return []message{{Kind: kindSwitch, Text: ev.Text}}
 	case api.KindTurnDone:
 		return t.flush()
 	}
@@ -59,7 +60,7 @@ func (t *transcript) finishTool(result *api.ToolCall) []message {
 			if done.Output == "" {
 				done.Output = "done"
 			}
-			return []message{{Kind: kindTool, Tool: &done}}
+			return []message{{Kind: kindTool, Tool: &done, Dir: t.dir}}
 		}
 	}
 	return nil
@@ -69,7 +70,7 @@ func (t *transcript) finishTool(result *api.ToolCall) []message {
 func (t *transcript) flush() []message {
 	out := t.flushText()
 	for _, call := range t.running {
-		out = append(out, message{Kind: kindTool, Tool: call})
+		out = append(out, message{Kind: kindTool, Tool: call, Dir: t.dir})
 	}
 	t.running = nil
 	return out
@@ -93,7 +94,7 @@ func (t *transcript) lastSeqShown() int64 { return t.lastSeq }
 func (t *transcript) view(width int, spin string) string {
 	var parts []string
 	for _, call := range t.running {
-		parts = append(parts, styleAccent.Render(spin+" ")+styleText.Render(toolLabel(call)))
+		parts = append(parts, styleAccent.Render(spin+" ")+styleText.Render(toolLabel(call, t.dir)))
 	}
 	if s := t.streaming.String(); s != "" {
 		parts = append(parts, gutter(styleBorder.Render("┊ "), styleText, s+"▍", width))

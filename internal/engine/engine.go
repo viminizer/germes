@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -37,6 +38,7 @@ const (
 	KindUsage      Kind = "usage"
 	KindLimitHit   Kind = "limit_hit"
 	KindDone       Kind = "done"
+	KindSwitched   Kind = "switched" // the router moved the turn to another engine (Text, Engine)
 	KindError      Kind = "error"
 )
 
@@ -49,7 +51,7 @@ type Event struct {
 	Usage    *Usage
 	ResetAt  time.Time // limit_hit
 	ResumeID string    // done
-	Engine   string    // done: the engine that ran the turn
+	Engine   string    // done, switched: the engine that ran (or now runs) the turn
 	Err      error     // error
 }
 
@@ -68,4 +70,14 @@ type Usage struct {
 	Window      string // "five_hour", "seven_day"
 	UsedPercent float64
 	ResetAt     time.Time
+}
+
+// UnavailableError means every engine is limited or reserved. The session
+// pauses and tries again at ResetAt.
+type UnavailableError struct {
+	ResetAt time.Time
+}
+
+func (e *UnavailableError) Error() string {
+	return fmt.Sprintf("every engine is limited; trying again at %s", e.ResetAt.Format("Jan 2 15:04"))
 }

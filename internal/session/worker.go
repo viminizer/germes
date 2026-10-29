@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -145,21 +146,52 @@ func (w *worker) runTurn(text string) {
 		}
 		// Status first: a client that sees turn_done must read idle.
 		w.setStatus(api.StatusIdle)
-		w.emit(api.Event{Kind: api.KindTurnDone})
+		w.emit(api.Event{Kind: api.KindTurnDone, Engine: w.sess.Engine})
 	}()
 
 	w.emit(api.Event{Kind: api.KindUserMessage, Text: text})
 	w.setStatus(api.StatusWorking)
 
-	turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Prompt: text,
-		ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine}
-	events, err := w.m.runner.Run(ctx, turn)
-	if err != nil {
-		w.emit(api.Event{Kind: api.KindError, Text: err.Error()})
-		return
+	for {
+		turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Prompt: text,
+			ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine}
+		events, err := w.m.runner.Run(ctx, turn)
+		var unavail *engine.UnavailableError
+		if errors.As(err, &unavail) {
+			if !w.pause(ctx, unavail.ResetAt) {
+				return
+			}
+			continue
+		}
+		if err != nil {
+			w.emit(api.Event{Kind: api.KindError, Text: err.Error()})
+			return
+		}
+		var retryAt time.Time // every engine got limited during the turn
+		for ev := range events {
+			if ev.Kind == engine.KindError && errors.As(ev.Err, &unavail) {
+				retryAt = unavail.ResetAt
+				continue
+			}
+			w.handle(ev)
+		}
+		if retryAt.IsZero() || ctx.Err() != nil || !w.pause(ctx, retryAt) {
+			return
+		}
 	}
-	for ev := range events {
-		w.handle(ev)
+}
+
+// pause waits until every engine may be free again. It reports false when
+// the turn was stopped (Esc Esc) while waiting.
+func (w *worker) pause(ctx context.Context, until time.Time) bool {
+	w.emit(api.Event{Kind: api.KindLimitHit, Text: "every engine is limited; paused until " + until.Format("Jan 2 15:04") + " (Esc Esc to stop waiting)"})
+	w.setStatus(api.StatusPaused)
+	defer w.setStatus(api.StatusWorking)
+	select {
+	case <-time.After(time.Until(until)):
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -175,7 +207,14 @@ func (w *worker) handle(ev engine.Event) {
 	case engine.KindToolResult:
 		w.emit(api.Event{Kind: api.KindToolResult, Tool: toolOf(ev.Tool)})
 	case engine.KindLimitHit:
-		w.emit(api.Event{Kind: api.KindLimitHit, Text: "usage limit hit, resets " + ev.ResetAt.Format("Jan 2 15:04")})
+		text := "usage limit hit"
+		if !ev.ResetAt.IsZero() {
+			text += ", resets " + ev.ResetAt.Format("Jan 2 15:04")
+		}
+		w.emit(api.Event{Kind: api.KindLimitHit, Text: text})
+	case engine.KindSwitched:
+		w.sess.Engine = ev.Engine
+		w.emit(api.Event{Kind: api.KindEngineSwitched, Text: ev.Text, Engine: ev.Engine})
 	case engine.KindError:
 		w.emit(api.Event{Kind: api.KindError, Text: ev.Err.Error()})
 	case engine.KindDone:

@@ -89,18 +89,19 @@ func (l *Loop) system(ctx context.Context, t engine.Turn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s := p.System
-	if t.Extra != "" {
-		s += "\n\n" + t.Extra
-	}
-	l.frozen[t.SessionID] = s
-	return s, nil
+	l.frozen[t.SessionID] = p.System
+	return p.System, nil
 }
 
 func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []llm.Message, out chan<- engine.Event) {
 	var specs []llm.ToolSpec
 	for _, tl := range l.tools.List(l.opts.Toolsets...) {
 		specs = append(specs, llm.ToolSpec{Name: tl.Name, Description: tl.Description, Schema: tl.Schema})
+	}
+	if t.Extra != "" {
+		// A handoff goes in as a message: the system prompt stays frozen, so
+		// the provider's prompt cache keeps working.
+		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
 	for step := 0; step <= l.opts.MaxSteps; step++ {
 		req := llm.Request{System: system, Messages: msgs, Tools: specs, CacheKey: t.SessionID}

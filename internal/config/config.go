@@ -24,6 +24,10 @@ type Engine struct {
 	Name   string `yaml:"name"`
 	Model  string `yaml:"model,omitempty"`  // "" = the engine's default
 	Effort string `yaml:"effort,omitempty"` // reasoning effort (codex-api), "" = medium
+	// Reserve keeps this much of a usage window free: window -> percent left
+	// ("five_hour", "seven_day"). The router stops using the engine there.
+	Reserve    map[string]float64 `yaml:"reserve,omitempty"`
+	ReserveOff bool               `yaml:"reserve_off,omitempty"` // let it hit the limit
 }
 
 // New returns the default config, written on first run.
@@ -86,6 +90,13 @@ func (c Config) check() error {
 	for _, e := range c.Engines {
 		if e.Name != "claude-cli" && e.Name != "codex-api" {
 			return fmt.Errorf("config: unknown engine %q (use codex-api or claude-cli)", e.Name)
+		}
+	}
+	for _, e := range c.Engines {
+		for w, pct := range e.Reserve {
+			if pct < 0 || pct >= 100 {
+				return fmt.Errorf("config: engine %s reserve %s: %v%% must be 0 to 99", e.Name, w, pct)
+			}
 		}
 	}
 	for _, b := range c.Blocked {

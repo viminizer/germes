@@ -58,7 +58,8 @@ type Event struct {
 	Kind      EventKind `json:"kind"`
 	Text      string    `json:"text,omitempty"`
 	Tool      *ToolCall `json:"tool,omitempty"`
-	Queue     []string  `json:"queue,omitempty"` // queue: the waiting messages
+	Queue     []string  `json:"queue,omitempty"`  // queue: the waiting messages
+	Engine    string    `json:"engine,omitempty"` // engine_switched, turn_done: the engine running the session
 }
 
 // ToolCall is set on tool_call and tool_result events.

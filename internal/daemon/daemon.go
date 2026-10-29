@@ -20,7 +20,7 @@ import (
 )
 
 // ErrUpdated is returned by Run when the germes binary was replaced (for
-// example by `make install`) and no session was working. The caller starts
+// example by `make install`) or the config changed, and no session was working. The caller starts
 // the new binary in its place.
 var ErrUpdated = errors.New("germes binary updated")
 
@@ -29,18 +29,19 @@ const updateCheck = 3 * time.Second
 
 // Daemon serves the sessions.
 type Daemon struct {
-	sessions  *session.Manager
-	version   string
-	startedAt time.Time
-	stop      chan struct{}
-	stopOnce  sync.Once
+	sessions   *session.Manager
+	version    string
+	configPath string // watched: a change restarts the daemon when idle
+	startedAt  time.Time
+	stop       chan struct{}
+	stopOnce   sync.Once
 }
 
 var _ api.Service = (*Daemon)(nil)
 
 // New creates the daemon.
-func New(sessions *session.Manager, version string) *Daemon {
-	return &Daemon{sessions: sessions, version: version, startedAt: time.Now(), stop: make(chan struct{})}
+func New(sessions *session.Manager, version, configPath string) *Daemon {
+	return &Daemon{sessions: sessions, version: version, configPath: configPath, startedAt: time.Now(), stop: make(chan struct{})}
 }
 
 // Run serves until SIGTERM, SIGINT, StopDaemon or ctx ends.
@@ -79,13 +80,13 @@ func (d *Daemon) Run(ctx context.Context, socketPath, lockPath string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sig)
-	updated := d.watchBinary(serveCtx)
+	updated := d.watchFiles(serveCtx)
 	result := error(nil)
 	select {
 	case <-ctx.Done():
 	case <-d.stop:
 	case <-updated:
-		slog.Info("new germes binary, restarting into it")
+		slog.Info("germes binary or config changed, restarting")
 		result = ErrUpdated
 	case s := <-sig:
 		slog.Info("signal", "signal", s.String())
@@ -106,19 +107,20 @@ func (d *Daemon) Run(ctx context.Context, socketPath, lockPath string) error {
 	return result
 }
 
-// watchBinary closes the returned channel once the germes binary on disk is
-// replaced and no session is working, so an update never cuts a turn.
-func (d *Daemon) watchBinary(ctx context.Context) <-chan struct{} {
-	updated := make(chan struct{})
+// watchFiles closes the returned channel once the germes binary or the
+// config file changes on disk and no session is working, so an update never
+// cuts a turn. Run then restarts the daemon, which reloads both.
+func (d *Daemon) watchFiles(ctx context.Context) <-chan struct{} {
+	changed := make(chan struct{})
 	exe, err := os.Executable()
 	if err != nil {
 		slog.Warn("cannot watch for updates", "err", err)
-		return updated
+		return changed
 	}
-	start, err := os.Stat(exe)
-	if err != nil {
-		slog.Warn("cannot watch for updates", "err", err)
-		return updated
+	paths := []string{exe, d.configPath}
+	start := make([]os.FileInfo, len(paths))
+	for i, p := range paths {
+		start[i], _ = os.Stat(p) // nil: missing (a config may not exist yet)
 	}
 	go func() {
 		t := time.NewTicker(updateCheck)
@@ -129,19 +131,36 @@ func (d *Daemon) watchBinary(ctx context.Context) <-chan struct{} {
 				return
 			case <-t.C:
 			}
-			now, err := os.Stat(exe)
-			if err != nil || (os.SameFile(start, now) && now.ModTime().Equal(start.ModTime())) {
-				continue // missing for a moment while it is written, or unchanged
+			if !anyChanged(paths, start) {
+				continue
 			}
 			busy, err := d.sessions.ListSessions(ctx, api.SessionFilter{Status: api.StatusWorking, Limit: 1})
 			if err != nil || len(busy.Items) > 0 {
 				continue // wait until no turn is running
 			}
-			close(updated)
+			close(changed)
 			return
 		}
 	}()
-	return updated
+	return changed
+}
+
+// anyChanged reports whether a file was replaced, rewritten or created. A
+// file that is missing now (being written) does not count yet.
+func anyChanged(paths []string, start []os.FileInfo) bool {
+	for i, p := range paths {
+		if p == "" {
+			continue
+		}
+		now, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if start[i] == nil || !os.SameFile(start[i], now) || !now.ModTime().Equal(start[i].ModTime()) {
+			return true
+		}
+	}
+	return false
 }
 
 // lock takes an exclusive lock on path, or fails if another daemon has it.

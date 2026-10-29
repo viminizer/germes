@@ -892,6 +892,7 @@ func New(svc api.Service, dir string, opts Options) *TUI   // opts: new, resume,
 func (t *TUI) Run(ctx) error
 ```
 
+- Look: like the Hermes TUI for now (`hermes/ui-tui`). Copy its layout and style in Bubble Tea.
 - Screen: header (project, session title, engine status), chat (text + one compact line per tool call), input box, footer with keys.
 - Events: `Watch` channel → a Bubble Tea command reads one event → `Update` adds it → `View` draws it. Watch drops: reconnect with `afterSeq`.
 

@@ -305,20 +305,20 @@ A base commit is 0.1.0 and every commit on the main branch adds one patch step. 
 
 ### Tests
 
-## R35. Test non-trivial logic
+## R35. Test only important logic
 
-Non-trivial logic (a branch, a loop, a parser, security code) has a test. Trivial code does not need one.
+Optimize for fast iteration. Write tests only for important logic, where a bug would lose data, break safety or silently do the wrong thing: store and migrations, the block list, router picking and limits, handoff, session sequence numbers and `Watch`, workflow step order, the import check (R2). Everything else is tried by running the app.
 
-- From: default rulebook (test rules), approved by Kevin 2026-10-29
-- Check: read the change and its tests.
+- From: default rulebook (test rules), approved by Kevin 2026-10-29. Changed by Kevin 2026-10-29: "i do not want you to write tests for every single thing ... optimize for fast iteration and development"
+- Check: a change to one of the important areas above comes with a test; other changes do not need one.
 - Example: none yet
 
-## R36. Bug fixes come with a test
+## R36. Bug fixes come with a test (retired)
 
 A bug fix comes with a test that fails before the fix and passes after.
 
 - From: default rulebook (test rules), approved by Kevin 2026-10-29
-- Check: read the change and its tests.
+- Retired (2026-10-29): Kevin wants fast iteration and tests only for important stuff. A bug fix in an important area (R35) still gets a test.
 - Example: none yet
 
 ## R37. Test the public interface

@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -55,7 +56,7 @@ func (r *Registry) isBlocked(t Tool, c Call) (string, bool) {
 
 // candidates are the strings a pattern is checked against. A shell command is
 // split at &&, ||, ; and | so `cd x && sudo y` is caught. A path is checked
-// as given, relative to the project, and by its base name.
+// as given, by its base name, and as a lexical absolute and project-relative path.
 // ponytail: plain splitting, not a shell parser; quoted separators and
 // subshells like $(sudo x) slip through. Upgrade to a real parser if needed.
 func candidates(arg, value, dir string) []string {
@@ -69,14 +70,22 @@ func candidates(arg, value, dir string) []string {
 		return parts
 	}
 	out := []string{value, filepath.Base(value)}
-	if abs, err := filepath.Abs(filepath.Join(dir, value)); err == nil {
-		if rel, err := filepath.Rel(dir, abs); err == nil {
-			out = append(out, rel)
+	// Mirror tools/files.resolve here: tool is a leaf and cannot import its
+	// callers. Only file_path has home expansion; search patterns are literals.
+	if arg == "file_path" && strings.HasPrefix(value, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			value = filepath.Join(home, value[2:])
 		}
 	}
-	if filepath.IsAbs(value) {
-		if rel, err := filepath.Rel(dir, value); err == nil {
-			out = append(out, rel)
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(dir, value)
+	}
+	if abs, err := filepath.Abs(value); err == nil {
+		out = append(out, abs)
+		if base, err := filepath.Abs(dir); err == nil {
+			if rel, err := filepath.Rel(base, abs); err == nil {
+				out = append(out, rel)
+			}
 		}
 	}
 	return out
@@ -88,7 +97,7 @@ func match(pattern, s string) bool {
 	if rest, ok := strings.CutPrefix(pattern, "**/"); ok {
 		return match(rest, s) || match(rest, filepath.Base(s)) || match("*/"+rest, s)
 	}
-	re := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$"
+	re := "(?s)^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$"
 	ok, _ := regexp.MatchString(re, s)
 	return ok
 }

@@ -331,7 +331,9 @@ blocked:
   - Read(**/.env*)
 ```
 
-- `engine/loop`: the shell and file tools check the list before running. Blocked = error result to the model.
+- `engine/loop`: the tool registry checks the list before invoking a handler. Blocked = error result to the model; the handler never runs.
+- Registry patterns match the whole candidate; `*` includes slashes and newlines, and leading `**/` also matches at the root. File-path candidates include the raw value, its basename, the cleaned absolute target and its path relative to `Call.Dir`. For `file_path`, `~/` expands using the same home lookup as the file tools (if no home is available, both treat it literally). Absolute input stays absolute rather than being joined to the project folder.
+- Matching is lexical, not a sandbox: symlinks are not resolved. Shell commands are split only at `&&`, `||`, `;` and `|`; this is not a shell parser. Claude's native tools use the CLI's own matcher. Regression checks for the registry contract: `go test ./internal/tool -run TestBlockList`.
 - `engine/claude`: allow all tools, pass the list as `--disallowedTools`, and `--permission-prompts none` so anything that would ask is refused. Never `--dangerously-skip-permissions` (my global rule).
 - No approval events, no `waiting` status, no approval code anywhere.
 
@@ -1192,7 +1194,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Esc: cancel the turn; events already made stay saved.
 
 ### Tools
-- Blocked command: error result, never runs.
+- Blocked tool call: error result identifying the configured rule; the handler never runs. File-path normalization and newline wildcard matching follow the Permissions contract above.
 - Timeout: kill the whole process group, error result.
 - Huge output: cut to about 50k characters with a note.
 - Non-zero exit code: normal result.

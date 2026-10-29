@@ -46,4 +46,16 @@ Required next steps: demonstrate defects with regression tests, implement only s
 
 - `go test ./internal/tool ./internal/refs ./internal/archtest` — passed on the unmodified base.
 - No production behavior changed during preparation.
-- No preparation errors or review findings yet; implementation and both review gates remain pending.
+- At preparation there were no errors or review findings; implementation and both review gates were pending.
+
+## Round 1 review and fixes
+
+- Independent Codex review at `5b0928d`: correctly reported no regressions introduced by the documentation-only commit, but did not clear existing scope defects. Its supplied transcript was truncated and its sandbox prevented test execution; it is not a clean gate.
+- Separate consistency audit at `5b0928d`: verified missing absolute/home file candidates and wildcard newline mismatch, plus missing safety regressions and permission contract documentation. `make check` passed on that revision. No changes were made during the audit.
+- Added public `Registry.Run` tests for relative, absolute, dot-segment, home, basename and project-relative matching across Read/Write/Edit, and newline wildcard tests for file and synthetic shell arguments. Each case checks whether the handler was invoked, including allowed controls. The tests use fake handlers, synthetic paths and a controlled HOME; no denied command executes or secret file is accessed.
+- Before fixing production code, `go test ./internal/tool -run 'TestBlockList(ResolvedFilePaths|WildcardMatchesNewlines)' -count=1` failed for relative/dot-segment/absolute/home cases and all three denied newline cases, demonstrating both defects.
+- Fixed the shared matcher to retain raw/basename candidates, expand home syntax only for `file_path`, preserve absolute paths, and append the cleaned absolute target and its project-relative form. Removed the misleading join of absolute input onto the project path. Wildcards use dot-all regex mode with whole-string anchors unchanged.
+- The small home-resolution sequence mirrors the file tool because the leaf permission module cannot import its callers; the code comment records that boundary exception to R8. No new public API, dependency or generalized path abstraction was warranted. Existing R12/R15/R35/R37 already cover the reusable safety pattern, so no extra rulebook rule or AGENTS pointer was added. PLAN.md Permissions now provides the concrete matcher contract and test command, plus explicit lexical/shell-parser limitations.
+- After fixes: `go test ./internal/tool -run TestBlockList -count=1`, `make check` (build, vet, formatting, all tests), and `git diff --check` passed.
+- No performance improvement is claimed; no scheduler/workflow or out-of-scope production files were modified.
+- Both independent Codex review and consistency audit MUST run again on the fixed revision. Their prior results do not approve these changes; merge and cleanup remain gated.

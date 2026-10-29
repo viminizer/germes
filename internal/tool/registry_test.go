@@ -60,6 +60,79 @@ func TestBlockList(t *testing.T) {
 	}
 }
 
+func TestBlockListResolvedFilePaths(t *testing.T) {
+	t.Setenv("HOME", "/home/test-agent")
+	for _, tc := range []struct {
+		name, pattern, path string
+		blocked             bool
+	}{
+		{"relative", "/proj/private.txt", "private.txt", true},
+		{"dot segments", "/proj/private.txt", "sub/../private.txt", true},
+		{"absolute", "/elsewhere/private.txt", "/elsewhere/./private.txt", true},
+		{"relative pattern", "config/private.txt", "/proj/config/private.txt", true},
+		{"home", "/home/test-agent/private.txt", "~/private.txt", true},
+		{"raw home pattern", "~/private.txt", "~/private.txt", true},
+		{"basename", "private.txt", "sub/private.txt", true},
+		{"different file", "/proj/private.txt", "public.txt", false},
+		{"different directory", "/proj/private.txt", "/elsewhere/private.txt", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"Read", "Write", "Edit"} {
+				t.Run(name, func(t *testing.T) {
+					called := false
+					r, err := NewRegistry([]Tool{{Name: name, MatchArg: "file_path", Run: func(context.Context, Call) (string, error) {
+						called = true
+						return "ran", nil
+					}}}, nil, []string{name + "(" + tc.pattern + ")"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					args, err := json.Marshal(map[string]string{"file_path": tc.path})
+					if err != nil {
+						t.Fatal(err)
+					}
+					res := r.Run(context.Background(), name, Call{Dir: "/proj", Args: args})
+					if res.IsError != tc.blocked || called == tc.blocked {
+						t.Fatalf("blocked=%v called=%v result=%+v", tc.blocked, called, res)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestBlockListWildcardMatchesNewlines(t *testing.T) {
+	for _, tc := range []struct {
+		name, arg, pattern, value string
+		blocked                   bool
+	}{
+		{"Read", "file_path", "private*", "private\nnotes.txt", true},
+		{"Read", "file_path", "**/private*", "sub/private\nnotes.txt", true},
+		{"Bash", "command", "restricted *", "restricted first\nsecond", true},
+		{"Read", "file_path", "private*", "public\nnotes.txt", false},
+		{"Bash", "command", "restricted *", "echo first\nsecond", false},
+	} {
+		t.Run(tc.name+"/"+tc.value, func(t *testing.T) {
+			called := false
+			r, err := NewRegistry([]Tool{{Name: tc.name, MatchArg: tc.arg, Run: func(context.Context, Call) (string, error) {
+				called = true
+				return "ran", nil
+			}}}, nil, []string{tc.name + "(" + tc.pattern + ")"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args, err := json.Marshal(map[string]string{tc.arg: tc.value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := r.Run(context.Background(), tc.name, Call{Dir: "/proj", Args: args})
+			if res.IsError != tc.blocked || called == tc.blocked {
+				t.Fatalf("blocked=%v called=%v result=%+v", tc.blocked, called, res)
+			}
+		})
+	}
+}
+
 func TestRunErrors(t *testing.T) {
 	r := newTestRegistry(t)
 	if res := run(r, "Nope", `{}`); !res.IsError || !strings.Contains(res.Output, "Bash, Boom, Read") {

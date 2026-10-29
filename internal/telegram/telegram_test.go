@@ -127,7 +127,7 @@ func (s *fakeService) waitMessages(t *testing.T, n int) []api.MessageRequest {
 }
 
 func msg(id, thread, from int64, text string) update {
-	return update{ID: id, Message: &message{ID: id, Thread: thread, From: &user{ID: from}, Chat: chat{ID: chatID}, Text: text}}
+	return update{ID: id, Message: &message{ID: id, ThreadID: thread, IsTopic: thread != 0, From: &user{ID: from}, Chat: chat{ID: chatID}, Text: text}}
 }
 
 func TestTopicsRouteToSessions(t *testing.T) {
@@ -148,13 +148,17 @@ func TestTopicsRouteToSessions(t *testing.T) {
 		msg(3, 7, kevin, "/bind "+project),   // topic 7: bound
 		msg(4, 7, kevin, "add dark mode"),    // its project's new session
 		msg(5, 7, kevin, "and a toggle"),     // the same session
+		update{ID: 6, Message: &message{ID: 6, ThreadID: 2, From: &user{ID: kevin}, Chat: chat{ID: chatID}, Text: "a reply in General"}},
 	)
-	got := svc.waitMessages(t, 3)
+	got := svc.waitMessages(t, 4)
 	if got[0].SessionID != api.OverseerID || got[0].Text != "what is running?" {
 		t.Fatalf("General went to %+v", got[0])
 	}
 	if got[1].Dir != project || got[1].SessionID != "" || got[2].SessionID != "s1" {
 		t.Fatalf("topic messages: %+v, %+v", got[1], got[2])
+	}
+	if got[3].SessionID != api.OverseerID {
+		t.Fatalf("a reply in General went to %+v", got[3])
 	}
 	if fake.waitSent(t, "Bound to "+project) != 7 {
 		t.Fatal("the bind reply went to the wrong topic")
@@ -174,7 +178,7 @@ func TestTopicsRouteToSessions(t *testing.T) {
 
 	// The binding survives a restart.
 	again := New(svc, Options{StatePath: tg.opts.StatePath})
-	if again.state.Topics[7].Project != project || again.state.Topics[7].SessionID != "s1" || again.state.Offset != 6 {
+	if again.state.Topics[7].Project != project || again.state.Topics[7].SessionID != "s1" || again.state.Offset != 7 {
 		t.Fatalf("saved state: %+v", again.state)
 	}
 }
@@ -225,7 +229,7 @@ func TestBindButtonsWhenSeveralMatch(t *testing.T) {
 	second := rows[1].([]any)[0].(map[string]any)
 	fake.mu.Unlock()
 	tg.handle(ctx, update{ID: 2, Callback: &callback{ID: "c", From: user{ID: kevin},
-		Message: &message{Thread: 9, Chat: chat{ID: chatID}}, Data: second["callback_data"].(string)}})
+		Message: &message{ThreadID: 9, IsTopic: true, Chat: chat{ID: chatID}}, Data: second["callback_data"].(string)}})
 	if got := tg.state.Topics[9].Project; got != second["text"] {
 		t.Fatalf("bound %q, picked %q", got, second["text"])
 	}

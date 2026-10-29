@@ -95,11 +95,12 @@ type (
 		Callback *callback `json:"callback_query"`
 	}
 	message struct {
-		ID     int64  `json:"message_id"`
-		Thread int64  `json:"message_thread_id"` // the topic; 0 = General
-		From   *user  `json:"from"`
-		Chat   chat   `json:"chat"`
-		Text   string `json:"text"`
+		ID       int64  `json:"message_id"`
+		ThreadID int64  `json:"message_thread_id"` // set on topic messages, and on replies in General
+		IsTopic  bool   `json:"is_topic_message"`
+		From     *user  `json:"from"`
+		Chat     chat   `json:"chat"`
+		Text     string `json:"text"`
 	}
 	callback struct {
 		ID      string   `json:"id"`
@@ -118,6 +119,15 @@ type (
 		Data string `json:"callback_data"`
 	}
 )
+
+// topic is the message's topic; 0 = General. A reply in General has a
+// thread id too, but is not a topic message.
+func (m *message) topic() int64 {
+	if !m.IsTopic {
+		return 0
+	}
+	return m.ThreadID
+}
 
 // send sends text to a topic (0 = General), split into Telegram-sized
 // messages, with buttons under the last one.

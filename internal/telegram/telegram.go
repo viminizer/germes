@@ -126,7 +126,7 @@ func (t *Telegram) handle(ctx context.Context, u update) {
 		if err := t.bot.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": u.Callback.ID}, nil); err != nil {
 			slog.Warn("telegram answer button", "err", err)
 		}
-		t.handleChoice(ctx, u.Callback.Message.Thread, u.Callback.Data)
+		t.handleChoice(ctx, u.Callback.Message.topic(), u.Callback.Data)
 	}
 }
 
@@ -137,20 +137,20 @@ func (t *Telegram) isAllowed(chatID int64, from *user) bool {
 func (t *Telegram) handleMessage(ctx context.Context, m *message) {
 	text := strings.TrimSpace(m.Text)
 	if text == "" {
-		t.reply(ctx, m.Thread, "Only text messages for now.")
+		t.reply(ctx, m.topic(), "Only text messages for now.")
 		return
 	}
 	if strings.HasPrefix(text, "/") {
-		t.command(ctx, m.Thread, text)
+		t.command(ctx, m.topic(), text)
 		return
 	}
-	id, err := t.send(ctx, m.Thread, text)
+	id, err := t.send(ctx, m.topic(), text)
 	if err != nil {
-		t.reply(ctx, m.Thread, "Could not send it: "+err.Error())
+		t.reply(ctx, m.topic(), "Could not send it: "+err.Error())
 		return
 	}
 	t.mu.Lock()
-	t.replyTo[id] = m.Thread
+	t.replyTo[id] = m.topic()
 	t.mu.Unlock()
 }
 

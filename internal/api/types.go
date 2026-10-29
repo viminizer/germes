@@ -19,6 +19,10 @@ const (
 	StatusPaused  Status = "paused"
 )
 
+// OverseerID is the overseer's session: one session, in the home folder,
+// that controls Germes (other sessions, jobs) for the user.
+const OverseerID = "overseer"
+
 // Session is one conversation. The daemon owns it.
 type Session struct {
 	ID        string            `json:"id"`
@@ -200,6 +204,13 @@ type ToolRequest struct {
 	Dir       string          `json:"dir,omitempty"` // "" = the session's folder
 	Name      string          `json:"name"`
 	Args      json.RawMessage `json:"args"`
+}
+
+// ToolInfo describes a tool an engine may call.
+type ToolInfo struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Schema      json.RawMessage `json:"schema"` // JSON Schema of the arguments
 }
 
 // ToolResult is a tool's output.

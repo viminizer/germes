@@ -26,6 +26,7 @@ type Turn struct {
 	ResumeIDs  map[string]string // engine name -> its own session id
 	LastEngine string
 	Extra      string // added to the system prompt (handoff, memory, skills)
+	Overseer   bool   // the overseer's turn: its role and its tools
 }
 
 // Kind says what an Event is.

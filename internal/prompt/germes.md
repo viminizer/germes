@@ -50,6 +50,7 @@ steps:
     next: find
 ```
 Built-ins: `merge`, `cleanup` (remove the job's worktree), `notify "<text>"` (a message for the user). `done` ends the job. Values: {GOAL} (the job's prompt), {OUTPUT} (the last command's output), and every RESULT token.
+- `germes overseer` (or `/overseer`): the overseer, one session in the home folder with tools to control sessions and jobs.
 - `germes daemon restart`: restart the daemon, cutting running turns (rarely needed; it updates and reloads itself without cutting anything).
 
 ## Other Germes files

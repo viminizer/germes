@@ -44,10 +44,18 @@ type Options struct {
 	Tools      Tools
 }
 
-// Tools runs one tool for a client (later MCP), in the session's folder.
+// Tools lists and runs tools for clients (MCP), in the session's folder.
 type Tools interface {
+	ListTools(toolset string) []api.ToolInfo
 	RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error)
 }
+
+// The toolsets a CLI engine gets through MCP: Germes' own tools, not the
+// ones the CLI has itself (files, shell).
+const (
+	ToolsetMCP         = "mcp"
+	ToolsetMCPOverseer = "mcp-overseer"
+)
 
 // Daemon serves the sessions and jobs.
 type Daemon struct {

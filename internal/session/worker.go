@@ -217,7 +217,7 @@ func (w *worker) runTurn(text string) {
 
 	for {
 		turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Project: w.sess.Project, Branch: w.sess.Branch,
-			Prompt: prompt, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine}
+			Prompt: prompt, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine, Overseer: w.sess.ID == api.OverseerID}
 		events, err := w.m.runner.Run(ctx, turn)
 		var unavail *engine.UnavailableError
 		if errors.As(err, &unavail) {

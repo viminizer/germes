@@ -91,6 +91,18 @@ func (d *Daemon) DeleteJob(ctx context.Context, id string) error {
 	return d.jobs.DeleteJob(ctx, id)
 }
 
+// ListTools lists the Germes tools a CLI engine gets for a session through
+// MCP; the overseer gets the session and job tools too.
+func (d *Daemon) ListTools(ctx context.Context, sessionID string) ([]api.ToolInfo, error) {
+	if _, err := d.sessions.GetSession(ctx, sessionID); err != nil {
+		return nil, err
+	}
+	if sessionID == api.OverseerID {
+		return d.opts.Tools.ListTools(ToolsetMCPOverseer), nil
+	}
+	return d.opts.Tools.ListTools(ToolsetMCP), nil
+}
+
 // RunTool runs one tool in a session's folder (or r.Dir).
 func (d *Daemon) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
 	return d.opts.Tools.RunTool(ctx, r)

@@ -27,7 +27,9 @@ type History interface {
 type Options struct {
 	Name     string   // engine name, e.g. "codex-api"
 	Toolsets []string // tools the model may use
-	MaxSteps int      // model calls per turn before the wrap-up call; 0 = 50
+	// OverseerToolsets are the overseer's tools (it also controls Germes).
+	OverseerToolsets []string
+	MaxSteps         int // model calls per turn before the wrap-up call; 0 = 50
 	// ContextWindow is the model's context size in tokens; history is
 	// compacted at half of it. 0 = 200k.
 	ContextWindow int
@@ -110,7 +112,7 @@ func (l *Loop) system(ctx context.Context, t engine.Turn) (string, error) {
 	if s, ok := l.frozen[key]; ok {
 		return s, nil
 	}
-	p, err := l.prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.RoleProject)
+	p, err := l.prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.RoleOf(t.Overseer))
 	if err != nil {
 		return "", err
 	}
@@ -120,7 +122,11 @@ func (l *Loop) system(ctx context.Context, t engine.Turn) (string, error) {
 
 func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []llm.Message, out chan<- engine.Event) {
 	var specs []llm.ToolSpec
-	for _, tl := range l.tools.List(l.opts.Toolsets...) {
+	toolsets := l.opts.Toolsets
+	if t.Overseer {
+		toolsets = l.opts.OverseerToolsets
+	}
+	for _, tl := range l.tools.List(toolsets...) {
 		specs = append(specs, llm.ToolSpec{Name: tl.Name, Description: tl.Description, Schema: tl.Schema})
 	}
 	if t.Extra != "" {

@@ -25,6 +25,7 @@ type Service interface {
 	StopJob(ctx context.Context, id string) error
 	DeleteJob(ctx context.Context, id string) error
 
+	ListTools(ctx context.Context, sessionID string) ([]ToolInfo, error)
 	RunTool(ctx context.Context, r ToolRequest) (ToolResult, error)
 }
 

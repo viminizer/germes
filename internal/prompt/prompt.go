@@ -26,6 +26,9 @@ var guidance string
 //go:embed germes.md
 var germesInfo string
 
+//go:embed overseer.md
+var overseerRole string
+
 const (
 	maxProjectFile = 20_000 // characters of AGENTS.md / CLAUDE.md in the prompt
 	maxSkillDesc   = 200    // characters of each skill description in the index
@@ -39,6 +42,14 @@ const (
 	RoleProject  Role = "project"
 	RoleOverseer Role = "overseer"
 )
+
+// RoleOf is the role of a turn: the overseer's, or a project's.
+func RoleOf(overseer bool) Role {
+	if overseer {
+		return RoleOverseer
+	}
+	return RoleProject
+}
 
 // Prompt is the built prompt.
 type Prompt struct {
@@ -103,6 +114,10 @@ func (b *Builder) Create(ctx context.Context, w Where, role Role) (Prompt, error
 	// then what changes more often: skills, memory, today.
 	system := []string{strings.TrimSpace(soul), strings.TrimSpace(guidance), germes}
 	extra := []string{germes} // Claude has its own identity and guidance
+	if role == RoleOverseer {
+		system = append(system, strings.TrimSpace(overseerRole))
+		extra = append(extra, strings.TrimSpace(overseerRole))
+	}
 	if project != "" {
 		system = append(system, project)
 		if !claudeMD { // Claude Code reads CLAUDE.md itself

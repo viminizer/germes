@@ -85,6 +85,9 @@ func NewManager(store Store, runner Runner, opts Options) *Manager {
 // when the daemon stopped, or when an old daemon died finishing them. Turns
 // this manager or an old daemon runs are left alone. Safe to call again.
 func (m *Manager) Start(ctx context.Context) error {
+	if err := m.createOverseer(ctx); err != nil {
+		return err
+	}
 	page, err := m.store.ListSessions(ctx, api.SessionFilter{Status: api.StatusWorking, Limit: 500})
 	if err != nil {
 		return err
@@ -112,6 +115,22 @@ func (m *Manager) Start(ctx context.Context) error {
 func (m *Manager) Stop(ctx context.Context) error {
 	m.cancel()
 	return stream.Wait(ctx, &m.wg)
+}
+
+// createOverseer creates the overseer's session in the home folder, once.
+func (m *Manager) createOverseer(ctx context.Context) error {
+	_, err := m.store.GetSession(ctx, api.OverseerID)
+	var e *api.Error
+	if !errors.As(err, &e) || e.Code != api.CodeNotFound {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	return m.store.CreateSession(ctx, api.Session{ID: api.OverseerID, Title: "overseer", Project: home, Dir: home,
+		Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now})
 }
 
 // ListBusy lists the sessions with a turn running or messages waiting.
@@ -237,8 +256,11 @@ func (m *Manager) deleteWorktree(ctx context.Context, s api.Session) error {
 	return err
 }
 
-// DeleteSession stops and deletes a session.
+// DeleteSession stops and deletes a session. The overseer stays.
 func (m *Manager) DeleteSession(ctx context.Context, id string) error {
+	if id == api.OverseerID {
+		return api.NewError(api.CodeInvalid, "the overseer cannot be deleted")
+	}
 	m.mu.Lock()
 	w, ok := m.workers[id]
 	m.mu.Unlock()

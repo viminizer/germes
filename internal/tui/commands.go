@@ -15,6 +15,7 @@ var commands = []struct{ Name, Args, Help string }{
 	{"clear", "", "keep this session saved and start a new one"},
 	{"sessions", "", "list sessions in this project"},
 	{"switch", "<id>", "open another session"},
+	{"overseer", "", "open the overseer (controls sessions and jobs)"},
 	{"rename", "<text>", "rename this session"},
 	{"help", "", "this help"},
 	{"exit", "", "quit (the session keeps running)"},
@@ -61,6 +62,8 @@ func (m *model) command(text string) tea.Cmd {
 		// /clear also wipes the screen, so it shows one session only.
 		m.restart = true
 		return tea.Quit
+	case "overseer":
+		return func() tea.Msg { return switchMsg{id: api.OverseerID} }
 	case "switch":
 		if arg == "" {
 			return notice("usage: /switch <id>")

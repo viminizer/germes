@@ -1259,7 +1259,12 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - TUI: prints of one burst go out as one print (several prints in one frame lost lines: attaching showed no info box and only the first line of long messages).
    - Checked live: a 4-round `count` workflow (pick, add, check, notify, merge) put three commits on the project's master and ended with done; the attached TUI showed the notices.
    - Updates never wait for jobs or sessions: the daemon hands over (see "Daemon module"). Checked live: a 40 s turn finished in the old daemon while a queued message ran in the new one; Esc Esc stopped a turn in the old daemon through the new one; a job's round 1 ran in the old daemon and round 2 started in the new one 3 ms after it ended. Tests run two daemons on one database (`internal/daemon/handover_test.go`).
-7. MCP and the overseer.
+7. MCP and the overseer. Done:
+   - `Service.ListTools(session)` and `Service.RunTool`. `germes mcp --session <id>` (`internal/mcp`, official Go SDK) lists the session's MCP toolset from the daemon and forwards each call to `RunTool`, so the block list and limits are the same as in the Germes loop.
+   - `engine/claude` passes `--mcp-config` (server `germes`: this binary, `GERMES_HOME` set) and allows `mcp__germes`. Claude gets only what it lacks: `session_search`, `worktree_exit` (toolset `mcp`); the overseer also gets the session and job tools (`mcp-overseer`). The `mcp__germes__` prefix is dropped when events are saved, so tool names read the same for both engines.
+   - Overseer: the session with the fixed id `overseer`, in the home folder, created at daemon start, cannot be deleted. Its turns have `Turn.Overseer`: the role text (`internal/prompt/overseer.md`) and the `overseer` toolset (core, learn, session_search, `tools/sessions`, `tools/jobs`). Open it with `germes overseer` or `/overseer`.
+   - `tools/sessions`: session_list, session_read, session_send (or start one in a folder), session_stop, session_rename, session_delete. `tools/jobs`: job_create (prompt or workflow), job_list, job_start, job_stop, job_delete. Both go through `api.NewClient(socket)`.
+   - Checked live (Claude): a session called `worktree_exit` through MCP (worktree and branch gone); the overseer listed sessions, sent a message another session answered, and created a job that ran to done. Not checked live: the overseer on the Codex loop (Codex is near its reserve).
 8. Telegram.
 
 Notes from M1:

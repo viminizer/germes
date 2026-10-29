@@ -170,6 +170,13 @@ func (c *Client) DeleteJob(ctx context.Context, id string) error {
 	return c.call(ctx, "DELETE", "/jobs/"+url.PathEscape(id), nil, nil)
 }
 
+// ListTools lists the Germes tools a CLI engine (Claude) gets for a session
+// through MCP.
+func (c *Client) ListTools(ctx context.Context, sessionID string) ([]ToolInfo, error) {
+	var tools []ToolInfo
+	return tools, c.call(ctx, "GET", "/tools?session="+url.QueryEscape(sessionID), nil, &tools)
+}
+
 // RunTool runs one tool in a session's folder.
 func (c *Client) RunTool(ctx context.Context, r ToolRequest) (ToolResult, error) {
 	var res ToolResult

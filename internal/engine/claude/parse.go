@@ -10,6 +10,14 @@ import (
 	"github.com/viminizer/germes/internal/engine"
 )
 
+// mcpServer is the name of Germes' MCP server in Claude. Its tools are
+// named mcp__germes__<tool>; without the prefix they read the same as in
+// the Germes loop.
+const (
+	mcpServer = "germes"
+	mcpPrefix = "mcp__" + mcpServer + "__"
+)
+
 // parser turns claude's stream-json lines into engine events.
 type parser struct {
 	sessionID string
@@ -98,7 +106,7 @@ func (p *parser) assistant(m *message) []engine.Event {
 		case "text":
 			evs = append(evs, engine.Event{Kind: engine.KindText, Text: b.Text})
 		case "tool_use":
-			evs = append(evs, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: b.ID, Name: b.Name, Args: b.Input}})
+			evs = append(evs, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: b.ID, Name: strings.TrimPrefix(b.Name, mcpPrefix), Args: b.Input}})
 		}
 	}
 	return evs

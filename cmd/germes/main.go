@@ -27,6 +27,7 @@ import (
 	"github.com/viminizer/germes/internal/env"
 	"github.com/viminizer/germes/internal/job"
 	"github.com/viminizer/germes/internal/llm/codex"
+	"github.com/viminizer/germes/internal/mcp"
 	"github.com/viminizer/germes/internal/memory"
 	"github.com/viminizer/germes/internal/prompt"
 	"github.com/viminizer/germes/internal/refs"
@@ -36,8 +37,10 @@ import (
 	"github.com/viminizer/germes/internal/store"
 	"github.com/viminizer/germes/internal/tool"
 	"github.com/viminizer/germes/internal/tools/files"
+	jobstool "github.com/viminizer/germes/internal/tools/jobs"
 	memorytool "github.com/viminizer/germes/internal/tools/memory"
 	"github.com/viminizer/germes/internal/tools/search"
+	sessionstool "github.com/viminizer/germes/internal/tools/sessions"
 	"github.com/viminizer/germes/internal/tools/shell"
 	"github.com/viminizer/germes/internal/tools/skills"
 	worktreetool "github.com/viminizer/germes/internal/tools/worktree"
@@ -52,6 +55,8 @@ const usage = `usage:
   germes -c             continue the last session in this folder
   germes --no-worktree  start a session in this folder instead of its own git worktree
   germes attach <id>    open any session, or a job's latest round (follows new rounds)
+  germes overseer       open the overseer: one session that controls Germes (sessions, jobs) for you
+  germes mcp --session <id>  MCP server with Germes' tools (claude starts it on its own)
   germes ls             list sessions
   germes stop <id>      stop a session's current step
   germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"
@@ -135,6 +140,21 @@ func run(args []string) error {
 			return errors.New("usage: germes attach <id>")
 		}
 		return runTUI(ctx, p, client, tuiStart{sessionID: args[1]})
+	case "overseer":
+		return runTUI(ctx, p, client, tuiStart{sessionID: api.OverseerID})
+	case "mcp":
+		fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+		sessionID := fs.String("session", "", "the session whose tools to serve")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *sessionID == "" {
+			return errors.New("usage: germes mcp --session <id>")
+		}
+		if err := ensureDaemon(ctx, p, client); err != nil {
+			return err
+		}
+		return mcp.Run(ctx, client, *sessionID, version)
 	case "job":
 		if err := ensureDaemon(ctx, p, client); err != nil {
 			return err
@@ -306,6 +326,14 @@ type registryTools struct {
 	sessions *session.Manager
 }
 
+func (t registryTools) ListTools(toolset string) []api.ToolInfo {
+	var infos []api.ToolInfo
+	for _, tl := range t.reg.List(toolset) {
+		infos = append(infos, api.ToolInfo{Name: tl.Name, Description: tl.Description, Schema: tl.Schema})
+	}
+	return infos
+}
+
 func (t registryTools) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
 	if r.Name == "" {
 		return api.ToolResult{}, api.NewError(api.CodeInvalid, "no tool name")
@@ -398,12 +426,24 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 	tools = append(tools, memorytool.New(mem)...)
 	tools = append(tools, skills.New(skillStore)...)
 	tools = append(tools, search.New(st)...)
-	tools = append(tools, worktreetool.New(api.NewClient(p.socket))...)
+	// These reach the daemon through its socket, like any client.
+	daemonClient := api.NewClient(p.socket)
+	tools = append(tools, worktreetool.New(daemonClient)...)
+	tools = append(tools, sessionstool.New(daemonClient)...)
+	tools = append(tools, jobstool.New(daemonClient)...)
+	control := []string{"session_list", "session_read", "session_send", "session_stop", "session_rename", "session_delete",
+		"job_create", "job_list", "job_start", "job_stop", "job_delete"}
 	toolsets := map[string]tool.Toolset{
 		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
 		"learn":   {Tools: []string{"memory", "skill_view", "skill_save"}},
 		"project": {Tools: []string{"session_search", "worktree_exit"}, Includes: []string{"core", "learn"}},
 		"review":  {Includes: []string{"learn"}},
+		// The overseer controls Germes too; it has no worktree to leave.
+		"overseer": {Tools: append([]string{"session_search"}, control...), Includes: []string{"core", "learn"}},
+		// Claude gets only what it lacks through MCP: it has its own files and
+		// shell, and edits memory and skills as files.
+		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_exit"}},
+		daemon.ToolsetMCPOverseer: {Tools: append([]string{"session_search"}, control...)},
 	}
 	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
 	if err != nil {
@@ -414,12 +454,17 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 	for _, name := range names {
 		ec := cfg.GetEngine(name)
 		if name == claude.Name {
-			engines = append(engines, claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked, Prompts: prompts}))
+			exe, err := os.Executable()
+			if err != nil {
+				return nil, nil, err
+			}
+			engines = append(engines, claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked, Prompts: prompts,
+				Germes: exe, GermesHome: p.home}))
 			continue
 		}
 		client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
 		engines = append(engines, loop.New(client, reg, prompts, st, loop.Options{
-			Name: name, Toolsets: []string{"project"}, ReviewToolsets: []string{"review"}}))
+			Name: name, Toolsets: []string{"project"}, OverseerToolsets: []string{"overseer"}, ReviewToolsets: []string{"review"}}))
 	}
 	rt, err := router.New(engines, cfg.Engines, st, time.Now)
 	return rt, reg, err

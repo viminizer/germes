@@ -105,14 +105,16 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 func (l *Loop) system(ctx context.Context, t engine.Turn) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if s, ok := l.frozen[t.SessionID]; ok {
+	// Frozen per session and folder: leaving a worktree builds a new prompt.
+	key := t.SessionID + "\x00" + t.Dir
+	if s, ok := l.frozen[key]; ok {
 		return s, nil
 	}
-	p, err := l.prompts.Create(ctx, t.Dir, prompt.RoleProject)
+	p, err := l.prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.RoleProject)
 	if err != nil {
 		return "", err
 	}
-	l.frozen[t.SessionID] = p.System
+	l.frozen[key] = p.System
 	return p.System, nil
 }
 

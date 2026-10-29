@@ -1185,7 +1185,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Non-zero exit code: normal result.
 - Memory file full: error asking the model to merge entries first.
 - Two sessions on one project: separate worktrees (see "Worktrees").
-- Worktree cannot be created (dirty state, branch exists, disk): error event, ask me whether to work in the project folder instead.
+- Worktree cannot be created (no commits yet, branch exists, disk): the session works in the project folder; the TUI shows a short warning with git's reason.
 
 ### Router and handoff
 - No `PROGRESS.md` or not a git repo: leave that part out of the handoff.
@@ -1222,7 +1222,13 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - Compaction: at the start of a turn, when history is over half the context window (default 200k tokens), older events are summarized; a `compacted` event saves the summary and `keep_from`. Next turns load the summary plus the kept events. Inside a long turn, old tool outputs are trimmed instead.
    - Background review: after 10 tool calls without saving memory or a skill, a silent review with only memory and skill tools runs after the turn.
    - Checked live: memory saved, config edited by the agent, search found an old session, the right skill named, review ran, Claude knew the config path and memory.
-5. Worktrees.
+5. Worktrees. Done:
+   - New sessions in a git project get a worktree in `~/.germes/worktrees/<project>-<hash>/<session id>` on branch `germes/<id>`, from the project's HEAD. The status bar shows `⎇ branch`; `germes ls` has a BRANCH column.
+   - The prompt tells the agent it is in a worktree and how to finish: commit, rebase, fast-forward the main checkout, then `worktree_exit`.
+   - `worktree_exit` (and deleting a session) refuses while the worktree has uncommitted changes or unmerged commits; otherwise it removes the worktree and branch, and the session works in the project from the next turn.
+   - No worktree possible (no commits yet, git error): the session works in the project folder with a short warning. Not a git repo and another session working there: a warning that changes may clash.
+   - `germes --no-worktree` opts out. Claude sessions get worktrees too, but `worktree_exit` reaches Claude only with MCP (milestone 7); until then a Claude session can merge with git, and stays pointed at its worktree folder.
+   - Checked live: fallback warning, then the full flow (worktree, commit, merge into master, worktree_exit; worktree and branch gone).
 5b. TUI pass: `/clear`, slash suggestions, `@` references (see "TUI module", To build).
 6. Jobs, then workflows.
 7. MCP and the overseer.

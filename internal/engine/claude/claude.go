@@ -28,7 +28,7 @@ const idleTimeout = 10 * time.Minute
 // Prompts builds the Germes part of the prompt (config knowledge, project,
 // skills, memory) that goes into --append-system-prompt.
 type Prompts interface {
-	Create(ctx context.Context, dir string, role prompt.Role) (prompt.Prompt, error)
+	Create(ctx context.Context, w prompt.Where, role prompt.Role) (prompt.Prompt, error)
 }
 
 // Options configure the engine.
@@ -53,7 +53,7 @@ func (c *Claude) Name() string { return Name }
 func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
 	extra := t.Extra
 	if c.opts.Prompts != nil {
-		p, err := c.opts.Prompts.Create(ctx, t.Dir, prompt.RoleProject)
+		p, err := c.opts.Prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.RoleProject)
 		if err != nil {
 			return nil, fmt.Errorf("build prompt: %w", err)
 		}

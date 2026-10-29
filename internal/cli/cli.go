@@ -23,9 +23,13 @@ func ListSessions(ctx context.Context, svc api.Service, out io.Writer) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSTATUS\tUPDATED\tPROJECT\tTITLE")
+	fmt.Fprintln(tw, "ID\tSTATUS\tUPDATED\tPROJECT\tBRANCH\tTITLE")
 	for _, s := range page.Items {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", s.ID, s.Status, ago(s.UpdatedAt), s.Project, s.Title)
+		branch := s.Branch
+		if branch == "" {
+			branch = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, s.Status, ago(s.UpdatedAt), s.Project, branch, s.Title)
 	}
 	return tw.Flush()
 }

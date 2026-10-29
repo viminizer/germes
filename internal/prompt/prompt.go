@@ -68,8 +68,16 @@ func NewBuilder(home string, memory MemoryStore, skills SkillStore) *Builder {
 	return &Builder{home: home, memory: memory, skills: skills}
 }
 
-// Create builds the prompt for a session working in dir.
-func (b *Builder) Create(ctx context.Context, dir string, role Role) (Prompt, error) {
+// Where says where a session works.
+type Where struct {
+	Dir     string // the working folder: its worktree, or Project
+	Project string // the project folder (main checkout)
+	Branch  string // the worktree branch; "" = works in Project
+}
+
+// Create builds the prompt for a session working at w.
+func (b *Builder) Create(ctx context.Context, w Where, role Role) (Prompt, error) {
+	dir := w.Dir
 	soul, err := readOptional(filepath.Join(b.home, "SOUL.md"))
 	if err != nil {
 		return Prompt{}, err
@@ -106,6 +114,10 @@ func (b *Builder) Create(ctx context.Context, dir string, role Role) (Prompt, er
 			system = append(system, part)
 			extra = append(extra, part)
 		}
+	}
+	if wt := worktreeNote(w); wt != "" {
+		system = append(system, wt)
+		extra = append(extra, wt)
 	}
 	system = append(system, fmt.Sprintf("# Environment\n\nToday: %s\nWorking folder: %s", time.Now().Format("2006-01-02"), dir))
 	return Prompt{System: strings.Join(system, "\n\n"), Extra: strings.Join(extra, "\n\n")}, nil
@@ -173,4 +185,21 @@ func readOptional(path string) (string, error) {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 	return string(b), nil
+}
+
+// worktreeNote tells the agent it works in its own git worktree, and how to
+// finish or leave it.
+func worktreeNote(w Where) string {
+	if w.Branch == "" {
+		return ""
+	}
+	return fmt.Sprintf(`# Your worktree
+
+This session works in its own git worktree: %s, on branch %s. The project's main checkout is %s; do not edit files there.
+The worktree started from the last commit, so uncommitted changes in the main checkout are not here.
+Commit your work on %s.
+- When the user asks to merge (or says /merge): rebase %s onto the main checkout's current branch, fast-forward that branch in %s, then call worktree_exit.
+- When the user says to work in the main checkout instead (or "no worktree"): call worktree_exit.
+worktree_exit refuses while there are uncommitted changes or commits not merged into the project; it never deletes work.`,
+		w.Dir, w.Branch, w.Project, w.Branch, w.Branch, w.Project)
 }

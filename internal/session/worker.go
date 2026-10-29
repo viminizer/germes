@@ -151,10 +151,11 @@ func (w *worker) runTurn(text string) {
 
 	w.emit(api.Event{Kind: api.KindUserMessage, Text: text})
 	w.setStatus(api.StatusWorking)
+	w.refresh()
 
 	for {
-		turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Prompt: text,
-			ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine}
+		turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Project: w.sess.Project, Branch: w.sess.Branch,
+			Prompt: text, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine}
 		events, err := w.m.runner.Run(ctx, turn)
 		var unavail *engine.UnavailableError
 		if errors.As(err, &unavail) {
@@ -268,4 +269,15 @@ func (w *worker) setStatus(st api.Status) {
 	if err := w.m.store.UpdateSession(ctx, s); err != nil {
 		slog.Error("save session", "session", w.sess.ID, "err", err)
 	}
+}
+
+// refresh reloads what others may change between turns: the folder after
+// leaving a worktree, and the title.
+func (w *worker) refresh() {
+	s, err := w.m.store.GetSession(context.Background(), w.sess.ID)
+	if err != nil {
+		slog.Error("reload session", "session", w.sess.ID, "err", err)
+		return
+	}
+	w.sess.Dir, w.sess.Branch, w.sess.Project, w.sess.Title = s.Dir, s.Branch, s.Project, s.Title
 }

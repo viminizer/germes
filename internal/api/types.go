@@ -22,8 +22,9 @@ const (
 type Session struct {
 	ID        string            `json:"id"`
 	Title     string            `json:"title"`
-	Project   string            `json:"project"` // git root, or the folder itself
-	Dir       string            `json:"dir"`     // where the agent works
+	Project   string            `json:"project"`          // git root, or the folder itself
+	Dir       string            `json:"dir"`              // where the agent works
+	Branch    string            `json:"branch,omitempty"` // its own worktree's branch; "" = works in Project
 	Status    Status            `json:"status"`
 	Engine    string            `json:"engine"`               // engine that ran the last turn
 	ResumeIDs map[string]string `json:"resume_ids,omitempty"` // engine name -> its own session id
@@ -106,14 +107,16 @@ type WatchFilter struct {
 // MessageRequest sends text to a session. No SessionID: a new session is
 // created in Dir.
 type MessageRequest struct {
-	SessionID string `json:"session_id,omitempty"`
-	Dir       string `json:"dir,omitempty"`
-	Text      string `json:"text"`
+	SessionID  string `json:"session_id,omitempty"`
+	Dir        string `json:"dir,omitempty"`
+	Text       string `json:"text"`
+	NoWorktree bool   `json:"no_worktree,omitempty"` // new session works in Dir, not in its own worktree
 }
 
 // MessageResult says which session got the message.
 type MessageResult struct {
 	SessionID string `json:"session_id"`
+	Warning   string `json:"warning,omitempty"` // e.g. no worktree could be made
 }
 
 // StopRequest stops a session's current step. The queue is dropped, unless
@@ -123,10 +126,13 @@ type StopRequest struct {
 	SendQueue bool   `json:"send_queue,omitempty"`
 }
 
-// SessionUpdate changes a session. Only Title for now.
+// SessionUpdate changes a session. Empty fields are left as they are.
 type SessionUpdate struct {
 	ID    string `json:"id"`
-	Title string `json:"title"`
+	Title string `json:"title,omitempty"`
+	// LeaveWorktree moves the session to the project folder and removes its
+	// worktree. Refused while the worktree has unmerged work.
+	LeaveWorktree bool `json:"leave_worktree,omitempty"`
 }
 
 // Daemon describes the running daemon.

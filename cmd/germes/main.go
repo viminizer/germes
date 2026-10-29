@@ -37,6 +37,7 @@ import (
 	"github.com/viminizer/germes/internal/tools/search"
 	"github.com/viminizer/germes/internal/tools/shell"
 	"github.com/viminizer/germes/internal/tools/skills"
+	worktreetool "github.com/viminizer/germes/internal/tools/worktree"
 	"github.com/viminizer/germes/internal/tui"
 )
 
@@ -46,6 +47,7 @@ var version = "dev"
 const usage = `usage:
   germes                start a new session in this folder
   germes -c             continue the last session in this folder
+  germes --no-worktree  start a session in this folder instead of its own git worktree
   germes attach <id>    open any session
   germes ls             list sessions
   germes stop <id>      stop a session's current step
@@ -120,7 +122,7 @@ func run(args []string) error {
 		if len(args) < 2 {
 			return errors.New("usage: germes attach <id>")
 		}
-		return runTUI(ctx, p, client, args[1], false)
+		return runTUI(ctx, p, client, args[1], false, false)
 	case "reserve":
 		return reserveCommand(p, args[1:])
 	case "help", "-h", "--help":
@@ -130,6 +132,7 @@ func run(args []string) error {
 
 	fs := flag.NewFlagSet("germes", flag.ContinueOnError)
 	cont := fs.Bool("c", false, "continue the last session in this folder")
+	noWorktree := fs.Bool("no-worktree", false, "work in this folder, not in the session's own git worktree")
 	fs.Usage = func() { fmt.Fprintln(os.Stderr, usage) }
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -137,10 +140,10 @@ func run(args []string) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unknown command %q\n%s", fs.Arg(0), usage)
 	}
-	return runTUI(ctx, p, client, "", *cont)
+	return runTUI(ctx, p, client, "", *cont, *noWorktree)
 }
 
-func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, cont bool) error {
+func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, cont, noWorktree bool) error {
 	cfg, err := config.Load(p.config)
 	if err != nil {
 		return err
@@ -176,7 +179,7 @@ func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, 
 		dir, project = s.Dir, s.Project
 	}
 	t := tui.New(client, tui.Options{
-		Dir: dir, Project: project, SessionID: sessionID, Version: version, Engine: engineName,
+		Dir: dir, Project: project, SessionID: sessionID, Version: version, Engine: engineName, NoWorktree: noWorktree,
 		EnsureDaemon: func(ctx context.Context) error { return ensureDaemon(ctx, p, client) },
 	})
 	return t.Run(ctx)
@@ -224,7 +227,7 @@ func runDaemon(p paths) error {
 	if err != nil {
 		return err
 	}
-	sessions := session.NewManager(st, rt)
+	sessions := session.NewManager(st, rt, filepath.Join(p.home, "worktrees"))
 	err = daemon.New(sessions, version, p.config).Run(context.Background(), p.socket, p.lock)
 	if !errors.Is(err, daemon.ErrUpdated) {
 		return err
@@ -322,10 +325,11 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, err
 	tools = append(tools, memorytool.New(mem)...)
 	tools = append(tools, skills.New(skillStore)...)
 	tools = append(tools, search.New(st)...)
+	tools = append(tools, worktreetool.New(api.NewClient(p.socket))...)
 	toolsets := map[string]tool.Toolset{
 		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
 		"learn":   {Tools: []string{"memory", "skill_view", "skill_save"}},
-		"project": {Tools: []string{"session_search"}, Includes: []string{"core", "learn"}},
+		"project": {Tools: []string{"session_search", "worktree_exit"}, Includes: []string{"core", "learn"}},
 		"review":  {Includes: []string{"learn"}},
 	}
 	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)

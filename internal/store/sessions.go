@@ -20,9 +20,9 @@ func (s *Store) CreateSession(ctx context.Context, sess api.Session) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (id, title, project, dir, status, engine, resume_ids, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sess.ID, sess.Title, sess.Project, sess.Dir, sess.Status, sess.Engine, string(ids),
+	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (id, title, project, dir, branch, status, engine, resume_ids, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sess.ID, sess.Title, sess.Project, sess.Dir, sess.Branch, sess.Status, sess.Engine, string(ids),
 		sess.CreatedAt.UnixNano(), sess.UpdatedAt.UnixNano())
 	if err != nil {
 		return fmt.Errorf("create session %s: %w", sess.ID, err)
@@ -46,9 +46,9 @@ func (s *Store) UpdateSession(ctx context.Context, sess api.Session) error {
 	if err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE sessions SET title = ?, project = ?, dir = ?, status = ?, engine = ?, resume_ids = ?, updated_at = ?
+	res, err := s.db.ExecContext(ctx, `UPDATE sessions SET title = ?, project = ?, dir = ?, branch = ?, status = ?, engine = ?, resume_ids = ?, updated_at = ?
 		WHERE id = ?`,
-		sess.Title, sess.Project, sess.Dir, sess.Status, sess.Engine, string(ids), sess.UpdatedAt.UnixNano(), sess.ID)
+		sess.Title, sess.Project, sess.Dir, sess.Branch, sess.Status, sess.Engine, string(ids), sess.UpdatedAt.UnixNano(), sess.ID)
 	if err != nil {
 		return fmt.Errorf("update session %s: %w", sess.ID, err)
 	}
@@ -103,13 +103,13 @@ func (s *Store) ListSessions(ctx context.Context, f api.SessionFilter) (api.Page
 	return page, rows.Err()
 }
 
-const sessionColumns = `id, title, project, dir, status, engine, resume_ids, created_at, updated_at`
+const sessionColumns = `id, title, project, dir, branch, status, engine, resume_ids, created_at, updated_at`
 
 func scanSession(row interface{ Scan(...any) error }) (api.Session, error) {
 	var sess api.Session
 	var ids string
 	var created, updated int64
-	if err := row.Scan(&sess.ID, &sess.Title, &sess.Project, &sess.Dir, &sess.Status, &sess.Engine, &ids, &created, &updated); err != nil {
+	if err := row.Scan(&sess.ID, &sess.Title, &sess.Project, &sess.Dir, &sess.Branch, &sess.Status, &sess.Engine, &ids, &created, &updated); err != nil {
 		return sess, err
 	}
 	if err := json.Unmarshal([]byte(ids), &sess.ResumeIDs); err != nil {

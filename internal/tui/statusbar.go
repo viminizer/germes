@@ -22,6 +22,7 @@ type statusBar struct {
 	Frame     int       // spinner frame
 	Engine    string
 	SessionID string
+	Branch    string // the session's worktree branch, "" = none
 	Title     string
 	Project   string
 	Note      string // short message, e.g. "interrupted" or an error
@@ -53,6 +54,9 @@ func (s statusBar) view(width int) string {
 	}
 	if s.SessionID != "" {
 		parts = append(parts, styleStatus.Render(s.SessionID))
+	}
+	if s.Branch != "" {
+		parts = append(parts, styleAccent.Render("⎇ "+s.Branch))
 	}
 	right := s.Project
 	if s.Title != "" {

@@ -15,6 +15,7 @@ type Options struct {
 	Dir          string // where new sessions work
 	Project      string // shown in the banner and status bar
 	SessionID    string // "" = start a new session on the first message
+	NoWorktree   bool   // a new session works in Dir, not in its own worktree
 	Version      string
 	Engine       string
 	EnsureDaemon func(context.Context) error // starts the daemon if it is gone

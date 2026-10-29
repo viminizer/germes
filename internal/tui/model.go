@@ -15,14 +15,17 @@ type (
 	tickMsg struct{}
 	sentMsg struct {
 		sessionID string
+		warning   string
 		err       error
 	}
-	printMsg struct{ msgs []message }
-	watchMsg struct {
-		gen   int
-		ch    <-chan api.Event
-		queue []string // what was waiting when the watch started
-		err   error
+	branchMsg struct{ branch string }
+	printMsg  struct{ msgs []message }
+	watchMsg  struct {
+		gen    int
+		ch     <-chan api.Event
+		queue  []string // what was waiting when the watch started
+		branch string   // the session's worktree branch
+		err    error
 	}
 	eventMsg struct {
 		gen int
@@ -95,11 +98,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.print(message{Kind: kindError, Text: msg.err.Error()})
 		}
+		var warn tea.Cmd
+		if msg.warning != "" {
+			warn = m.print(message{Kind: kindError, Text: msg.warning})
+		}
 		if m.sessionID == "" {
 			m.sessionID = msg.sessionID
 			m.status.SessionID = msg.sessionID
-			return m, m.watch()
+			return m, tea.Batch(warn, m.watch())
 		}
+		return m, warn
+
+	case branchMsg:
+		m.status.Branch = msg.branch
 		return m, nil
 
 	case printMsg:
@@ -115,7 +126,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.retryWatch(msg.gen)
 		}
-		m.queue.items = msg.queue
+		m.queue.items, m.status.Branch = msg.queue, msg.branch
 		return m, next(msg.gen, msg.ch)
 
 	case eventMsg:
@@ -210,6 +221,7 @@ func (m *model) track(ev api.Event) tea.Cmd {
 	case api.KindTurnDone:
 		m.status.Busy = false
 		m.composer.setPlaceholder("Ask me anything…")
+		return m.loadBranch() // the turn may have left its worktree
 	case api.KindError:
 		if ev.Text == "stopped" {
 			m.status.Note = "interrupted"
@@ -231,10 +243,10 @@ func (m *model) stop(sendQueue bool) tea.Cmd {
 }
 
 func (m *model) send(text string) tea.Cmd {
-	req := api.MessageRequest{SessionID: m.sessionID, Dir: m.opts.Dir, Text: text}
+	req := api.MessageRequest{SessionID: m.sessionID, Dir: m.opts.Dir, Text: text, NoWorktree: m.opts.NoWorktree}
 	return func() tea.Msg {
 		res, err := m.svc.SendMessage(m.ctx, req)
-		return sentMsg{sessionID: res.SessionID, err: err}
+		return sentMsg{sessionID: res.SessionID, warning: res.Warning, err: err}
 	}
 }
 
@@ -251,7 +263,7 @@ func (m *model) watch() tea.Cmd {
 			return watchMsg{gen: gen, err: err}
 		}
 		s, err := m.svc.GetSession(ctx, id)
-		return watchMsg{gen: gen, ch: ch, queue: s.Queued, err: err}
+		return watchMsg{gen: gen, ch: ch, queue: s.Queued, branch: s.Branch, err: err}
 	}
 }
 
@@ -310,4 +322,16 @@ func (m *model) View() tea.View {
 	// A rule under the input closes the app at the bottom.
 	parts = append(parts, m.status.view(m.width), m.composer.view(), styleBorder.Render(strings.Repeat("─", max(m.width, 1))))
 	return tea.NewView(strings.Join(parts, "\n"))
+}
+
+// loadBranch reads the session's worktree branch for the status bar.
+func (m *model) loadBranch() tea.Cmd {
+	id := m.sessionID
+	return func() tea.Msg {
+		s, err := m.svc.GetSession(m.ctx, id)
+		if err != nil {
+			return nil
+		}
+		return branchMsg{branch: s.Branch}
+	}
 }

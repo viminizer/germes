@@ -2,7 +2,10 @@ package session
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +48,7 @@ func newTestManager(t *testing.T, r Runner) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(s, r)
+	m := NewManager(s, r, t.TempDir())
 	t.Cleanup(func() { m.Stop(context.Background()); s.Close() })
 	return m
 }
@@ -184,5 +187,46 @@ func TestStopAndSendQueue(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("queue was not sent after stop")
+	}
+}
+
+func TestSessionGetsOwnWorktree(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	m := newTestManager(t, fakeRunner{})
+	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: project, Text: "hi"})
+	if err != nil || res.Warning != "" {
+		t.Fatalf("send: %v %q", err, res.Warning)
+	}
+	s, _ := m.GetSession(ctx, res.SessionID)
+	if s.Branch != "germes/"+s.ID || s.Dir == project || s.Project != project {
+		t.Fatalf("session = %+v", s)
+	}
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: s.ID})
+	next(t, ch, api.KindTurnDone)
+
+	// Work in the worktree: neither leaving nor deleting may lose it.
+	os.WriteFile(s.Dir+"/new.txt", []byte("x"), 0o644)
+	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: s.ID, LeaveWorktree: true}); err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("leave with work: %v", err)
+	}
+	if err := m.DeleteSession(ctx, s.ID); err == nil {
+		t.Fatal("deleted a session whose worktree has work")
+	}
+	// Without work it leaves cleanly and the session moves to the project.
+	os.Remove(s.Dir + "/new.txt")
+	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: s.ID, LeaveWorktree: true}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := m.GetSession(ctx, s.ID); s.Dir != project || s.Branch != "" {
+		t.Fatalf("after leaving: %+v", s)
 	}
 }

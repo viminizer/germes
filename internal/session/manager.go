@@ -5,8 +5,10 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	textpkg "github.com/viminizer/germes/internal/text"
+	"github.com/viminizer/germes/internal/worktree"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -50,12 +52,15 @@ type Manager struct {
 	saveMu  sync.Mutex // one read-modify-write of a session row at a time
 	hub     hub
 	wg      sync.WaitGroup
+
+	worktrees string // where session worktrees go; "" = no worktrees
 }
 
 // NewManager creates a manager.
-func NewManager(store Store, runner Runner) *Manager {
+// worktreesDir is where sessions' worktrees go; "" turns worktrees off.
+func NewManager(store Store, runner Runner, worktreesDir string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{store: store, runner: runner, ctx: ctx, cancel: cancel,
+	return &Manager{store: store, runner: runner, ctx: ctx, cancel: cancel, worktrees: worktreesDir,
 		workers: map[string]*worker{}, hub: hub{watchers: map[*watcher]struct{}{}}}
 }
 
@@ -98,13 +103,13 @@ func (m *Manager) SendMessage(ctx context.Context, r api.MessageRequest) (api.Me
 	if text == "" {
 		return api.MessageResult{}, api.NewError(api.CodeInvalid, "empty message")
 	}
-	id := r.SessionID
+	id, warning := r.SessionID, ""
 	if id == "" {
-		s, err := m.createSession(ctx, r.Dir, text)
+		s, warn, err := m.createSession(ctx, r.Dir, text, r.NoWorktree)
 		if err != nil {
 			return api.MessageResult{}, err
 		}
-		id = s.ID
+		id, warning = s.ID, warn
 	}
 
 	m.mu.Lock()
@@ -125,7 +130,7 @@ func (m *Manager) SendMessage(ctx context.Context, r api.MessageRequest) (api.Me
 	if err := w.enqueue(text); err != nil {
 		return api.MessageResult{}, err
 	}
-	return api.MessageResult{SessionID: id}, nil
+	return api.MessageResult{SessionID: id, Warning: warning}, nil
 }
 
 // StopSession stops the current step of a session. The queue is dropped (Esc)
@@ -163,8 +168,8 @@ func (m *Manager) GetSession(ctx context.Context, id string) (api.Session, error
 // UpdateSession renames a session.
 func (m *Manager) UpdateSession(ctx context.Context, u api.SessionUpdate) error {
 	title := strings.TrimSpace(u.Title)
-	if title == "" {
-		return api.NewError(api.CodeInvalid, "empty title")
+	if title == "" && !u.LeaveWorktree {
+		return api.NewError(api.CodeInvalid, "nothing to change")
 	}
 	m.saveMu.Lock()
 	defer m.saveMu.Unlock()
@@ -172,9 +177,29 @@ func (m *Manager) UpdateSession(ctx context.Context, u api.SessionUpdate) error 
 	if err != nil {
 		return err
 	}
-	s.Title = title
+	if title != "" {
+		s.Title = title
+	}
+	if u.LeaveWorktree {
+		if s.Branch == "" {
+			return api.NewError(api.CodeInvalid, "session %s is not in a worktree", s.ID)
+		}
+		if err := m.deleteWorktree(ctx, s); err != nil {
+			return err
+		}
+		s.Dir, s.Branch = s.Project, ""
+	}
 	s.UpdatedAt = time.Now()
 	return m.store.UpdateSession(ctx, s)
+}
+
+// deleteWorktree removes a session's worktree, or explains why it must stay.
+func (m *Manager) deleteWorktree(ctx context.Context, s api.Session) error {
+	err := worktree.Delete(ctx, s.Project, worktree.Worktree{Dir: s.Dir, Branch: s.Branch})
+	if errors.Is(err, worktree.ErrHasWork) {
+		return api.NewError(api.CodeInvalid, "worktree %s (branch %s) has uncommitted changes or commits not merged into the project: merge or discard them first", s.Dir, s.Branch)
+	}
+	return err
 }
 
 // DeleteSession stops and deletes a session.
@@ -185,6 +210,16 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	if ok {
 		w.stopTurn(true)
 	}
+	s, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	// A session whose worktree holds work is never deleted with it.
+	if s.Branch != "" {
+		if err := m.deleteWorktree(ctx, s); err != nil {
+			return err
+		}
+	}
 	return m.store.DeleteSession(ctx, id)
 }
 
@@ -193,20 +228,39 @@ func (m *Manager) ListEvents(ctx context.Context, f api.EventFilter) (api.Page[a
 	return m.store.ListEvents(ctx, f)
 }
 
-func (m *Manager) createSession(ctx context.Context, dir, text string) (api.Session, error) {
+// createSession saves a new session. In a git project it gets its own
+// worktree, so sessions never clash; if that fails it works in dir, with a
+// warning for the user.
+func (m *Manager) createSession(ctx context.Context, dir, text string, noWorktree bool) (api.Session, string, error) {
 	if dir == "" {
-		return api.Session{}, api.NewError(api.CodeInvalid, "no session id and no folder")
+		return api.Session{}, "", api.NewError(api.CodeInvalid, "no session id and no folder")
 	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		return api.Session{}, api.NewError(api.CodeInvalid, "folder %q does not exist", dir)
+		return api.Session{}, "", api.NewError(api.CodeInvalid, "folder %q does not exist", dir)
 	}
 	now := time.Now()
 	s := api.Session{ID: newID(), Title: titleOf(text), Project: GetProjectRoot(dir), Dir: dir,
 		Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
-	if err := m.store.CreateSession(ctx, s); err != nil {
-		return api.Session{}, err
+	warning := ""
+	switch {
+	case m.worktrees != "" && !noWorktree && worktree.IsRepo(ctx, s.Project):
+		wt, err := worktree.Create(ctx, m.worktrees, s.Project, s.ID)
+		if err != nil {
+			slog.Warn("create worktree", "session", s.ID, "err", err)
+			warning = "no worktree for this session (" + gitReason(err) + "), so it works in the project folder"
+		} else {
+			s.Dir, s.Branch = wt.Dir, wt.Branch
+		}
+	case !worktree.IsRepo(ctx, s.Project):
+		busy, err := m.store.ListSessions(ctx, api.SessionFilter{Project: s.Project, Status: api.StatusWorking, Limit: 1})
+		if err == nil && len(busy.Items) > 0 {
+			warning = "another session is working in this folder and it is not a git repo, so changes may clash"
+		}
 	}
-	return s, nil
+	if err := m.store.CreateSession(ctx, s); err != nil {
+		return api.Session{}, "", err
+	}
+	return s, warning, nil
 }
 
 // GetProjectRoot walks up from dir to the folder holding .git. No git: dir.
@@ -243,4 +297,16 @@ func (m *Manager) newWorker(ctx context.Context, s api.Session) (*worker, error)
 		return nil, fmt.Errorf("load session %s: %w", s.ID, err)
 	}
 	return &worker{m: m, sess: s, seq: seq, wake: make(chan struct{}, 1)}, nil
+}
+
+// gitReason is the short part of a git error worth showing a user.
+func gitReason(err error) string {
+	msg := err.Error()
+	if strings.Contains(msg, "invalid reference: HEAD") {
+		return "the project has no commits yet"
+	}
+	if i := strings.LastIndex(msg, "fatal: "); i >= 0 {
+		msg = msg[i+len("fatal: "):]
+	}
+	return strings.TrimSuffix(strings.TrimSpace(strings.Split(msg, ": exit status")[0]), ".")
 }

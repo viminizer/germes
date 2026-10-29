@@ -20,6 +20,8 @@ type Engine interface {
 type Turn struct {
 	SessionID  string
 	Dir        string
+	Project    string // the project folder (main checkout)
+	Branch     string // the worktree branch; "" = works in Project
 	Prompt     string
 	ResumeIDs  map[string]string // engine name -> its own session id
 	LastEngine string

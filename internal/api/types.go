@@ -37,12 +37,13 @@ type Session struct {
 // EventKind says what happened in a session.
 type EventKind string
 
-// Event kinds. TextDelta and Queue are live only: they have Seq 0 and are
-// never saved.
+// Event kinds. TextDelta, Queue and Notice are live only: they have Seq 0
+// and are never saved.
 const (
 	KindUserMessage    EventKind = "user_message"
 	KindTextDelta      EventKind = "text_delta"
 	KindQueue          EventKind = "queue"
+	KindNotice         EventKind = "notice" // Text: a job's message for the user (workflow notify, job done or failed)
 	KindText           EventKind = "text"
 	KindToolCall       EventKind = "tool_call"
 	KindToolResult     EventKind = "tool_result"
@@ -152,26 +153,32 @@ const (
 // Job runs a prompt again and again, each round in a new session, all rounds
 // in one folder (their own worktree unless NoWorktree).
 type Job struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	Dir        string        `json:"dir"`
-	Prompt     string        `json:"prompt"`
-	NoWorktree bool          `json:"no_worktree,omitempty"`
-	Every      time.Duration `json:"every"`    // time between round starts; 0 = next round right away
-	MaxRuns    int           `json:"max_runs"` // 0 = no limit
-	Runs       int           `json:"runs"`
-	Failures   int           `json:"failures"` // failed rounds in a row
-	NextRunAt  time.Time     `json:"next_run_at"`
-	Status     JobStatus     `json:"status"`
-	SessionID  string        `json:"session_id,omitempty"` // the latest round's session
-	Error      string        `json:"error,omitempty"`      // why the last round failed
-	CreatedAt  time.Time     `json:"created_at"`
-	UpdatedAt  time.Time     `json:"updated_at"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Dir        string            `json:"dir"`
+	Prompt     string            `json:"prompt"`
+	NoWorktree bool              `json:"no_worktree,omitempty"`
+	Every      time.Duration     `json:"every"`    // time between round starts; 0 = next round right away
+	MaxRuns    int               `json:"max_runs"` // 0 = no limit
+	Runs       int               `json:"runs"`
+	Failures   int               `json:"failures"` // failed rounds in a row
+	NextRunAt  time.Time         `json:"next_run_at"`
+	Status     JobStatus         `json:"status"`
+	SessionID  string            `json:"session_id,omitempty"` // the latest round's session
+	Error      string            `json:"error,omitempty"`      // why the last round failed
+	Workflow   string            `json:"workflow,omitempty"`   // the workflow each round follows; "" = one prompt per round
+	Step       string            `json:"step,omitempty"`       // workflow: the step running now ("" = between rounds)
+	Values     map[string]string `json:"values,omitempty"`     // workflow: values from replies, like ISSUE
+	Visits     map[string]int    `json:"visits,omitempty"`     // workflow: runs of each step this round
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
-// JobRequest creates a job. No Name: the job's id.
+// JobRequest creates a job. No Name: the job's id. With a Workflow the
+// prompt is optional: it is the {GOAL} value.
 type JobRequest struct {
 	Name       string        `json:"name,omitempty"`
+	Workflow   string        `json:"workflow,omitempty"`
 	Dir        string        `json:"dir"`
 	Prompt     string        `json:"prompt"`
 	NoWorktree bool          `json:"no_worktree,omitempty"`
@@ -184,6 +191,21 @@ type JobFilter struct {
 	Status JobStatus
 	Limit  int
 	Cursor string
+}
+
+// ToolRequest runs one tool, as an agent would, in the session's folder (or
+// Dir). The block list applies.
+type ToolRequest struct {
+	SessionID string          `json:"session_id,omitempty"`
+	Dir       string          `json:"dir,omitempty"` // "" = the session's folder
+	Name      string          `json:"name"`
+	Args      json.RawMessage `json:"args"`
+}
+
+// ToolResult is a tool's output.
+type ToolResult struct {
+	Output  string `json:"output"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // Daemon describes the running daemon.

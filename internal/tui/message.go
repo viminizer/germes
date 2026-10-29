@@ -29,6 +29,7 @@ const (
 	kindNotice
 	kindSwitch // the router moved the session to another engine
 	kindRound  // an attached job moved on to its next round
+	kindAlert  // a job's message for the user
 )
 
 // view renders the message for the given width.
@@ -44,6 +45,8 @@ func (m message) view(width int) string {
 		return gutter(styleError.Render("✗ "), styleError, m.Text, width)
 	case kindSwitch:
 		return gutter(styleAccent.Render("⇄ "), styleAccent, m.Text, width)
+	case kindAlert:
+		return gutter(styleAccent.Render("◆ "), styleAccent, m.Text, width)
 	case kindRound:
 		return "\n" + styleAccent.Render("── "+m.Text+" ──")
 	default:

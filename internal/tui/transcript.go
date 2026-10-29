@@ -42,6 +42,8 @@ func (t *transcript) apply(ev api.Event) []message {
 		return append(t.flushText(), message{Kind: kindError, Text: ev.Text})
 	case api.KindEngineSwitched:
 		return []message{{Kind: kindSwitch, Text: ev.Text}}
+	case api.KindNotice:
+		return []message{{Kind: kindAlert, Text: ev.Text}}
 	case api.KindAttachment:
 		return []message{{Kind: kindNotice, Text: "attached: " + attachedNames(ev.Text)}}
 	case api.KindCompacted:

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,7 +56,10 @@ const usage = `usage:
   germes stop <id>      stop a session's current step
   germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"
                         run a prompt again and again in this folder, a new session each round
+  germes job add --workflow <name> [--every ...] ["<goal>"]
+                        run a workflow round after round (steps in ~/.germes/workflows/<name>.yaml)
   germes job ls|start|stop|rm <id>  list, start, stop or delete jobs
+  germes workflow ls|check <name>|new  list, check or write workflows
   germes reserve on|off <engine>  keep or drop an engine's usage reserve
   germes daemon stop    stop the daemon
   germes daemon restart restart the daemon, cutting running turns (updates hand over on their own without cutting)`
@@ -130,12 +134,14 @@ func run(args []string) error {
 		if len(args) < 2 {
 			return errors.New("usage: germes attach <id>")
 		}
-		return runTUI(ctx, p, client, args[1], false, false)
+		return runTUI(ctx, p, client, tuiStart{sessionID: args[1]})
 	case "job":
 		if err := ensureDaemon(ctx, p, client); err != nil {
 			return err
 		}
 		return jobCommand(ctx, client, args[1:])
+	case "workflow":
+		return workflowCommand(ctx, p, client, args[1:])
 	case "reserve":
 		return reserveCommand(p, args[1:])
 	case "help", "-h", "--help":
@@ -153,10 +159,19 @@ func run(args []string) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unknown command %q\n%s", fs.Arg(0), usage)
 	}
-	return runTUI(ctx, p, client, "", *cont, *noWorktree)
+	return runTUI(ctx, p, client, tuiStart{cont: *cont, noWorktree: *noWorktree})
 }
 
-func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, cont, noWorktree bool) error {
+// tuiStart says how the TUI opens.
+type tuiStart struct {
+	sessionID  string // a session or job to open; "" = a new session
+	cont       bool   // open the last session in this folder
+	noWorktree bool   // a new session works in this folder
+	first      string // a message to send right away
+}
+
+func runTUI(ctx context.Context, p paths, client *api.Client, start tuiStart) error {
+	sessionID := start.sessionID
 	cfg, err := config.Load(p.config)
 	if err != nil {
 		return err
@@ -174,7 +189,7 @@ func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, 
 		return err
 	}
 	project := session.GetProjectRoot(dir)
-	if cont {
+	if start.cont {
 		page, err := client.ListSessions(ctx, api.SessionFilter{Project: project, Limit: 1})
 		if err != nil {
 			return err
@@ -206,7 +221,7 @@ func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, 
 		dir, project = s.Dir, s.Project
 	}
 	t := tui.New(client, tui.Options{
-		Dir: dir, Project: project, SessionID: sessionID, JobID: jobID, Version: version, Engine: engineName, NoWorktree: noWorktree,
+		Dir: dir, Project: project, SessionID: sessionID, JobID: jobID, Version: version, Engine: engineName, NoWorktree: start.noWorktree, First: start.first,
 		EnsureDaemon: func(ctx context.Context) error { return ensureDaemon(ctx, p, client) },
 	})
 	return t.Run(ctx)
@@ -256,10 +271,10 @@ func runDaemon(p paths) error {
 	}
 	old := daemon.NewOldDaemons(filepath.Join(p.home, "old"))
 	sessions := session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg), Elsewhere: old})
-	jobs := job.NewScheduler(st, sessions)
+	jobs := job.NewScheduler(st, sessions, job.Options{Tools: registryTools{reg}, Workflows: filepath.Join(p.home, "workflows")})
 	return daemon.New(sessions, jobs, old, daemon.Options{
 		Version: version, ConfigPath: p.config, SocketPath: p.socket, LockPath: p.lock, OldDir: filepath.Join(p.home, "old"),
-		StartNew: func() error { return startDaemon(p) },
+		StartNew: func() error { return startDaemon(p) }, Tools: registryTools{reg},
 	}).Run(context.Background())
 }
 
@@ -281,6 +296,14 @@ func ensureDaemon(ctx context.Context, p paths, client *api.Client) error {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return fmt.Errorf("the daemon did not start; see %s", p.log)
+}
+
+// registryTools runs tools for the daemon and jobs, with the block list.
+type registryTools struct{ reg *tool.Registry }
+
+func (t registryTools) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
+	res := t.reg.Run(ctx, r.Name, tool.Call{SessionID: r.SessionID, Dir: r.Dir, Args: r.Args})
+	return api.ToolResult{Output: res.Output, IsError: res.IsError}, nil
 }
 
 // startDaemon starts `germes daemon` in the background, logging to the
@@ -405,24 +428,64 @@ func jobCommand(ctx context.Context, client *api.Client, args []string) error {
 		every := fs.Duration("every", 0, "time between round starts (0 = back to back)")
 		maxRuns := fs.Int("max-runs", 0, "stop after this many rounds (0 = no limit)")
 		name := fs.String("name", "", "a name to attach to it by")
+		workflow := fs.String("workflow", "", "follow this workflow each round")
 		noWorktree := fs.Bool("no-worktree", false, "work in this folder, not in the job's own git worktree")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		if fs.NArg() != 1 {
-			return errors.New(`usage: germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"`)
+		if fs.NArg() > 1 || (fs.NArg() == 0 && *workflow == "") {
+			return errors.New(`usage: germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] [--workflow w] "<prompt>"`)
 		}
 		dir, err := os.Getwd()
 		if err != nil {
 			return err
 		}
-		return cli.CreateJob(ctx, client, api.JobRequest{Name: *name, Dir: dir, Prompt: fs.Arg(0),
+		return cli.CreateJob(ctx, client, api.JobRequest{Name: *name, Dir: dir, Prompt: fs.Arg(0), Workflow: *workflow,
 			NoWorktree: *noWorktree, Every: *every, MaxRuns: *maxRuns}, os.Stdout)
 	}
 	if len(args) != 2 {
 		return fmt.Errorf("usage: germes job %s <id>", args[0])
 	}
 	return cli.UpdateJob(ctx, client, args[0], args[1], os.Stdout)
+}
+
+// workflowCommand runs `germes workflow ...`. ls and check read the files
+// here; new opens a session that writes one with the user.
+func workflowCommand(ctx context.Context, p paths, client *api.Client, args []string) error {
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	userDir := filepath.Join(p.home, "workflows")
+	dirs := job.WorkflowDirs(userDir, session.GetProjectRoot(dir))
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch {
+	case sub == "ls":
+		names := job.ListWorkflows(dirs)
+		if len(names) == 0 {
+			fmt.Printf("no workflows in %s; write one with `germes workflow new`\n", strings.Join(dirs, " or "))
+		}
+		for _, n := range names {
+			fmt.Println(n)
+		}
+		return nil
+	case sub == "check" && len(args) == 2:
+		if _, err := job.LoadWorkflow(dirs, args[1]); err != nil {
+			return fmt.Errorf("workflow %s: %w", args[1], err)
+		}
+		fmt.Printf("workflow %s is fine\n", args[1])
+		return nil
+	case sub == "new":
+		if err := os.MkdirAll(userDir, 0o700); err != nil {
+			return err
+		}
+		return runTUI(ctx, p, client, tuiStart{first: fmt.Sprintf(
+			"I want a new Germes workflow. Ask me what it should do, then write it to %s/<name>.yaml (the format is in your Germes notes), show it to me, and save it only after I agree. Check it with `germes workflow check <name>`.", userDir)})
+	}
+	return errors.New("usage: germes workflow ls|check <name>|new")
 }
 
 // reserveCommand turns an engine's reserve on or off in the config. The

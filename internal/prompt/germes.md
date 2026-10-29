@@ -25,6 +25,31 @@ Commands:
 - `germes reserve on|off <engine>`: turn an engine's reserve on or off.
 - `germes ls`: list sessions. `germes stop <id>`: stop a session's turn.
 - `germes job add [--every 1h] [--max-runs n] [--name x] "<prompt>"`: run a prompt again and again in the current folder, a new session each round, until the agent ends a reply with [DONE]. `germes job ls|start|stop|rm <id>`.
+- `germes job add --workflow <name> [--every 1h] ["<goal>"]`: run a workflow each round instead (the goal is the {GOAL} value). `germes workflow ls`, `germes workflow check <name>`.
+
+## Workflows: `{{HOME}}/workflows/<name>.yaml` (or `<project>/.germes/workflows/`)
+
+When the user asks for a workflow, write this format, show it, save it after they agree, and run `germes workflow check <name>`.
+
+```yaml
+name: fix-issues
+steps:
+  - id: find                 # the first step; coming back to it ends the round
+    agent: "Pick the most important open issue."   # a prompt; all agent steps of a round share one session
+    next: { ISSUE: fix, NONE: done }   # by the reply's last line: RESULT: ISSUE 42 (Germes asks for it)
+  - id: fix
+    agent: "Fix issue {ISSUE} properly, with a test."   # {ISSUE} = the value from RESULT: ISSUE 42
+    next: check
+  - id: check
+    run: "go build ./... && go test ./..."   # a shell command in the job's folder (values are shell-quoted)
+    on_fail: fix             # the output goes to the next agent step; no on_fail = the round fails
+    max_retries: 3           # runs of a step per round beyond the first (default 3)
+    next: merge
+  - id: merge
+    run: merge               # built in: rebase the worktree branch, fast-forward the project's branch
+    next: find
+```
+Built-ins: `merge`, `cleanup` (remove the job's worktree), `notify "<text>"` (a message for the user). `done` ends the job. Values: {GOAL} (the job's prompt), {OUTPUT} (the last command's output), and every RESULT token.
 - `germes daemon restart`: restart the daemon, cutting running turns (rarely needed; it updates and reloads itself without cutting anything).
 
 ## Other Germes files

@@ -104,6 +104,13 @@ func NewHandler(svc Service) http.Handler {
 	mux.HandleFunc("DELETE /jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, r, func() (any, error) { return nil, svc.DeleteJob(r.Context(), r.PathValue("id")) })
 	})
+	mux.HandleFunc("POST /tools/run", func(w http.ResponseWriter, r *http.Request) {
+		var t ToolRequest
+		if !decode(w, r, &t) {
+			return
+		}
+		reply(w, r, func() (any, error) { return svc.RunTool(r.Context(), t) })
+	})
 	return mux
 }
 

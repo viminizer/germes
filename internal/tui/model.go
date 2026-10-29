@@ -37,7 +37,11 @@ type (
 	escTimeoutMsg struct{ gen int }
 	reconnectMsg  struct{ gen int }
 	jobMsg        struct{ job api.Job }
+	flushMsg      struct{}
 )
+
+// printDelay gathers the messages of one burst into one print.
+const printDelay = 30 * time.Millisecond
 
 // jobCheck is how often an attached job is checked for a new round.
 const jobCheck = 2 * time.Second
@@ -63,6 +67,9 @@ type model struct {
 	gen         int // watch generation; events from older watches are ignored
 	watchCancel context.CancelFunc
 
+	pending  []message // finished messages waiting to be printed together
+	flushing bool      // a flush is scheduled
+
 	escPending bool // one Esc pressed; a second within the window stops the turn
 	escGen     int  // ignores timeouts of older Esc presses
 
@@ -83,10 +90,14 @@ func newModel(ctx context.Context, svc api.Service, opts Options) *model {
 }
 
 func (m *model) Init() tea.Cmd {
+	var cmds []tea.Cmd
 	if m.sessionID != "" {
-		return tea.Batch(m.watch(), m.checkJob())
+		cmds = append(cmds, m.watch(), m.checkJob())
 	}
-	return nil
+	if m.opts.First != "" {
+		cmds = append(cmds, m.send(m.opts.First))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -157,6 +168,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.watch()
+
+	case flushMsg:
+		m.flushing = false
+		if len(m.pending) == 0 {
+			return m, nil
+		}
+		return m, tea.Println(m.flush())
 
 	case jobMsg:
 		// Follow the job to its new round.
@@ -358,15 +376,29 @@ func tick() tea.Cmd {
 }
 
 // print puts finished messages above the live area, in the scrollback.
+// Messages wait a moment and go out together in one print: several prints
+// in one frame lose lines (a replayed history is a burst of them). Until
+// the banner is out, they wait for it.
 func (m *model) print(msgs ...message) tea.Cmd {
 	if len(msgs) == 0 {
 		return nil
 	}
-	views := make([]string, len(msgs))
-	for i, msg := range msgs {
+	m.pending = append(m.pending, msgs...)
+	if m.flushing || !m.started {
+		return nil
+	}
+	m.flushing = true
+	return tea.Tick(printDelay, func(time.Time) tea.Msg { return flushMsg{} })
+}
+
+// flush prints the waiting messages, rendered for the current width.
+func (m *model) flush() string {
+	views := make([]string, len(m.pending))
+	for i, msg := range m.pending {
 		views[i] = msg.view(m.width)
 	}
-	return tea.Println(strings.Join(views, "\n"))
+	m.pending = nil
+	return strings.Join(views, "\n")
 }
 
 func (m *model) View() tea.View {
@@ -398,13 +430,16 @@ func (m *model) loadBranch() tea.Cmd {
 	}
 }
 
-// printBanner prints the intro: logo, version and the session's info box.
-// One print: two prints in a row at startup can lose the first.
+// printBanner prints the intro (logo, version, the session's info box) and
+// the messages that waited for it, in one print.
 func (m *model) printBanner() tea.Cmd {
 	b := banner{Version: m.opts.Version, Project: m.opts.Project, Session: m.sessionID, Engine: m.status.Engine}
 	out := b.view(m.width)
 	if m.startNotice != "" {
 		out += "\n" + message{Kind: kindNotice, Text: m.startNotice}.view(m.width) + "\n"
+	}
+	if len(m.pending) > 0 {
+		out += "\n" + m.flush()
 	}
 	return tea.Println(out)
 }

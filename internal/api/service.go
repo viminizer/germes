@@ -24,6 +24,8 @@ type Service interface {
 	StartJob(ctx context.Context, id string) error
 	StopJob(ctx context.Context, id string) error
 	DeleteJob(ctx context.Context, id string) error
+
+	RunTool(ctx context.Context, r ToolRequest) (ToolResult, error)
 }
 
 // EventLister lists stored events (the Service, or the store).

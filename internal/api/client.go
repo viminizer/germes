@@ -170,6 +170,12 @@ func (c *Client) DeleteJob(ctx context.Context, id string) error {
 	return c.call(ctx, "DELETE", "/jobs/"+url.PathEscape(id), nil, nil)
 }
 
+// RunTool runs one tool in a session's folder.
+func (c *Client) RunTool(ctx context.Context, r ToolRequest) (ToolResult, error) {
+	var res ToolResult
+	return res, c.call(ctx, "POST", "/tools/run", r, &res)
+}
+
 func (c *Client) call(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {

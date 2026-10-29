@@ -41,6 +41,12 @@ type Options struct {
 	LockPath   string
 	OldDir     string       // where an old daemon registers its private socket
 	StartNew   func() error // starts a new daemon process (detached)
+	Tools      Tools
+}
+
+// Tools runs one tool for a client (a workflow command, later MCP).
+type Tools interface {
+	RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error)
 }
 
 // Daemon serves the sessions and jobs.

@@ -90,3 +90,21 @@ func (d *Daemon) StopJob(ctx context.Context, id string) error {
 func (d *Daemon) DeleteJob(ctx context.Context, id string) error {
 	return d.jobs.DeleteJob(ctx, id)
 }
+
+// RunTool runs one tool in a session's folder (or r.Dir).
+func (d *Daemon) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
+	if r.Name == "" {
+		return api.ToolResult{}, api.NewError(api.CodeInvalid, "no tool name")
+	}
+	if r.Dir == "" {
+		if r.SessionID == "" {
+			return api.ToolResult{}, api.NewError(api.CodeInvalid, "no session and no folder")
+		}
+		s, err := d.sessions.GetSession(ctx, r.SessionID)
+		if err != nil {
+			return api.ToolResult{}, err
+		}
+		r.Dir = s.Dir
+	}
+	return d.opts.Tools.RunTool(ctx, r)
+}

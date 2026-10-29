@@ -1250,6 +1250,14 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - Ends: `[DONE]` (done), `MaxRuns` (done), 3 failed rounds in a row (failed, with the error in `job ls`), folder or last round gone (failed at once), `job stop` (also stops the running round). Daemon restart: running jobs resume; a missed round runs once.
    - `germes attach <job>` opens the latest round and follows new ones (checks the job every 2 s, prints `── round N ──`). `/switch` or `/clear` stops following.
    - Checked live: a 3-round job ended itself with `[DONE]`, rounds shared one worktree and `PROGRESS.md`; an attached TUI followed round 1 to round 2.
+   Workflows done:
+   - `germes job add --workflow <name> ["<goal>"]`; `germes workflow ls|check <name>|new` (new opens a TUI session that writes one with me). Files: `<project>/.germes/workflows/<name>.yaml`, then `~/.germes/workflows/`. Parsing and checks: `internal/job/workflow.go`; running: `internal/job/steps.go`.
+   - A round goes from the first step until a step leads back to it (round over) or to `done` (job done). The round's agent steps share one session (a new one per round, in the job's worktree); its run steps run through `Service.RunTool("Bash")` in that folder (block list applies, 10 min limit).
+   - Agent steps with a token map get the RESULT rule added; no or an unknown token: asked once more, then the round fails. Values (`{ISSUE}`, `{GOAL}` = the job's prompt, `{OUTPUT}`) go into prompts as they are and into commands shell-quoted. A failed command with `on_fail` passes its output to the next agent step.
+   - Built-ins: `merge` (rebase the worktree branch on the project's current branch and fast-forward it; a conflict aborts the rebase and fails the step), `cleanup` (leave and remove the worktree), `notify "<text>"` (a live `notice` event; the job being done or failed is one too).
+   - The step, values and runs per step are saved before each step; after a restart the saved step runs again (a turn still running in an old daemon is waited for first). `job ls` shows `workflow:step`.
+   - TUI: prints of one burst go out as one print (several prints in one frame lost lines: attaching showed no info box and only the first line of long messages).
+   - Checked live: a 4-round `count` workflow (pick, add, check, notify, merge) put three commits on the project's master and ended with done; the attached TUI showed the notices.
    - Updates never wait for jobs or sessions: the daemon hands over (see "Daemon module"). Checked live: a 40 s turn finished in the old daemon while a queued message ran in the new one; Esc Esc stopped a turn in the old daemon through the new one; a job's round 1 ran in the old daemon and round 2 started in the new one 3 ms after it ended. Tests run two daemons on one database (`internal/daemon/handover_test.go`).
 7. MCP and the overseer.
 8. Telegram.

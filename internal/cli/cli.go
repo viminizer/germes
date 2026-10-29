@@ -69,14 +69,18 @@ func ListJobs(ctx context.Context, svc api.Service, out io.Writer) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tSTATUS\tRUNS\tSCHEDULE\tSESSION\tDIR\tERROR")
+	fmt.Fprintln(tw, "ID\tNAME\tSTATUS\tRUNS\tSCHEDULE\tWORKFLOW\tSESSION\tDIR\tERROR")
 	for _, j := range page.Items {
 		runs := fmt.Sprint(j.Runs)
 		if j.MaxRuns > 0 {
 			runs += fmt.Sprintf("/%d", j.MaxRuns)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Name, j.Status, runs, schedule(j),
-			orDash(j.SessionID), j.Dir, orDash(j.Error))
+		workflow := j.Workflow
+		if j.Step != "" {
+			workflow += ":" + j.Step
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Name, j.Status, runs, schedule(j),
+			orDash(workflow), orDash(j.SessionID), j.Dir, orDash(j.Error))
 	}
 	return tw.Flush()
 }

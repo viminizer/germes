@@ -75,7 +75,7 @@ func newInstance(t *testing.T, dir, name string, startNew func() error) *instanc
 	old := NewOldDaemons(filepath.Join(dir, "old"))
 	r := newGateRunner(name)
 	sessions := session.NewManager(st, r, session.Options{Elsewhere: old})
-	jobs := job.NewScheduler(st, sessions)
+	jobs := job.NewScheduler(st, sessions, job.Options{})
 	d := New(sessions, jobs, old, Options{Version: name, SocketPath: filepath.Join(dir, "s.sock"),
 		LockPath: filepath.Join(dir, "lock"), OldDir: filepath.Join(dir, "old"), StartNew: startNew})
 	return &instance{d: d, runner: r, done: make(chan struct{})}

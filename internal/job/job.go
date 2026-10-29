@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -37,14 +38,30 @@ type Store interface {
 type Sessions interface {
 	SendMessage(ctx context.Context, r api.MessageRequest) (api.MessageResult, error)
 	GetSession(ctx context.Context, id string) (api.Session, error)
+	UpdateSession(ctx context.Context, u api.SessionUpdate) error
 	StopSession(ctx context.Context, r api.StopRequest) error
+	ListEvents(ctx context.Context, f api.EventFilter) (api.Page[api.Event], error)
 	Watch(ctx context.Context, f api.WatchFilter) (<-chan api.Event, error)
+	SendEvent(ev api.Event)
+}
+
+// Tools runs a workflow's commands, like an agent's tool call (the block
+// list applies).
+type Tools interface {
+	RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error)
+}
+
+// Options configure the scheduler.
+type Options struct {
+	Tools     Tools
+	Workflows string // the user's workflow folder; a job's <dir>/.germes/workflows comes first
 }
 
 // Scheduler runs every running job in its own goroutine.
 type Scheduler struct {
 	store    Store
 	sessions Sessions
+	opts     Options
 	wg       sync.WaitGroup
 
 	mu      sync.Mutex // one read-modify-write of a job row at a time; guards the fields below
@@ -58,16 +75,22 @@ type runner struct{ cancel context.CancelFunc }
 
 // round is how one round ended.
 type round struct {
-	done    bool   // the agent replied [DONE]
+	done    bool   // the agent replied [DONE], or the workflow reached done
 	failure string // why it failed; "" = it worked
-	fatal   bool   // the job cannot run any more (its folder is gone)
+	fatal   bool   // the job cannot run any more (its folder or workflow is gone)
 }
 
 // NewScheduler creates a scheduler.
-func NewScheduler(store Store, sessions Sessions) *Scheduler {
+func NewScheduler(store Store, sessions Sessions, opts Options) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // nothing runs before Start
-	return &Scheduler{store: store, sessions: sessions, ctx: ctx, cancel: cancel, running: map[string]*runner{}}
+	return &Scheduler{store: store, sessions: sessions, opts: opts, ctx: ctx, cancel: cancel, running: map[string]*runner{}}
+}
+
+// WorkflowDirs are the folders a job in dir loads workflows from, first
+// match wins: the project's .germes/workflows, then the user's folder.
+func WorkflowDirs(userDir, dir string) []string {
+	return []string{filepath.Join(dir, ".germes", "workflows"), userDir}
 }
 
 // Start resumes the jobs that were running when the daemon stopped. A round
@@ -103,7 +126,7 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 func (s *Scheduler) CreateJob(ctx context.Context, r api.JobRequest) (api.Job, error) {
 	prompt := strings.TrimSpace(r.Prompt)
 	switch {
-	case prompt == "":
+	case prompt == "" && r.Workflow == "":
 		return api.Job{}, api.NewError(api.CodeInvalid, "empty prompt")
 	case r.Every < 0 || r.MaxRuns < 0:
 		return api.Job{}, api.NewError(api.CodeInvalid, "every and max runs must not be negative")
@@ -111,9 +134,14 @@ func (s *Scheduler) CreateJob(ctx context.Context, r api.JobRequest) (api.Job, e
 	if fi, err := os.Stat(r.Dir); err != nil || !fi.IsDir() {
 		return api.Job{}, api.NewError(api.CodeInvalid, "folder %q does not exist", r.Dir)
 	}
+	if r.Workflow != "" {
+		if _, err := LoadWorkflow(WorkflowDirs(s.opts.Workflows, r.Dir), r.Workflow); err != nil {
+			return api.Job{}, api.NewError(api.CodeInvalid, "workflow %s: %v", r.Workflow, err)
+		}
+	}
 	now := time.Now()
 	j := api.Job{ID: api.NewID(), Name: strings.TrimSpace(r.Name), Dir: r.Dir, Prompt: prompt, NoWorktree: r.NoWorktree,
-		Every: r.Every, MaxRuns: r.MaxRuns, NextRunAt: now, Status: api.JobRunning, CreatedAt: now, UpdatedAt: now}
+		Every: r.Every, MaxRuns: r.MaxRuns, NextRunAt: now, Status: api.JobRunning, Workflow: r.Workflow, CreatedAt: now, UpdatedAt: now}
 	if j.Name == "" {
 		j.Name = j.ID
 	}
@@ -260,14 +288,25 @@ func (s *Scheduler) finishRunningRound(ctx context.Context, id string) bool {
 	if err != nil || j.Status != api.JobRunning {
 		return false
 	}
-	if j.SessionID == "" {
+	working := false
+	if j.SessionID != "" {
+		sess, err := s.sessions.GetSession(ctx, j.SessionID)
+		working = err == nil && sess.Status != api.StatusIdle
+	}
+	var res round
+	switch {
+	case j.Workflow != "" && j.Step != "":
+		// Cut in the middle of a workflow round: let a running turn end,
+		// then run the saved step again.
+		if working {
+			s.waitIdle(ctx, j.SessionID, 0)
+		}
+		res = s.runWorkflow(ctx, j)
+	case working:
+		res = s.plainRound(s.waitIdle(ctx, j.SessionID, 0))
+	default:
 		return true
 	}
-	sess, err := s.sessions.GetSession(ctx, j.SessionID)
-	if err != nil || sess.Status == api.StatusIdle {
-		return true
-	}
-	res := s.waitRound(ctx, j.SessionID)
 	return ctx.Err() == nil && s.finish(ctx, id, res)
 }
 
@@ -309,7 +348,9 @@ func (s *Scheduler) advance(ctx context.Context, id string) (api.Job, bool) {
 
 // finish records how a round ended and reports whether the job runs on.
 func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
+	before := api.JobRunning
 	j, err := s.update(ctx, id, func(j *api.Job) error {
+		before = j.Status
 		if j.Status != api.JobRunning {
 			return nil
 		}
@@ -331,35 +372,69 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 		slog.Error("job round", "job", id, "err", err)
 		return false
 	}
+	if before == api.JobRunning && j.Status != api.JobRunning {
+		text := "job " + j.Name + " is " + string(j.Status)
+		if j.Status == api.JobFailed {
+			text += ": " + j.Error
+		}
+		s.notify(j.SessionID, text)
+	}
 	return j.Status == api.JobRunning
 }
 
-// runRound sends the round's prompt to a new session, in the folder of the
-// round before, and waits until that session has nothing left to do.
-func (s *Scheduler) runRound(ctx context.Context, j api.Job) round {
-	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: j.Dir, Text: roundPrompt(j),
-		NoWorktree: j.NoWorktree, SameDirAs: j.SessionID})
-	if err != nil {
-		var e *api.Error
-		fatal := errors.As(err, &e) && (e.Code == api.CodeInvalid || e.Code == api.CodeNotFound)
-		return round{failure: err.Error(), fatal: fatal}
-	}
-	if _, err := s.update(ctx, j.ID, func(j *api.Job) error { j.SessionID = res.SessionID; return nil }); err != nil {
-		return round{failure: err.Error()}
-	}
-	return s.waitRound(ctx, res.SessionID)
+// notify tells whoever watches the session (the TUI, later Telegram).
+func (s *Scheduler) notify(sessionID, text string) {
+	slog.Info("job notice", "session", sessionID, "text", text)
+	s.sessions.SendEvent(api.Event{SessionID: sessionID, Time: time.Now(), Kind: api.KindNotice, Text: text})
 }
 
-// waitRound watches a round's session until it is idle with nothing queued
-// (the user may steer a round by typing into it). A dropped watch resumes
-// after the last event seen. A deleted session fails the round.
-func (s *Scheduler) waitRound(ctx context.Context, sessionID string) round {
-	var res round
-	var after int64
+// runRound runs one round: the workflow, or the prompt in a new session in
+// the folder of the round before.
+func (s *Scheduler) runRound(ctx context.Context, j api.Job) round {
+	if j.Workflow != "" {
+		return s.runWorkflow(ctx, j)
+	}
+	id, err := s.sendRound(ctx, j, roundPrompt(j))
+	if err != nil {
+		return failed(err)
+	}
+	return s.plainRound(s.waitIdle(ctx, id, 0))
+}
+
+// plainRound reads a prompt round's reply.
+func (s *Scheduler) plainRound(reply, failure string) round {
+	return round{done: strings.Contains(reply, doneMark), failure: failure}
+}
+
+// sendRound starts the round's session with text, in the folder of the
+// round before, and saves it as the job's latest session.
+func (s *Scheduler) sendRound(ctx context.Context, j api.Job, text string) (string, error) {
+	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: j.Dir, Text: text,
+		NoWorktree: j.NoWorktree, SameDirAs: j.SessionID})
+	if err != nil {
+		return "", err
+	}
+	_, err = s.update(ctx, j.ID, func(j *api.Job) error { j.SessionID = res.SessionID; return nil })
+	return res.SessionID, err
+}
+
+// failed is a round that could not send its message. A folder or session
+// that is gone fails the job at once.
+func failed(err error) round {
+	var e *api.Error
+	fatal := errors.As(err, &e) && (e.Code == api.CodeInvalid || e.Code == api.CodeNotFound)
+	return round{failure: err.Error(), fatal: fatal}
+}
+
+// waitIdle watches a session's events after seq after until it is idle
+// with nothing queued (the user may steer a round by typing into it). It
+// returns the last reply and the last error. A dropped watch resumes after
+// the last event seen; a deleted session is a failure.
+func (s *Scheduler) waitIdle(ctx context.Context, sessionID string, after int64) (reply, failure string) {
 	for ctx.Err() == nil {
 		events, err := s.sessions.Watch(ctx, api.WatchFilter{SessionID: sessionID, AfterSeq: after})
 		if err != nil {
-			return round{failure: err.Error()}
+			return reply, err.Error()
 		}
 		for ev := range events {
 			if ev.Seq != 0 {
@@ -367,24 +442,24 @@ func (s *Scheduler) waitRound(ctx context.Context, sessionID string) round {
 			}
 			switch ev.Kind {
 			case api.KindText:
-				res.done = strings.Contains(ev.Text, doneMark)
+				reply = ev.Text
 			case api.KindError:
-				res.failure = ev.Text
+				failure = ev.Text
 			case api.KindTurnDone:
 				gone, idle := s.checkRound(ctx, sessionID)
 				if gone {
-					return round{failure: "the round's session " + sessionID + " was deleted"}
+					return reply, "the round's session " + sessionID + " was deleted"
 				}
 				if idle {
-					return res
+					return reply, failure
 				}
 			}
 		}
 		if gone, _ := s.checkRound(ctx, sessionID); gone {
-			return round{failure: "the round's session " + sessionID + " was deleted"}
+			return reply, "the round's session " + sessionID + " was deleted"
 		}
 	}
-	return res
+	return reply, failure
 }
 
 // checkRound reports whether the round's session is gone, or idle with

@@ -40,13 +40,18 @@ func (r *scriptRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Ev
 
 func newTestScheduler(t *testing.T, replies ...string) (*Scheduler, *scriptRunner) {
 	t.Helper()
+	return newTestSchedulerWith(t, Options{}, replies...)
+}
+
+func newTestSchedulerWith(t *testing.T, opts Options, replies ...string) (*Scheduler, *scriptRunner) {
+	t.Helper()
 	st, err := store.New(filepath.Join(t.TempDir(), "germes.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := &scriptRunner{replies: replies}
 	sessions := session.NewManager(st, r, session.Options{})
-	s := NewScheduler(st, sessions)
+	s := NewScheduler(st, sessions, opts)
 	if err := s.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}

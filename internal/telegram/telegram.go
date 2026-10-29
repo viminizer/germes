@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -84,8 +85,8 @@ func New(svc api.Service, opts Options) *Telegram {
 // Run polls Telegram and sends answers until ctx ends.
 func (t *Telegram) Run(ctx context.Context) error {
 	slog.Info("telegram bot started")
-	go t.watch(ctx)
-	go t.showTyping(ctx)
+	go recovered("telegram watch", func() { t.watch(ctx) })
+	go recovered("telegram typing", func() { t.showTyping(ctx) })
 	for ctx.Err() == nil {
 		var updates []update
 		err := t.bot.call(ctx, "getUpdates", map[string]any{"offset": t.offset(), "timeout": pollTimeout,
@@ -122,7 +123,9 @@ func (t *Telegram) handle(ctx context.Context, u update) {
 	case u.Message != nil && t.isAllowed(u.Message.Chat.ID, u.Message.From):
 		t.handleMessage(ctx, u.Message)
 	case u.Callback != nil && u.Callback.Message != nil && t.isAllowed(u.Callback.Message.Chat.ID, &u.Callback.From):
-		t.bot.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": u.Callback.ID}, nil)
+		if err := t.bot.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": u.Callback.ID}, nil); err != nil {
+			slog.Warn("telegram answer button", "err", err)
+		}
 		t.handleChoice(ctx, u.Callback.Message.Thread, u.Callback.Data)
 	}
 }
@@ -275,7 +278,9 @@ func (t *Telegram) bind(ctx context.Context, thread int64, name string) {
 		for i, p := range found {
 			rows = append(rows, []button{{Text: p, Data: fmt.Sprintf("b:%s:%d", token, i)}})
 		}
-		t.bot.send(ctx, t.opts.ChatID, thread, "Which project?", rows)
+		if err := t.bot.send(ctx, t.opts.ChatID, thread, "Which project?", rows); err != nil {
+			slog.Warn("telegram send", "err", err)
+		}
 	}
 }
 
@@ -322,6 +327,16 @@ func (t *Telegram) save() {
 	if err != nil {
 		slog.Warn("telegram: save state", "err", err)
 	}
+}
+
+// recovered runs fn and logs a panic instead of crashing the daemon.
+func recovered(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error(name+" panicked", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	fn()
 }
 
 func wait(ctx context.Context, d time.Duration) {

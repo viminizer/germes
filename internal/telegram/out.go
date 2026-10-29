@@ -107,6 +107,8 @@ func (t *Telegram) showTyping(ctx context.Context) {
 			if thread != 0 {
 				params["message_thread_id"] = thread
 			}
+			// Not logged: it repeats every few seconds, and a failure
+			// only loses the "typing…" hint.
 			t.bot.call(ctx, "sendChatAction", params, nil)
 		}
 	}

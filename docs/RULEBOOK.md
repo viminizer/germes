@@ -54,7 +54,8 @@ The same action uses the same word in every module. If one module uses `Fetch` f
 
 - From: Kevin, 2026-10-29, chat ("keep those action words consistent")
 - Check: every exported function and method starts with a verb from the list below. A new verb is added to the list first.
-- Exception: a method whose name an interface requires (`Error`, `String`, `Name`, Bubble Tea's `Init`/`Update`/`View`) keeps that name. Proposed 2026-10-29 while building M1; Kevin to confirm.
+- Exception: a method whose name an interface requires (`Error`, `String`, `Name`, Bubble Tea's `Init`/`Update`/`View`) keeps that name.
+- Booleans: a function that returns a bool starts with `Is` or `Has`, whichever reads right (`IsAvailable`, `HasQueue`). (Kevin, 2026-10-29, audit.)
 - Example: none yet
 
 | Action | Verb |
@@ -71,6 +72,7 @@ The same action uses the same word in every module. If one module uses `Fetch` f
 | stream changes live until stopped | `Watch` |
 | constructor | `New` |
 | release a resource (Go's `io.Closer`) | `Close` |
+| answer yes or no (returns a bool) | `Is` / `Has` |
 
 ## R26. Handle every failure gracefully
 
@@ -128,12 +130,12 @@ Log with `log/slog`, with the session ID when there is one.
 - Check: no `fmt.Print*` or `log.Print*` for logs.
 - Example: none yet
 
-## R33. Doc comments on exported names
+## R33. Code that explains itself
 
-Every exported name has a doc comment.
+Names and structure explain the code. A comment is not required; add one only when the code cannot say it (why something is done, a limit, a trap).
 
-- From: Kevin, 2026-10-29, chat (approved Go practices)
-- Check: every exported name has a comment starting with its name (the `revive` linter can check this).
+- From: Kevin, 2026-10-29, chat (approved Go practices). Changed by Kevin 2026-10-29, audit: "comments are not requirement, as long as the code describes itself"
+- Check: a reader understands each exported name from its name and signature; comments explain why, not what.
 - Example: none yet
 
 ## R34. Time and randomness as inputs
@@ -143,6 +145,14 @@ Code that tests need to control gets time and randomness as a parameter, not by 
 - From: Kevin, 2026-10-29, chat (approved Go practices)
 - Check: logic with time or random values takes a clock or source from its caller.
 - Example: none yet
+
+## R44. Go error strings
+
+Error strings follow Go's convention: they start with a lowercase letter and have no ending punctuation, because they get wrapped into longer messages.
+
+- From: Kevin, 2026-10-29, audit ("use go's convention")
+- Check: `staticcheck ./...` reports no ST1005.
+- Example: `internal/store/sessions.go`
 
 ## R43. TUI built from components
 

@@ -76,6 +76,7 @@ tools                 tools/files, tools/shell             → tool, env
 services              prompt                               → memory, skill
                       store                                → api, engine
                       llm                                  → (none)
+                      llm/codex                            → llm
 
 leaves                api, config, engine, tool, env,      → (none)
                       memory, skill
@@ -1152,7 +1153,11 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Network error or 5xx: retry 3 times with backoff, then an `error` event; the turn ends.
 - Usage limit: `LimitHit`, switch engines with a handoff. No reset time given: blocked 30 minutes.
 - All engines blocked: the session pauses, continues at the earliest reset.
-- Codex token expired: refresh. Refresh rejected: import again from `~/.codex/auth.json`. Still failing: engine marked unavailable (router switches to Claude), tell me to run `codex login`.
+- Codex token about to expire: take the Codex CLI's fresh token. Both expiring: refresh, and write the new token back to `~/.codex/auth.json`. Refresh fails for good: the engine cannot start, the router moves the turn on, and I am told to run `codex login`.
+- Codex usage call fails: logged only; usage is a hint, the turn goes on.
+- Compaction fails: logged; the turn runs with the full history (the model may refuse a too-long input, which shows as an error).
+- Background review fails: logged; nothing is saved, the user sees nothing.
+- A skill cannot be read (broken frontmatter): it is left out of the skills list.
 - `claude` missing or not logged in: error event, engine marked unavailable for a while, router switches.
 - Claude process hangs: no output for 10 minutes kills it (Hermes uses 600 s too).
 - Unknown line in Claude's output: skip and log it.

@@ -85,12 +85,6 @@ func (r *Registry) List(toolsets ...string) []Tool {
 	return out
 }
 
-// Get returns one tool.
-func (r *Registry) Get(name string) (Tool, bool) {
-	t, ok := r.tools[name]
-	return t, ok
-}
-
 // Run runs a tool. It never panics and never returns a Go error: every
 // problem becomes an error result the model can read and react to.
 func (r *Registry) Run(ctx context.Context, name string, c Call) (res Result) {

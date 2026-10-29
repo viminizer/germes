@@ -25,7 +25,7 @@ const (
 )
 
 // ErrLogin means the Codex login is gone or expired for good.
-var ErrLogin = errors.New("Codex login expired: run `codex login`, then try again")
+var ErrLogin = errors.New("codex login expired: run `codex login`, then try again")
 
 // tokens is the login. Germes keeps its own copy (germesFile) and only reads
 // the Codex CLI's file (codexFile), so one app's refresh cannot break the
@@ -85,7 +85,7 @@ func (a *auth) get(ctx context.Context, force bool) (tokens, error) {
 func (a *auth) use(t tokens) (tokens, error) {
 	a.tok = &t
 	if err := a.save(t); err != nil {
-		return t, fmt.Errorf("save Codex login: %w", err)
+		return t, fmt.Errorf("save codex login: %w", err)
 	}
 	return t, nil
 }
@@ -129,7 +129,7 @@ func (a *auth) load() (tokens, error) {
 	}
 	t, err := readFile(a.codexFile)
 	if err != nil {
-		return tokens{}, fmt.Errorf("no Codex login found (%v): run `codex login`", err)
+		return tokens{}, fmt.Errorf("no codex login found (%v): run `codex login`", err)
 	}
 	return t, a.save(t)
 }
@@ -176,17 +176,17 @@ func (a *auth) refresh(ctx context.Context, t tokens) (tokens, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return tokens{}, fmt.Errorf("refresh Codex login: %w", err)
+		return tokens{}, fmt.Errorf("refresh codex login: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	switch {
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return tokens{}, fmt.Errorf("refresh Codex login: rate limited, try again later")
+		return tokens{}, fmt.Errorf("refresh codex login: rate limited, try again later")
 	case resp.StatusCode == 401 || resp.StatusCode == 403 || (resp.StatusCode == 400 && strings.Contains(string(body), "invalid")):
 		return tokens{}, ErrLogin
 	case resp.StatusCode != http.StatusOK:
-		return tokens{}, fmt.Errorf("refresh Codex login: %s", resp.Status)
+		return tokens{}, fmt.Errorf("refresh codex login: %s", resp.Status)
 	}
 	var r struct {
 		AccessToken  string `json:"access_token"`
@@ -194,7 +194,7 @@ func (a *auth) refresh(ctx context.Context, t tokens) (tokens, error) {
 		IDToken      string `json:"id_token"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil || r.AccessToken == "" {
-		return tokens{}, fmt.Errorf("refresh Codex login: bad reply")
+		return tokens{}, fmt.Errorf("refresh codex login: bad reply")
 	}
 	t.AccessToken = r.AccessToken
 	if r.RefreshToken != "" {

@@ -114,7 +114,7 @@ type limitError struct {
 	msg     string
 }
 
-func (e *limitError) Error() string { return "Codex usage limit: " + e.msg }
+func (e *limitError) Error() string { return "codex usage limit: " + e.msg }
 
 // post sends the request. It refreshes the login once on 401 and retries
 // network errors, 5xx and short rate limits up to 3 times.
@@ -153,7 +153,7 @@ func (c *Client) post(ctx context.Context, body []byte, cacheKey string) (*http.
 			if ctx.Err() != nil {
 				return nil, tokens{}, ctx.Err()
 			}
-			lastErr = fmt.Errorf("Codex request: %w", err)
+			lastErr = fmt.Errorf("codex request: %w", err)
 			continue
 		}
 		if resp.StatusCode == http.StatusOK {
@@ -164,16 +164,16 @@ func (c *Client) post(ctx context.Context, body []byte, cacheKey string) (*http.
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized && !force:
 			force = true
-			lastErr = errors.New("Codex rejected the login")
+			lastErr = errors.New("codex rejected the login")
 		case resp.StatusCode == http.StatusTooManyRequests:
 			if limit := parseLimit(msg, resp.Header); limit != nil {
 				return nil, tokens{}, limit
 			}
-			lastErr = fmt.Errorf("Codex rate limit: %s", short(msg))
+			lastErr = fmt.Errorf("codex rate limit: %s", short(msg))
 		case resp.StatusCode >= 500:
-			lastErr = fmt.Errorf("Codex server error %s: %s", resp.Status, short(msg))
+			lastErr = fmt.Errorf("codex server error %s: %s", resp.Status, short(msg))
 		default:
-			return nil, tokens{}, fmt.Errorf("Codex %s: %s", resp.Status, short(msg))
+			return nil, tokens{}, fmt.Errorf("codex %s: %s", resp.Status, short(msg))
 		}
 	}
 	return nil, tokens{}, lastErr
@@ -339,10 +339,10 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 					return false
 				}
 			}
-			send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("Codex: " + msg)})
+			send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + msg)})
 			return false
 		case "error":
-			send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("Codex: %s %s", ev.Code, ev.Message)})
+			send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex: %s %s", ev.Code, ev.Message)})
 			return false
 		}
 	}
@@ -353,7 +353,7 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 	if err == nil {
 		err = errors.New("stream ended early")
 	}
-	send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("Codex stream: %w", err)})
+	send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex stream: %w", err)})
 	return false
 }
 

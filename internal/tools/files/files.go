@@ -157,7 +157,10 @@ func edit(ctx context.Context, c tool.Call) (string, error) {
 	} else {
 		text = strings.Replace(text, a.OldString, a.NewString, 1)
 	}
-	info, _ := os.Stat(p)
+	info, err := os.Stat(p)
+	if err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(p, []byte(text), info.Mode().Perm()); err != nil {
 		return "", err
 	}

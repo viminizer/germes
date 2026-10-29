@@ -54,6 +54,7 @@ The same action uses the same word in every module. If one module uses `Fetch` f
 
 - From: Kevin, 2026-10-29, chat ("keep those action words consistent")
 - Check: every exported function and method starts with a verb from the list below. A new verb is added to the list first.
+- Exception: a method whose name an interface requires (`Error`, `String`, `Name`, Bubble Tea's `Init`/`Update`/`View`) keeps that name. Proposed 2026-10-29 while building M1; Kevin to confirm.
 - Example: none yet
 
 | Action | Verb |
@@ -142,6 +143,14 @@ Code that tests need to control gets time and randomness as a parameter, not by 
 - From: Kevin, 2026-10-29, chat (approved Go practices)
 - Check: logic with time or random values takes a clock or source from its caller.
 - Example: none yet
+
+## R43. TUI built from components
+
+Each UI element of the TUI (banner, message, transcript, status bar, composer, picker) is its own component in its own file, with its own state and a `view(width)`. Every component renders correctly at any terminal width (responsive).
+
+- From: Kevin, 2026-10-29, chat ("the tui should be responsive and use components too", "each ui item or element can be its own component, so we can change them later or easy to read the code")
+- Check: a new UI element gets its own file and type in `internal/tui`; its view takes the width and never writes past it.
+- Example: `internal/tui/statusbar.go`
 
 ## Default rules
 

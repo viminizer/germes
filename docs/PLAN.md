@@ -380,7 +380,8 @@ Default order and reserves:
 engines:
   - name: codex-api
     reserve: { 5h: 10%, weekly: 20% }   # stop using it when this much is left
-  - name: claude-cli                    # no usage data: switches only when it hits the limit
+  - name: claude-cli
+    reserve: { five_hour: 10%, seven_day: 20% }
 ```
 
 1. Every turn goes to the first engine that is not limited and not reserved.
@@ -391,7 +392,7 @@ engines:
 6. All blocked: the session pauses and notifies me. It resumes at the earliest reset.
 7. Later: switch by work type.
 
-Usage data: Codex has a usage endpoint with "% used" per window (Hermes calls it, see `hermes/hermes_cli/auth_codex.py:722`). Called after each turn. Claude CLI: no usage data known, so it switches only when it hits the limit.
+Usage data: Codex has a usage endpoint with "% used" per window (Hermes calls it, see `hermes/hermes_cli/auth_codex.py:722`). Called after each turn. Claude CLI: its stream-json output has a `rate_limit_event` with `five_hour` and `seven_day` utilization and reset times (checked in M1), so Claude gets a reserve too.
 
 ### Keeping context when switching
 
@@ -513,7 +514,8 @@ Needs: `llm` (calls the model with the Codex token), `tool` (registry), `prompt`
 ```
 claude -p "<prompt>" --output-format stream-json --verbose --include-partial-messages
        --resume <id> --append-system-prompt "<memory + skills + handoff>"
-       --mcp-config <germes mcp> --disallowedTools <blocked list> --permission-prompts none
+       --mcp-config <germes mcp> --permission-mode acceptEdits --allowedTools "Bash WebFetch WebSearch Skill"
+       --disallowedTools <blocked list> --permission-prompts none   (prompt goes in on stdin)
 ```
 
 1. Start the process with its working folder set to `turn.Dir`.
@@ -893,6 +895,9 @@ func (t *TUI) Run(ctx) error
 ```
 
 - Look: like the Hermes TUI for now (`hermes/ui-tui`). Copy its layout and style in Bubble Tea.
+- Components: each UI element (banner, message, transcript, status bar, composer) is its own component in its own file, with its own state and a `view(width)` that fits any width (R43).
+- Inline mode: finished messages are printed into the terminal scrollback; only the live part (running tools, streaming text, status bar, input) is redrawn.
+- `text_delta` events are live only (Seq 0, never saved); the finished text block is saved as one `text` event.
 - Screen: header (project, session title, engine status), chat (text + one compact line per tool call), input box, footer with keys.
 - Events: `Watch` channel → a Bubble Tea command reads one event → `Update` adds it → `View` draws it. Watch drops: reconnect with `afterSeq`.
 
@@ -1111,6 +1116,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - No engine found: print how to log in, exit.
 - Daemon does not answer within a few seconds: show the path to `daemon.log`, exit.
 - Leftover socket file: delete it, start a new daemon.
+- Socket path too long (macOS limit about 104 bytes, deep `GERMES_HOME`): use `/tmp/germes-<uid>-<hash>.sock`.
 - Two daemons start at once: the lock lets one win; the other exits; the client connects to the winner.
 - Old daemon after an upgrade: API returns `version_mismatch`; the TUI says to run `germes daemon restart`.
 - Daemon crash in the middle of a turn: on restart the turn is saved as `interrupted`. Jobs continue; advance-before-run means no double round.
@@ -1167,6 +1173,25 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 
 ### Accepted risks
 - Yolo: the agent (or the overseer from Telegram) can run destructive commands not on the block list. My choice.
+
+## Implementation
+
+Fast iteration: one worktree and branch per milestone, commit often, merge and push when the milestone runs. Checks before merge: `make check` (build, vet, gofmt, tests for important logic). Rulebook audit once per milestone.
+
+0. Skeleton: `go.mod`, `cmd/germes`, import test (R2), CI. Done.
+1. First working chat: TUI -> daemon -> session -> `engine/claude`, with `api`, `store`, minimal `config`, daemon auto-start, `ls`, `stop`, `-c`, `attach`. Done.
+2. Own loop: `llm/codex`, `engine/loop`, `tool`, `env`, file and shell tools, `prompt`.
+3. Router: limits, reserves, handoff, Codex <-> Claude switching.
+4. Memory and skills: `memory`, `skill`, search, compaction.
+5. Worktrees.
+6. Jobs, then workflows.
+7. MCP and the overseer.
+8. Telegram.
+
+Notes from M1:
+- `api.Service` has only the methods M1 needs; later milestones add theirs.
+- `GERMES_HOME` overrides `~/.germes` (useful for trying things).
+- Version comes from git through `make build` (R24).
 
 ## Open items
 

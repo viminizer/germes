@@ -17,6 +17,7 @@ type message struct {
 	Text string
 	Tool *api.ToolCall // call with its result, for kindTool
 	Dir  string        // project folder: paths under it are shown short
+	Cont bool          // kindAssistant: more of a reply already partly printed
 }
 
 type messageKind int
@@ -38,7 +39,7 @@ func (m message) view(width int) string {
 	case kindUser:
 		return "\n" + gutter(styleLabel.Bold(true).Render("❯ "), styleLabel, m.Text, width) + "\n"
 	case kindAssistant:
-		return gutter(styleBorder.Render("┊ "), styleText, m.Text, width)
+		return gutter(replyMark(m.Cont), styleText, m.Text, width)
 	case kindTool:
 		return toolView(m.Tool, m.Dir, width)
 	case kindError:
@@ -52,6 +53,15 @@ func (m message) view(width int) string {
 	default:
 		return gutter(styleMuted.Render("· "), styleMuted, m.Text, width)
 	}
+}
+
+// replyMark starts a reply; the rest of a reply printed in pieces is only
+// indented.
+func replyMark(cont bool) string {
+	if cont {
+		return "  "
+	}
+	return styleBorder.Render("┊ ")
 }
 
 // gutter wraps text to width and puts mark before the first line.

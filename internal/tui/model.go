@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/viminizer/germes/internal/api"
 )
@@ -58,6 +59,7 @@ type model struct {
 
 	sessionID string
 	width     int
+	height    int
 	started   bool // banner printed
 
 	startNotice   string // printed under the banner (after /clear)
@@ -103,7 +105,7 @@ func (m *model) Init() tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 		m.composer.setWidth(msg.Width)
 		if !m.started {
 			m.started = true
@@ -402,10 +404,9 @@ func (m *model) flush() string {
 }
 
 func (m *model) View() tea.View {
-	parts := []string{""} // a blank line between the transcript and the live area
-	if live := m.transcript.view(m.width, m.status.spinner()); live != "" {
-		parts = append(parts, live)
-	}
+	// Running tools, then the reply's unfinished line (blank when none: it
+	// also spaces the transcript from the status bar).
+	parts := []string{m.transcript.view(m.width, m.status.spinner())}
 	if q := m.queue.view(m.width); q != "" {
 		parts = append(parts, q)
 	}
@@ -440,6 +441,12 @@ func (m *model) printBanner() tea.Cmd {
 	}
 	if len(m.pending) > 0 {
 		out += "\n" + m.flush()
+	}
+	// Blank lines put the live area at the bottom of the screen. Bubble
+	// Tea prints above it as if it were there; higher up, lines land on the
+	// wrong rows and get lost.
+	if pad := m.height - lipgloss.Height(out) - lipgloss.Height(m.View().Content); pad > 0 {
+		out += strings.Repeat("\n", pad)
 	}
 	return tea.Println(out)
 }

@@ -944,6 +944,8 @@ Slash commands, with autocomplete: `/sessions` (picker), `/switch`, `/rename`, `
 
 - Skipped: markdown rendering of model text (`glamour`). Plain text first.
 
+Scrollback (issue #1): a streaming reply prints each finished line to the scrollback right away; only the unfinished line stays live, in one fixed row, so the live area never changes height while text streams. At start, blank lines put the live area at the bottom of the screen: Bubble Tea (v2.1.1) prints above the live area as if it were there, and higher up printed lines landed on the wrong rows and were lost.
+
 ### To build (Kevin, 2026-10-29)
 
 - `/clear`: keeps the current session (its context stays saved, nothing is deleted) and starts a new one. The new session is only saved when I send a message in it; `/clear` with no message after it leaves nothing behind. Only sessions with context are kept. (Sessions are already created on the first message, so `/clear` works like `/new`.)

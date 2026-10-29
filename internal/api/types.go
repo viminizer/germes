@@ -46,6 +46,7 @@ const (
 	KindToolResult     EventKind = "tool_result"
 	KindTurnDone       EventKind = "turn_done"
 	KindEngineSwitched EventKind = "engine_switched"
+	KindCompacted      EventKind = "compacted" // Text: summary of everything before KeepFrom
 	KindLimitHit       EventKind = "limit_hit"
 	KindError          EventKind = "error"
 )
@@ -58,8 +59,9 @@ type Event struct {
 	Kind      EventKind `json:"kind"`
 	Text      string    `json:"text,omitempty"`
 	Tool      *ToolCall `json:"tool,omitempty"`
-	Queue     []string  `json:"queue,omitempty"`  // queue: the waiting messages
-	Engine    string    `json:"engine,omitempty"` // engine_switched, turn_done: the engine running the session
+	Queue     []string  `json:"queue,omitempty"`     // queue: the waiting messages
+	Engine    string    `json:"engine,omitempty"`    // engine_switched, turn_done: the engine running the session
+	KeepFrom  int64     `json:"keep_from,omitempty"` // compacted: events from this seq on are kept
 }
 
 // ToolCall is set on tool_call and tool_result events.
@@ -85,11 +87,14 @@ type SessionFilter struct {
 	Cursor  string
 }
 
-// EventFilter selects events of one session with Seq > AfterSeq, oldest first.
+// EventFilter selects events of one session with Seq > AfterSeq, oldest
+// first. With Query set it is a full-text search instead (all sessions when
+// SessionID is empty), best matches first.
 type EventFilter struct {
 	SessionID string
 	AfterSeq  int64
 	Limit     int
+	Query     string
 }
 
 // WatchFilter selects live events. AfterSeq replays stored events first.

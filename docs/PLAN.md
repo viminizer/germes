@@ -631,6 +631,10 @@ internal/tool/blocked.go    block list matching
 
 ## Prompt module
 
+### Germes knows its own config
+
+Every Germes agent (Codex loop and Claude) knows how Germes is configured: where `~/.germes/config.yaml` is, what each field means (engines, model, effort, reserve, reserve_off, blocked), and the commands (`germes reserve on|off <engine>`, `germes daemon restart`). When I ask any Germes agent to change the config, it can do it, by editing the file or by running the command. The daemon reloads the config on its own when no turn is running. (Kevin, 2026-10-29.)
+
 `internal/prompt` builds the system prompt for a session.
 
 ```go
@@ -1195,7 +1199,12 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
 1. First working chat: TUI -> daemon -> session -> `engine/claude`, with `api`, `store`, minimal `config`, daemon auto-start, `ls`, `stop`, `-c`, `attach`. Done.
 2. Own loop: `llm/codex`, `engine/loop`, `tool`, `env`, file and shell tools, `prompt`. Done. Until the router, the daemon uses the first engine in config order that can run (Codex login found, or `claude` on PATH).
 3. Router: limits, reserves, handoff, Codex <-> Claude switching. Done. Shown live both ways: Codex -> Claude (Codex reserved at 83% weekly) and Claude -> Codex, with context kept.
-4. Memory and skills: `memory`, `skill`, search, compaction.
+4. Memory and skills: `memory`, `skill`, search, compaction. Done:
+   - `memory` tool (MEMORY.md / USER.md), `skill_view` / `skill_save` (skills from `~/.germes/skills` and read-only `~/.claude/skills`), `session_search` (SQLite FTS5 over event text).
+   - The prompt has the Germes config knowledge, the skills index (descriptions cut to 200 characters) and memory. Claude gets the same parts through `--append-system-prompt`, so it edits memory and skills as plain files.
+   - Compaction: at the start of a turn, when history is over half the context window (default 200k tokens), older events are summarized; a `compacted` event saves the summary and `keep_from`. Next turns load the summary plus the kept events. Inside a long turn, old tool outputs are trimmed instead.
+   - Background review: after 10 tool calls without saving memory or a skill, a silent review with only memory and skill tools runs after the turn.
+   - Checked live: memory saved, config edited by the agent, search found an old session, the right skill named, review ran, Claude knew the config path and memory.
 5. Worktrees.
 6. Jobs, then workflows.
 7. MCP and the overseer.

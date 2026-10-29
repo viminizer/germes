@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/viminizer/germes/internal/engine"
+	"github.com/viminizer/germes/internal/prompt"
 )
 
 // Name is this engine's name in config and resume ids.
@@ -23,10 +24,17 @@ const Name = "claude-cli"
 // idleTimeout kills a claude process that prints nothing for this long.
 const idleTimeout = 10 * time.Minute
 
+// Prompts builds the Germes part of the prompt (config knowledge, project,
+// skills, memory) that goes into --append-system-prompt.
+type Prompts interface {
+	Create(ctx context.Context, dir string, role prompt.Role) (prompt.Prompt, error)
+}
+
 // Options configure the engine.
 type Options struct {
 	Model   string   // "" = the CLI's default
 	Blocked []string // passed as --disallowedTools
+	Prompts Prompts  // nil = no Germes prompt parts
 }
 
 // Claude is the claude CLI engine.
@@ -42,8 +50,16 @@ func (c *Claude) Name() string { return Name }
 
 // Run starts claude for one turn and streams its events.
 func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
+	extra := t.Extra
+	if c.opts.Prompts != nil {
+		p, err := c.opts.Prompts.Create(ctx, t.Dir, prompt.RoleProject)
+		if err != nil {
+			return nil, fmt.Errorf("build prompt: %w", err)
+		}
+		extra = strings.TrimSpace(p.Extra + "\n\n" + t.Extra)
+	}
 	ctx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(ctx, "claude", c.args(t)...)
+	cmd := exec.CommandContext(ctx, "claude", c.args(t, extra)...)
 	cmd.Dir = t.Dir
 	cmd.Stdin = strings.NewReader(t.Prompt)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -79,7 +95,7 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 	return out, nil
 }
 
-func (c *Claude) args(t engine.Turn) []string {
+func (c *Claude) args(t engine.Turn, extra string) []string {
 	args := []string{"-p",
 		"--output-format", "stream-json", "--verbose", "--include-partial-messages",
 		// Yolo without --dangerously-skip-permissions: allow the tools, and
@@ -97,8 +113,8 @@ func (c *Claude) args(t engine.Turn) []string {
 	if id := t.ResumeIDs[Name]; id != "" {
 		args = append(args, "--resume", id)
 	}
-	if t.Extra != "" {
-		args = append(args, "--append-system-prompt", t.Extra)
+	if extra != "" {
+		args = append(args, "--append-system-prompt", extra)
 	}
 	return args
 }

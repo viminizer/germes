@@ -3,12 +3,15 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/engine"
 	"github.com/viminizer/germes/internal/llm"
+	"github.com/viminizer/germes/internal/memory"
 	"github.com/viminizer/germes/internal/prompt"
+	"github.com/viminizer/germes/internal/skill"
 	"github.com/viminizer/germes/internal/tool"
 )
 
@@ -42,7 +45,7 @@ func TestLoopRunsToolsThenAnswers(t *testing.T) {
 	}
 	model := &fakeModel{}
 	history := fakeHistory{{Seq: 1, Kind: api.KindUserMessage, Text: "hi"}}
-	l := New(model, reg, prompt.NewBuilder(t.TempDir()), history, Options{Name: "fake", Toolsets: []string{"core"}})
+	l := New(model, reg, prompt.NewBuilder(t.TempDir(), noMemory{}, noSkills{}), history, Options{Name: "fake", Toolsets: []string{"core"}})
 	events, err := l.Run(context.Background(), engine.Turn{SessionID: "s", Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -76,5 +79,69 @@ func TestHistoryClosesInterruptedCalls(t *testing.T) {
 		if msgs[i].Role != r {
 			t.Fatalf("message %d is %s, want %s", i, msgs[i].Role, r)
 		}
+	}
+}
+
+type noMemory struct{}
+
+func (noMemory) Load(context.Context) (memory.Snapshot, error) { return memory.Snapshot{}, nil }
+
+type noSkills struct{}
+
+func (noSkills) List(context.Context) ([]skill.Summary, error) { return nil, nil }
+
+// summaryModel answers every request with one fixed text.
+type summaryModel struct{ calls int }
+
+func (m *summaryModel) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, error) {
+	m.calls++
+	out := make(chan llm.Chunk, 2)
+	out <- llm.Chunk{Kind: llm.KindText, Text: "SUMMARY"}
+	out <- llm.Chunk{Kind: llm.KindDone}
+	close(out)
+	return out, nil
+}
+
+func TestCompactionKeepsTailAndLoadsSummary(t *testing.T) {
+	big := strings.Repeat("x", 2000)
+	var events []api.Event
+	for i := int64(1); i <= 20; i += 2 {
+		events = append(events, api.Event{Seq: i, Kind: api.KindUserMessage, Text: "question " + big},
+			api.Event{Seq: i + 1, Kind: api.KindText, Text: "answer " + big})
+	}
+	model := &summaryModel{}
+	l := New(model, nil, nil, nil, Options{ContextWindow: 8000}) // half = 4000 tokens = 16k chars
+	summary, keepFrom, ok, err := l.compact(context.Background(), "", events)
+	if err != nil || !ok || summary != "SUMMARY" {
+		t.Fatalf("compact: %q %v %v", summary, ok, err)
+	}
+	var keepEvent api.Event
+	for _, ev := range events {
+		if ev.Seq == keepFrom {
+			keepEvent = ev
+		}
+	}
+	if keepEvent.Kind != api.KindUserMessage || keepFrom <= 1 || keepFrom >= 20 {
+		t.Fatalf("keepFrom %d (%s) is not a user message in the middle", keepFrom, keepEvent.Kind)
+	}
+
+	// The next turn loads the summary, then exactly the kept events.
+	events = append(events, api.Event{Seq: 21, Kind: api.KindCompacted, Text: summary, KeepFrom: keepFrom},
+		api.Event{Seq: 22, Kind: api.KindUserMessage, Text: "new question"})
+	msgs := messages(events)
+	if !strings.Contains(msgs[0].Text, "SUMMARY") {
+		t.Fatalf("first message is not the summary: %q", msgs[0].Text)
+	}
+	if want := int(21-keepFrom) + 1 + 1; len(msgs) != want {
+		t.Fatalf("got %d messages, want summary + %d kept + new question", len(msgs), want-2)
+	}
+	if last := msgs[len(msgs)-1]; last.Text != "new question" {
+		t.Fatalf("last message %q", last.Text)
+	}
+
+	// Small history: no compaction, no model call.
+	model.calls = 0
+	if _, _, ok, _ := l.compact(context.Background(), "", events[:2]); ok || model.calls != 0 {
+		t.Fatalf("compacted a small history")
 	}
 }

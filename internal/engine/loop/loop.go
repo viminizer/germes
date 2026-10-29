@@ -27,6 +27,12 @@ type Options struct {
 	Name     string   // engine name, e.g. "codex-api"
 	Toolsets []string // tools the model may use
 	MaxSteps int      // model calls per turn before the wrap-up call; 0 = 50
+	// ContextWindow is the model's context size in tokens; history is
+	// compacted at half of it. 0 = 200k.
+	ContextWindow int
+	// ReviewToolsets are the tools of the background self-learning review
+	// (memory and skills). Empty: no review.
+	ReviewToolsets []string
 }
 
 // Loop is the engine.
@@ -39,6 +45,7 @@ type Loop struct {
 
 	mu     sync.Mutex
 	frozen map[string]string // session id -> system prompt, frozen for the cache
+	steps  map[string]int    // session id -> tool calls since memory/skills were last saved
 }
 
 var _ engine.Engine = (*Loop)(nil)
@@ -48,7 +55,11 @@ func New(client llm.Client, tools *tool.Registry, prompts *prompt.Builder, histo
 	if opts.MaxSteps <= 0 {
 		opts.MaxSteps = 50
 	}
-	return &Loop{client: client, tools: tools, prompts: prompts, history: history, opts: opts, frozen: map[string]string{}}
+	if opts.ContextWindow <= 0 {
+		opts.ContextWindow = 200_000
+	}
+	return &Loop{client: client, tools: tools, prompts: prompts, history: history, opts: opts,
+		frozen: map[string]string{}, steps: map[string]int{}}
 }
 
 // Name returns the engine name.
@@ -56,7 +67,7 @@ func (l *Loop) Name() string { return l.opts.Name }
 
 // Run runs one turn. The user's message is already in the session history.
 func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
-	msgs, err := l.load(ctx, t.SessionID)
+	events, err := l.loadEvents(ctx, t.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +84,18 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 				l.send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("internal error: %v", p)})
 			}
 		}()
-		l.turn(ctx, t, system, msgs, out)
+		summary, keepFrom, ok, err := l.compact(ctx, system, events)
+		if err != nil {
+			// Not fatal: the turn still runs; the model may reject a too-long input.
+			slog.Warn("compaction failed", "session", t.SessionID, "err", err)
+		}
+		if ok {
+			// Saved by the session before anything else of this turn, so the
+			// next turn loads the summary plus the kept events.
+			l.send(ctx, out, engine.Event{Kind: engine.KindCompacted, Text: summary, KeepFrom: keepFrom})
+			events = append(events, api.Event{Kind: api.KindCompacted, Text: summary, KeepFrom: keepFrom})
+		}
+		l.turn(ctx, t, system, messages(events), out)
 	}()
 	return out, nil
 }
@@ -103,7 +125,16 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		// the provider's prompt cache keeps working.
 		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
+	reviewDue := false
+	defer func() {
+		if reviewDue {
+			l.review(t.SessionID, t.Dir) // after the turn, in the background
+		}
+	}()
 	for step := 0; step <= l.opts.MaxSteps; step++ {
+		if tokens(system, msgs) > l.opts.ContextWindow/2 {
+			prune(msgs, 10) // a long turn: drop old tool outputs, keep the newest
+		}
 		req := llm.Request{System: system, Messages: msgs, Tools: specs, CacheKey: t.SessionID}
 		if step == l.opts.MaxSteps {
 			// Grace call: no tools, just wrap up.
@@ -152,6 +183,9 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		if len(calls) == 0 {
 			l.send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
 			return
+		}
+		if l.countSteps(t.SessionID, calls) {
+			reviewDue = true
 		}
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})
 		for _, call := range calls {

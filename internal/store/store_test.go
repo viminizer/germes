@@ -66,3 +66,29 @@ func TestSessionsAndEvents(t *testing.T) {
 		t.Fatalf("events kept after delete: last seq %d", last)
 	}
 }
+
+func TestSearchEvents(t *testing.T) {
+	ctx := context.Background()
+	s, err := New(filepath.Join(t.TempDir(), "germes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(100, 0)
+	for _, id := range []string{"a", "b"} {
+		s.CreateSession(ctx, api.Session{ID: id, Title: id, Project: "/p", Dir: "/p", Status: api.StatusIdle, CreatedAt: now, UpdatedAt: now})
+	}
+	s.CreateEvent(ctx, api.Event{SessionID: "a", Seq: 1, Time: now, Kind: api.KindUserMessage, Text: "the lighthouse keeper story"})
+	s.CreateEvent(ctx, api.Event{SessionID: "b", Seq: 1, Time: now, Kind: api.KindText, Text: "deploy the API to staging"})
+	page, err := s.ListEvents(ctx, api.EventFilter{Query: `lighthouse "keeper`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].SessionID != "a" {
+		t.Fatalf("search = %+v", page.Items)
+	}
+	s.DeleteSession(ctx, "a")
+	if page, _ := s.ListEvents(ctx, api.EventFilter{Query: "lighthouse"}); len(page.Items) != 0 {
+		t.Fatalf("deleted session still found: %+v", page.Items)
+	}
+}

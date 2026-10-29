@@ -8,9 +8,8 @@ import (
 	"github.com/viminizer/germes/internal/llm"
 )
 
-// load turns the session's stored events into chat messages. Engine-neutral:
-// turns run by another engine (Claude) are read the same way.
-func (l *Loop) load(ctx context.Context, sessionID string) ([]llm.Message, error) {
+// loadEvents reads every stored event of a session.
+func (l *Loop) loadEvents(ctx context.Context, sessionID string) ([]api.Event, error) {
 	var events []api.Event
 	var after int64
 	for {
@@ -24,12 +23,45 @@ func (l *Loop) load(ctx context.Context, sessionID string) ([]llm.Message, error
 		}
 		after = page.Items[len(page.Items)-1].Seq
 	}
-	return messages(events), nil
+	return events, nil
 }
 
-// messages converts events. Every tool call gets a result: a call without
-// one (an interrupted turn) gets "interrupted", or the API rejects the list.
+// effective applies the last compaction: its summary stands in for every
+// event before its KeepFrom.
+func effective(events []api.Event) (summary string, kept []api.Event) {
+	last := -1
+	for i, ev := range events {
+		if ev.Kind == api.KindCompacted {
+			last = i
+		}
+	}
+	if last < 0 {
+		return "", events
+	}
+	c := events[last]
+	for _, ev := range events {
+		if ev.Seq >= c.KeepFrom && ev.Kind != api.KindCompacted {
+			kept = append(kept, ev)
+		}
+	}
+	return c.Text, kept
+}
+
+// messages converts events to chat messages, after applying the last
+// compaction. Engine-neutral: turns run by Claude are read the same way.
 func messages(events []api.Event) []llm.Message {
+	summary, kept := effective(events)
+	var out []llm.Message
+	if summary != "" {
+		out = append(out, llm.Message{Role: llm.RoleUser, Text: "[Germes] Summary of the earlier conversation:\n\n" + summary})
+	}
+	return append(out, convert(kept)...)
+}
+
+// convert maps events to messages. Every tool call gets a result: a call
+// without one (an interrupted turn) gets "interrupted", or the API rejects
+// the list.
+func convert(events []api.Event) []llm.Message {
 	var out []llm.Message
 	open := map[string]bool{} // tool calls still waiting for a result
 	closeOpen := func() {
@@ -50,11 +82,12 @@ func messages(events []api.Event) []llm.Message {
 			if ev.Tool == nil {
 				continue
 			}
+			call := llm.ToolCall{ID: ev.Tool.ID, Name: ev.Tool.Name, Args: ev.Tool.Args}
 			// Calls of one step share one assistant message.
 			if n := len(out); n > 0 && out[n-1].Role == llm.RoleAssistant && out[n-1].Text == "" {
-				out[n-1].ToolCalls = append(out[n-1].ToolCalls, llm.ToolCall{ID: ev.Tool.ID, Name: ev.Tool.Name, Args: ev.Tool.Args})
+				out[n-1].ToolCalls = append(out[n-1].ToolCalls, call)
 			} else {
-				out = append(out, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: ev.Tool.ID, Name: ev.Tool.Name, Args: ev.Tool.Args}}})
+				out = append(out, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}})
 			}
 			open[ev.Tool.ID] = true
 		case api.KindToolResult:

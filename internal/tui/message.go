@@ -85,7 +85,7 @@ func toolLabel(t *api.ToolCall, dir string) string {
 	var args map[string]any
 	json.Unmarshal(t.Args, &args)
 	preview := ""
-	for _, k := range []string{"command", "file_path", "pattern", "url", "query", "description"} {
+	for _, k := range []string{"command", "file_path", "pattern", "url", "query", "name", "text", "description"} {
 		if s, ok := args[k].(string); ok && s != "" {
 			preview = s
 			break

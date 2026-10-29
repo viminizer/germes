@@ -25,13 +25,18 @@ import (
 	"github.com/viminizer/germes/internal/engine/loop"
 	"github.com/viminizer/germes/internal/env"
 	"github.com/viminizer/germes/internal/llm/codex"
+	"github.com/viminizer/germes/internal/memory"
 	"github.com/viminizer/germes/internal/prompt"
 	"github.com/viminizer/germes/internal/router"
 	"github.com/viminizer/germes/internal/session"
+	"github.com/viminizer/germes/internal/skill"
 	"github.com/viminizer/germes/internal/store"
 	"github.com/viminizer/germes/internal/tool"
 	"github.com/viminizer/germes/internal/tools/files"
+	memorytool "github.com/viminizer/germes/internal/tools/memory"
+	"github.com/viminizer/germes/internal/tools/search"
 	"github.com/viminizer/germes/internal/tools/shell"
+	"github.com/viminizer/germes/internal/tools/skills"
 	"github.com/viminizer/germes/internal/tui"
 )
 
@@ -308,24 +313,36 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, err
 	if len(names) == 0 {
 		return nil, errors.New("no engine found: log in with `codex login`, or install Claude Code")
 	}
+	mem := memory.New(filepath.Join(p.home, "memories"))
+	home, _ := os.UserHomeDir()
+	skillStore := skill.New(filepath.Join(p.home, "skills"), filepath.Join(home, ".claude", "skills"))
+	prompts := prompt.NewBuilder(p.home, mem, skillStore)
+
+	tools := append(files.New(), shell.New(env.NewLocal())...)
+	tools = append(tools, memorytool.New(mem)...)
+	tools = append(tools, skills.New(skillStore)...)
+	tools = append(tools, search.New(st)...)
+	toolsets := map[string]tool.Toolset{
+		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
+		"learn":   {Tools: []string{"memory", "skill_view", "skill_save"}},
+		"project": {Tools: []string{"session_search"}, Includes: []string{"core", "learn"}},
+		"review":  {Includes: []string{"learn"}},
+	}
+	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
+	if err != nil {
+		return nil, err
+	}
+
 	var engines []engine.Engine
 	for _, name := range names {
 		ec := cfg.GetEngine(name)
 		if name == claude.Name {
-			engines = append(engines, claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked}))
+			engines = append(engines, claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked, Prompts: prompts}))
 			continue
 		}
-		tools := append(files.New(), shell.New(env.NewLocal())...)
-		toolsets := map[string]tool.Toolset{
-			"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
-			"project": {Includes: []string{"core"}},
-		}
-		reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
-		if err != nil {
-			return nil, err
-		}
 		client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
-		engines = append(engines, loop.New(client, reg, prompt.NewBuilder(p.home), st, loop.Options{Name: name, Toolsets: []string{"project"}}))
+		engines = append(engines, loop.New(client, reg, prompts, st, loop.Options{
+			Name: name, Toolsets: []string{"project"}, ReviewToolsets: []string{"review"}}))
 	}
 	return router.New(engines, cfg.Engines, st, time.Now)
 }

@@ -42,6 +42,8 @@ func (t *transcript) apply(ev api.Event) []message {
 		return append(t.flushText(), message{Kind: kindError, Text: ev.Text})
 	case api.KindEngineSwitched:
 		return []message{{Kind: kindSwitch, Text: ev.Text}}
+	case api.KindCompacted:
+		return []message{{Kind: kindNotice, Text: "older history was summarized to keep the context small"}}
 	case api.KindTurnDone:
 		return t.flush()
 	}

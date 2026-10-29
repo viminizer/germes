@@ -38,7 +38,8 @@ const (
 	KindUsage      Kind = "usage"
 	KindLimitHit   Kind = "limit_hit"
 	KindDone       Kind = "done"
-	KindSwitched   Kind = "switched" // the router moved the turn to another engine (Text, Engine)
+	KindSwitched   Kind = "switched"  // the router moved the turn to another engine (Text, Engine)
+	KindCompacted  Kind = "compacted" // older history was summarized (Text, KeepFrom)
 	KindError      Kind = "error"
 )
 
@@ -52,6 +53,7 @@ type Event struct {
 	ResetAt  time.Time // limit_hit
 	ResumeID string    // done
 	Engine   string    // done, switched: the engine that ran (or now runs) the turn
+	KeepFrom int64     // compacted: events from this seq on are kept as they are
 	Err      error     // error
 }
 

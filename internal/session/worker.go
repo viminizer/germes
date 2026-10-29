@@ -212,6 +212,8 @@ func (w *worker) handle(ev engine.Event) {
 			text += ", resets " + ev.ResetAt.Format("Jan 2 15:04")
 		}
 		w.emit(api.Event{Kind: api.KindLimitHit, Text: text})
+	case engine.KindCompacted:
+		w.emit(api.Event{Kind: api.KindCompacted, Text: ev.Text, KeepFrom: ev.KeepFrom})
 	case engine.KindSwitched:
 		w.sess.Engine = ev.Engine
 		w.emit(api.Event{Kind: api.KindEngineSwitched, Text: ev.Text, Engine: ev.Engine})

@@ -17,7 +17,7 @@ var allowed = map[string][]string{
 	"internal/api":           {},
 	"internal/config":        {},
 	"internal/engine":        {},
-	"internal/engine/claude": {"internal/engine"},
+	"internal/engine/claude": {"internal/engine", "internal/prompt"},
 	"internal/store":         {"internal/api", "internal/engine"},
 	"internal/session":       {"internal/api", "internal/engine"},
 	"internal/daemon":        {"internal/api", "internal/session", "internal/job", "internal/router"},
@@ -33,6 +33,11 @@ var allowed = map[string][]string{
 	"internal/engine/loop":   {"internal/engine", "internal/llm", "internal/tool", "internal/prompt", "internal/api"},
 	"internal/tools/files":   {"internal/tool", "internal/env"},
 	"internal/tools/shell":   {"internal/tool", "internal/env"},
+	"internal/memory":        {},
+	"internal/skill":         {},
+	"internal/tools/memory":  {"internal/tool", "internal/memory"},
+	"internal/tools/skills":  {"internal/tool", "internal/skill"},
+	"internal/tools/search":  {"internal/tool", "internal/api"},
 }
 
 func TestImports(t *testing.T) {

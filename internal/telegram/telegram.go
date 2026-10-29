@@ -27,6 +27,18 @@ const (
 	typingEvery = 4 * time.Second // Telegram shows "typing" for about 5 s
 )
 
+// commands are the bot's slash commands, for the group's command menu and
+// /help. /project also works, as another name for /bind (tg-supervisor's).
+var commands = []struct{ Name, Help string }{
+	{"bind", "Tie this topic to a project: /bind <name or path>"},
+	{"status", "This topic's project, session and running jobs"},
+	{"new", "A fresh session in this topic's project"},
+	{"stop", "Stop the running turn"},
+	{"sessions", "Recent sessions"},
+	{"unbind", "This topic talks to the overseer again"},
+	{"help", "What the bot does"},
+}
+
 // Options configure the bot.
 type Options struct {
 	Token     string
@@ -85,6 +97,7 @@ func New(svc api.Service, opts Options) *Telegram {
 // Run polls Telegram and sends answers until ctx ends.
 func (t *Telegram) Run(ctx context.Context) error {
 	slog.Info("telegram bot started")
+	t.setCommands(ctx)
 	go recovered("telegram watch", func() { t.watch(ctx) })
 	go recovered("telegram typing", func() { t.showTyping(ctx) })
 	for ctx.Err() == nil {
@@ -196,8 +209,10 @@ func (t *Telegram) command(ctx context.Context, thread int64, text string) {
 	tp, bound := t.state.Topics[thread]
 	t.mu.Unlock()
 	switch name {
-	case "bind":
+	case "bind", "project":
 		t.bind(ctx, thread, arg)
+	case "status":
+		t.status(ctx, thread)
 	case "unbind":
 		t.mu.Lock()
 		delete(t.state.Topics, thread)
@@ -232,9 +247,87 @@ func (t *Telegram) command(ctx context.Context, thread int64, text string) {
 	case "sessions":
 		t.listSessions(ctx, thread)
 	default:
-		t.reply(ctx, thread, "Commands: /bind <project> (bind this topic), /unbind, /new (a fresh session), /stop, /sessions. "+
-			"Anything else goes to this topic's session, or to the overseer.")
+		var b strings.Builder
+		b.WriteString("A topic bound to a project talks to that project's session; General and other topics talk to the overseer.\n\n")
+		for _, c := range commands {
+			fmt.Fprintf(&b, "/%s - %s\n", c.Name, c.Help)
+		}
+		t.reply(ctx, thread, b.String())
 	}
+}
+
+// setCommands shows the bot's commands in the group's menu (replacing a
+// menu an earlier bot left there).
+func (t *Telegram) setCommands(ctx context.Context) {
+	var list []map[string]string
+	for _, c := range commands {
+		list = append(list, map[string]string{"command": c.Name, "description": c.Help})
+	}
+	params := map[string]any{"commands": list, "scope": map[string]any{"type": "chat", "chat_id": t.opts.ChatID}}
+	if err := t.bot.call(ctx, "setMyCommands", params, nil); err != nil {
+		slog.Warn("telegram set commands", "err", err)
+	}
+}
+
+// status tells what the topic talks to, how its session is doing, and
+// which jobs run (in its project, or all of them in General).
+func (t *Telegram) status(ctx context.Context, thread int64) {
+	var b strings.Builder
+	if d, err := t.svc.GetDaemon(ctx); err == nil {
+		fmt.Fprintf(&b, "Germes %s\n", d.Version)
+	}
+	t.mu.Lock()
+	tp, bound := t.state.Topics[thread]
+	t.mu.Unlock()
+	sessionID := api.OverseerID
+	if bound {
+		fmt.Fprintf(&b, "Project: %s\n", tp.Project)
+		sessionID = tp.SessionID
+	} else {
+		b.WriteString("Talks to: the overseer\n")
+	}
+	s, err := api.Session{}, errors.New("no session")
+	if sessionID != "" {
+		s, err = t.svc.GetSession(ctx, sessionID)
+	}
+	if err == nil {
+		engine := s.Engine
+		if engine == "" {
+			engine = "none yet"
+		}
+		where := "the project folder"
+		if s.Branch != "" {
+			where = "worktree " + s.Branch
+		}
+		fmt.Fprintf(&b, "Session: %s, %s, engine %s, in %s", s.ID, s.Status, engine, where)
+		if len(s.Queued) > 0 {
+			fmt.Fprintf(&b, ", %d queued", len(s.Queued))
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("Session: none yet (the next message starts one)\n")
+	}
+	jobs, err := t.svc.ListJobs(ctx, api.JobFilter{Status: api.JobRunning, Limit: 50})
+	var lines []string
+	for _, j := range jobs.Items {
+		if bound && j.Dir != tp.Project && !strings.HasPrefix(j.Dir, tp.Project+"/") {
+			continue
+		}
+		line := fmt.Sprintf("- %s: round %d", j.Name, j.Runs)
+		if j.Step != "" {
+			line += ", step " + j.Step
+		}
+		lines = append(lines, line)
+	}
+	switch {
+	case err != nil:
+		fmt.Fprintf(&b, "Jobs: %v\n", err)
+	case len(lines) == 0:
+		b.WriteString("Jobs: none running\n")
+	default:
+		b.WriteString("Running jobs:\n" + strings.Join(lines, "\n"))
+	}
+	t.reply(ctx, thread, b.String())
 }
 
 func (t *Telegram) listSessions(ctx context.Context, thread int64) {

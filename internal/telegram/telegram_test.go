@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ type fakeAPI struct {
 	mu      sync.Mutex
 	updates []update
 	sent    []map[string]any // sendMessage params
+	methods []string         // every method called
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +36,9 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var params map[string]any
 	json.Unmarshal(body, &params)
 	method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+	f.mu.Lock()
+	f.methods = append(f.methods, method)
+	f.mu.Unlock()
 	result := any(true)
 	switch method {
 	case "getUpdates":
@@ -106,6 +111,14 @@ func (s *fakeService) GetSession(ctx context.Context, id string) (api.Session, e
 	return api.Session{ID: id, Status: api.StatusIdle}, nil
 }
 
+func (s *fakeService) GetDaemon(ctx context.Context) (api.Daemon, error) {
+	return api.Daemon{Version: "9.9.9"}, nil
+}
+
+func (s *fakeService) ListJobs(ctx context.Context, f api.JobFilter) (api.Page[api.Job], error) {
+	return api.Page[api.Job]{Items: []api.Job{{Name: "nightly", Dir: "/elsewhere", Runs: 3}}}, nil
+}
+
 func (s *fakeService) ListSessions(ctx context.Context, f api.SessionFilter) (api.Page[api.Session], error) {
 	return api.Page[api.Session]{}, nil
 }
@@ -143,11 +156,11 @@ func TestTopicsRouteToSessions(t *testing.T) {
 	go tg.Run(ctx)
 
 	fake.push(
-		msg(1, 0, 999, "I am not Kevin"),     // ignored
-		msg(2, 0, kevin, "what is running?"), // General: the overseer
-		msg(3, 7, kevin, "/bind "+project),   // topic 7: bound
-		msg(4, 7, kevin, "add dark mode"),    // its project's new session
-		msg(5, 7, kevin, "and a toggle"),     // the same session
+		msg(1, 0, 999, "I am not Kevin"),      // ignored
+		msg(2, 0, kevin, "what is running?"),  // General: the overseer
+		msg(3, 7, kevin, "/project "+project), // topic 7: bound
+		msg(4, 7, kevin, "add dark mode"),     // its project's new session
+		msg(5, 7, kevin, "and a toggle"),      // the same session
 		update{ID: 6, Message: &message{ID: 6, ThreadID: 2, From: &user{ID: kevin}, Chat: chat{ID: chatID}, Text: "a reply in General"}},
 	)
 	got := svc.waitMessages(t, 4)
@@ -176,9 +189,30 @@ func TestTopicsRouteToSessions(t *testing.T) {
 		t.Fatal("the notice went to the wrong topic")
 	}
 
+	// /status tells the topic's project and session; a job elsewhere is
+	// not this topic's. The command menu was set.
+	fake.push(msg(8, 7, kevin, "/status"))
+	fake.waitSent(t, "Project: "+project)
+	fake.mu.Lock()
+	for _, p := range fake.sent {
+		if strings.Contains(p["text"].(string), "nightly") {
+			t.Error("status listed another project's job")
+		}
+	}
+	menu := slices.Contains(fake.methods, "setMyCommands")
+	fake.mu.Unlock()
+	if !menu {
+		t.Error("no command menu set")
+	}
+
 	// The binding survives a restart.
-	again := New(svc, Options{StatePath: tg.opts.StatePath})
-	if again.state.Topics[7].Project != project || again.state.Topics[7].SessionID != "s1" || again.state.Offset != 7 {
+	var again *Telegram
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if again = New(svc, Options{StatePath: tg.opts.StatePath}); again.state.Offset == 9 {
+			break // saved just after the last reply
+		}
+	}
+	if again.state.Topics[7].Project != project || again.state.Topics[7].SessionID != "s1" || again.state.Offset != 9 {
 		t.Fatalf("saved state: %+v", again.state)
 	}
 }

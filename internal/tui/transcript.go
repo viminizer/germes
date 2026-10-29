@@ -37,7 +37,8 @@ func (t *transcript) apply(ev api.Event) []message {
 	case api.KindToolResult:
 		return t.finishTool(ev.Tool)
 	case api.KindError, api.KindLimitHit:
-		return []message{{Kind: kindError, Text: ev.Text}}
+		// Text streamed so far comes first, then the error under it.
+		return append(t.flushText(), message{Kind: kindError, Text: ev.Text})
 	case api.KindEngineSwitched:
 		return []message{{Kind: kindNotice, Text: ev.Text}}
 	case api.KindTurnDone:
@@ -66,16 +67,22 @@ func (t *transcript) finishTool(result *api.ToolCall) []message {
 
 // flush ends the turn: leftover text and tools without a result are printed.
 func (t *transcript) flush() []message {
-	var out []message
-	if s := strings.TrimSpace(t.streaming.String()); s != "" {
-		out = append(out, message{Kind: kindAssistant, Text: s})
-	}
-	t.streaming.Reset()
+	out := t.flushText()
 	for _, call := range t.running {
 		out = append(out, message{Kind: kindTool, Tool: call})
 	}
 	t.running = nil
 	return out
+}
+
+// flushText returns the text streamed so far as a message, and clears it.
+func (t *transcript) flushText() []message {
+	s := strings.TrimSpace(t.streaming.String())
+	t.streaming.Reset()
+	if s == "" {
+		return nil
+	}
+	return []message{{Kind: kindAssistant, Text: s}}
 }
 
 // lastSeqShown is the last stored event shown, for reconnecting.

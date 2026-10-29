@@ -16,8 +16,8 @@ const helpText = `Commands:
   /rename <text>  rename this session
   /help           this help
   /exit           quit (the session keeps running)
-Keys: Enter send · Shift+Enter or Alt+Enter new line · Esc stop (drops the queue)
-      Esc Esc stop and send the queue now · Ctrl+C quit`
+Keys: Enter send · Shift+Enter or Alt+Enter new line · Ctrl+C quit
+      Esc Esc stop the turn (queued messages then run right away)`
 
 // command runs a slash command.
 func (m *model) command(text string) tea.Cmd {

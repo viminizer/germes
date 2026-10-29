@@ -910,7 +910,7 @@ Keys (I use Ctrl for other things, so almost none):
 |---|---|
 | Enter | send |
 | Shift+Enter | new line (Alt+Enter as backup in terminals that cannot tell Shift+Enter apart) |
-| Esc | stop the current step (`StopSession`) |
+| Esc Esc | stop the current step (`StopSession`); one Esc alone does nothing |
 | Ctrl+C | quit (the session keeps running) |
 
 Slash commands, with autocomplete: `/sessions` (picker), `/switch`, `/rename`, `/overseer`, `/reserve`, `/new`, `/help`, `/exit` (quit, same as Ctrl+C). Handled in the TUI, they call `Service`.
@@ -1132,7 +1132,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - `Watch` stream drops: reconnect with `afterSeq`; nothing is missed.
 - Client too slow: its stream is closed; it reconnects and catches up.
 - Daemon dies while the TUI is open: show "daemon stopped", start it again, reconnect.
-- Message while busy: waits in the session's queue (max 100), shown above the status bar (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). Esc stops the turn and drops the queue. Esc Esc (within 400 ms) stops the turn and sends the queue right away (`StopSession` with `SendQueue`). With an empty queue, Esc stops at once (no wait).
+- Message while busy: waits in the session's queue (max 100), shown above the status bar (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). One Esc never interrupts: it only shows "Esc again to stop". Esc Esc (within 800 ms) stops the turn, and queued messages then run right away (`StopSession` with `SendQueue`). `germes stop <id>` stops and drops the queue.
 - Daemon stops with messages still queued: the queue lives in memory, so they are lost. Later: save the queue, if this happens in practice.
 
 ### Engines and models

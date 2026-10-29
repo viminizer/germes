@@ -34,8 +34,9 @@ type (
 	reconnectMsg  struct{ gen int }
 )
 
-// doubleEscWindow is how long a second Esc may follow the first.
-const doubleEscWindow = 400 * time.Millisecond
+// doubleEscWindow is how long a second Esc may follow the first. One Esc
+// never interrupts; Esc Esc does.
+const doubleEscWindow = 800 * time.Millisecond
 
 // model is the root: it owns the components and talks to the Service.
 type model struct {
@@ -50,7 +51,7 @@ type model struct {
 	gen         int // watch generation; events from older watches are ignored
 	watchCancel context.CancelFunc
 
-	escPending bool // one Esc pressed with a queue; a second sends the queue
+	escPending bool // one Esc pressed; a second within the window stops the turn
 	escGen     int  // ignores timeouts of older Esc presses
 
 	transcript transcript
@@ -139,8 +140,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.escPending || msg.gen != m.escGen {
 			return m, nil
 		}
-		m.escPending = false
-		return m, m.stop(false) // single Esc: stop and drop the queue
+		m.escPending, m.status.Hint = false, "" // one Esc alone does nothing
+		return m, nil
 
 	case tickMsg:
 		m.status.Frame++
@@ -165,15 +166,13 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.escPending {
-			// Second Esc in time: stop and send the queue right away.
-			m.escPending = false
+			// Esc Esc: stop the turn; queued messages run right away.
+			m.escPending, m.status.Hint = false, ""
 			return m, m.stop(true)
 		}
-		if len(m.queue.items) == 0 {
-			return m, m.stop(false) // nothing queued: no reason to wait
-		}
-		// First Esc with a queue: wait a moment for a second Esc.
-		m.escPending = true
+		// One Esc does not interrupt: it only arms the second one.
+		m.escPending, m.status.Hint = true, "Esc again to stop"
+
 		m.escGen++
 		gen := m.escGen
 		return m, tea.Tick(doubleEscWindow, func(time.Time) tea.Msg { return escTimeoutMsg{gen: gen} })
@@ -199,7 +198,7 @@ func (m *model) track(ev api.Event) tea.Cmd {
 	case api.KindUserMessage:
 		if !m.status.Busy {
 			m.status.Busy, m.status.Since, m.status.Note = true, time.Now(), ""
-			m.composer.setPlaceholder("Esc to stop…")
+			m.composer.setPlaceholder("Esc Esc to stop…")
 			return tick()
 		}
 	case api.KindQueue:

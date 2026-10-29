@@ -25,6 +25,7 @@ type statusBar struct {
 	Title     string
 	Project   string
 	Note      string // short message, e.g. "interrupted" or an error
+	Hint      string // shown instead of the state for a moment, e.g. "Esc again to stop"
 }
 
 // spinner returns the current spinner frame.
@@ -34,6 +35,8 @@ func (s statusBar) spinner() string { return spinnerFrames[s.Frame%len(spinnerFr
 func (s statusBar) view(width int) string {
 	var state string
 	switch {
+	case s.Hint != "":
+		state = styleAccent.Bold(true).Render(s.Hint)
 	case s.Busy:
 		face := busyFaces[(s.Frame/20)%len(busyFaces)]
 		state = styleMuted.Render(fmt.Sprintf("%s working… · %s", face, time.Since(s.Since).Round(time.Second)))

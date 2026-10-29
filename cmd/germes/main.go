@@ -70,7 +70,9 @@ const usage = `usage:
   germes job ls|start|stop|rm <id>  list, start, stop or delete jobs
   germes workflow ls|check <name>|new  list, check or write workflows
   germes reserve on|off <engine>  keep or drop an engine's usage reserve
+  germes doctor         check config, engines, database and daemon, and say how to fix them
   germes daemon stop    stop the daemon
+  germes daemon kill    stop a hung daemon (SIGTERM, then SIGKILL)
   germes daemon restart restart the daemon, cutting running turns (updates hand over on their own without cutting)`
 
 // paths are the files under the Germes home folder.
@@ -173,6 +175,8 @@ func run(args []string) error {
 		return workflowCommand(ctx, p, client, args[1:])
 	case "reserve":
 		return reserveCommand(p, args[1:])
+	case "doctor":
+		return doctor(ctx, p, client)
 	case "help", "-h", "--help":
 		fmt.Println(usage)
 		return nil
@@ -260,6 +264,8 @@ func daemonCommand(ctx context.Context, p paths, client *api.Client, sub string)
 	switch sub {
 	case "stop":
 		return cli.StopDaemon(ctx, client, os.Stdout)
+	case "kill":
+		return killDaemon(p)
 	case "restart":
 		if err := client.StopDaemon(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, "no daemon was running")
@@ -318,14 +324,13 @@ func ensureDaemon(ctx context.Context, p paths, client *api.Client) error {
 		return err
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := ping(ctx, client); err == nil {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
+	if waitUntil(5*time.Second, func() bool { _, err := ping(ctx, client); return err == nil }) {
+		return nil
 	}
-	return fmt.Errorf("the daemon did not start; see %s", p.log)
+	if pid, err := daemon.GetLockHolder(p.lock); err == nil && pid != 0 {
+		return fmt.Errorf("the daemon (pid %d) runs but does not answer; run `germes doctor`", pid)
+	}
+	return fmt.Errorf("the daemon did not start; run `germes doctor`, or see %s", p.log)
 }
 
 // newTelegram builds the Telegram bot when it is set up. It talks to the
@@ -437,14 +442,23 @@ func ping(ctx context.Context, client *api.Client) (api.Daemon, error) {
 }
 
 func waitDaemonGone(ctx context.Context, client *api.Client) error {
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := ping(ctx, client); err != nil {
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
+	if waitUntil(15*time.Second, func() bool { _, err := ping(ctx, client); return err != nil }) {
+		return nil
 	}
 	return errors.New("the old daemon did not stop")
+}
+
+// waitUntil checks ok every few milliseconds until it holds (true) or the
+// time is up (false).
+func waitUntil(d time.Duration, ok func() bool) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return ok()
 }
 
 // availableEngines lists the engines in config order that can run here.

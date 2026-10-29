@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,6 +20,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -410,6 +413,31 @@ func listen(path string) (net.Listener, error) {
 	return ln, nil
 }
 
+// GetLockHolder returns the pid of the daemon holding the lock at path, or
+// 0 when no daemon holds it.
+func GetLockHolder(path string) (int, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	if syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) == nil {
+		return 0, nil // free: nobody holds it (closing releases ours)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, fmt.Errorf("lock %s is held, but has no pid (an older daemon)", path)
+	}
+	return pid, nil
+}
+
 // lock takes an exclusive lock on path, or fails if another daemon has it.
 func lock(path string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
@@ -419,6 +447,12 @@ func lock(path string) (func(), error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		return nil, errors.New("another germes daemon is already running")
+	}
+	// Our pid in the file: `germes doctor` and `germes daemon kill` read it.
+	if err := f.Truncate(0); err != nil {
+		slog.Warn("write pid to the lock", "err", err)
+	} else if _, err := f.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0); err != nil {
+		slog.Warn("write pid to the lock", "err", err)
 	}
 	var once sync.Once
 	return func() { once.Do(func() { f.Close() }) }, nil

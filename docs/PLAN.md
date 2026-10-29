@@ -1152,7 +1152,9 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 
 ### Startup and daemon
 - No engine found: print how to log in, exit.
-- Daemon does not answer within a few seconds: show the path to `daemon.log`, exit.
+- Daemon does not answer within a few seconds: say whether it runs but hangs (it holds the lock; its pid is in `daemon.lock`) or did not start, and point to `germes doctor` (issue #3).
+- `germes doctor` (no daemon needed) checks the home folder, the config, the engines, the database and the daemon (not running, answering, or hung), lists old daemons finishing turns, and says how to fix each problem.
+- A hung daemon: `germes daemon kill` sends SIGTERM, then SIGKILL after 5 s (and SIGCONT, so a frozen one dies). The next `germes` starts a fresh daemon, which marks the cut turns `interrupted`.
 - Leftover socket file: delete it, start a new daemon.
 - Socket path too long (macOS limit about 104 bytes, deep `GERMES_HOME`): use `/tmp/germes-<uid>-<hash>.sock`.
 - Two daemons start at once: the lock lets one win; the other exits; the client connects to the winner.

@@ -3,6 +3,8 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -14,7 +16,7 @@ func newTestRegistry(t *testing.T) *Registry {
 		[]Tool{{Name: "Bash", MatchArg: "command", Run: echo}, {Name: "Read", MatchArg: "file_path", Run: echo},
 			{Name: "Boom", Run: func(ctx context.Context, c Call) (string, error) { panic("boom") }}},
 		map[string]Toolset{"core": {Tools: []string{"Bash", "Read"}}, "all": {Tools: []string{"Boom"}, Includes: []string{"core"}}},
-		[]string{"Bash(sudo *)", "Bash(rm -rf /*)", "Read(.env)", "Read(**/.env*)"},
+		[]string{"Bash(sudo *)", "Bash(rm -rf /*)", "Read(.env)", "Read(**/.env*)"}, "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -69,5 +71,22 @@ func TestRunErrors(t *testing.T) {
 	}
 	if long := cut(strings.Repeat("x", maxOutput+10)); len([]rune(long)) > maxOutput+100 {
 		t.Errorf("output not cut: %d", len(long))
+	}
+}
+
+func TestLongOutputIsSaved(t *testing.T) {
+	long := strings.Repeat("x", maxOutput) + "THE END"
+	r, err := NewRegistry([]Tool{{Name: "Big", Run: func(ctx context.Context, c Call) (string, error) { return long, nil }}},
+		nil, nil, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Run(context.Background(), "Big", Call{SessionID: "s1"})
+	path := regexp.MustCompile(`in (\S+\.txt):`).FindStringSubmatch(res.Output)
+	if path == nil || len([]rune(res.Output)) > maxOutput+500 || !strings.HasSuffix(res.Output, "THE END") {
+		t.Fatalf("output %d characters, path %v", len(res.Output), path)
+	}
+	if b, err := os.ReadFile(path[1]); err != nil || string(b) != long {
+		t.Fatalf("saved file: %v", err)
 	}
 }

@@ -134,6 +134,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		// the provider's prompt cache keeps working.
 		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
+	g := newGuard(t.Dir)
 	reviewDue := false
 	defer func() {
 		if reviewDue {
@@ -190,6 +191,10 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Text: text})
 		}
 		if len(calls) == 0 {
+			if nudge := g.finishNudge(); nudge != "" && step < l.opts.MaxSteps {
+				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: nudge})
+				continue
+			}
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
 			return
 		}
@@ -200,7 +205,11 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		for _, call := range calls {
 			// The session saves the call before it runs.
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args}})
-			res := l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
+			res := tool.Result{IsError: true, Output: g.refuse(call)}
+			if res.Output == "" {
+				res = l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
+				res.Output += g.note(call, res)
+			}
 			if ctx.Err() != nil {
 				return
 			}

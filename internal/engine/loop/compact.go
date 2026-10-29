@@ -16,10 +16,19 @@ const (
 	prunedToolOutput = "[old tool output removed to save context]"
 )
 
-const summaryPrompt = `You summarize a coding session so another agent can continue it.
-Write a short structured summary: the goal, decisions made, files created or changed (exact paths),
-commands that matter, errors and how they were fixed, the current state, and what is left to do.
-Keep exact names, paths and commands. Do not invent anything.`
+const summaryPrompt = `You summarize a coding session so another agent can continue it. Use exactly these sections,
+each short; write "none" when a section is empty:
+
+## Task (as it stood)
+## Done (actions taken, with exact file paths and commands)
+## Current state (what works, what is half done)
+## Blocked (errors still open, with the exact message)
+## Decisions (what was decided and why)
+## Files (paths that matter)
+## Notes (names, values and facts the next agent must not lose)
+
+Keep exact names, paths and commands. Do not invent anything. If a summary of earlier work is given, update it:
+keep what still holds, drop what was replaced.`
 
 // tokens estimates the size of a request.
 func tokens(system string, msgs []llm.Message) int {

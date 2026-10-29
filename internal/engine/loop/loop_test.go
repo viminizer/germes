@@ -39,7 +39,7 @@ func (h fakeHistory) ListEvents(ctx context.Context, f api.EventFilter) (api.Pag
 
 func TestLoopRunsToolsThenAnswers(t *testing.T) {
 	reg, err := tool.NewRegistry([]tool.Tool{{Name: "echo", Run: func(ctx context.Context, c tool.Call) (string, error) { return "pong", nil }}},
-		map[string]tool.Toolset{"core": {Tools: []string{"echo"}}}, nil)
+		map[string]tool.Toolset{"core": {Tools: []string{"echo"}}}, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

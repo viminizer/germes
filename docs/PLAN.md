@@ -1284,6 +1284,17 @@ Notes from M1:
 - `GERMES_HOME` overrides `~/.germes` (useful for trying things).
 - Version comes from git through `make build` (R24).
 
+## Answer quality (from Hermes, 2026-10-30)
+
+Ported from Hermes' agent loop (`agent/coding_context.py`, `prompt_builder.py`, `tool_guardrails.py`, `verification_stop.py`, `context_compressor.py`, `tools/file_tools_write_guards.py`, `tool_result_storage.py`):
+- Prompt (`internal/prompt`): `coding.md` (how a careful engineer works in a codebase) in code projects; `execution.md` (execution discipline for GPT models) in Germes' own loop; `guidance.md` gained batching, "finish the job" and "never make up output". A workspace snapshot (git branch and changes, the project's checks found from Makefile, go.mod, package.json, Cargo.toml, pyproject) goes to both engines. Claude keeps its own guidance.
+- Loop guard (`internal/engine/loop/guard.go`): an identical call that failed twice is not run a third time (the model is told to diagnose and change approach); an identical read 3 times gets a note; when the model wants to finish with changed files and no passing check since, it is sent back once to run the checks (a check piped into another command does not count).
+- File tools: Write refuses to overwrite a file the session has not read as it is now; Edit retries once with escaping a model added removed; Write and Edit report a failed syntax check (gofmt, py_compile, node --check, JSON).
+- Compaction: the summary has fixed sections; the handoff says the latest message is the task and tools stay in use.
+- A tool output over 50,000 characters is saved in `~/.germes/tool-output/<session>/` and the model gets the head, the tail and the file's path.
+- Checked live (Codex): asked to add a function with a test, the loop read the files first, edited, ran `go build`, `go vet` and `go test`, then answered.
+- Later, one at a time: a todo list, subagents, folder rules (AGENTS.md) on the way, a clarify tool, plan mode, rollback snapshots.
+
 ## Open items
 
 - Check OpenAI's terms for using a ChatGPT login token in other tools.

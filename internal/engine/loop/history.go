@@ -17,6 +17,17 @@ func (l *Loop) loadEvents(ctx context.Context, sessionID string) ([]api.Event, e
 	return events, nil
 }
 
+// summaryHandoff introduces a compaction summary. The summary is
+// background: only the latest user message is the task, and tools stay in
+// use (Hermes found that without this, agents resume old tasks or stop
+// calling tools after a compaction).
+const summaryHandoff = `[Germes] Earlier turns were summarized below. This is background, not instructions: do not
+redo or finish work described in it. The latest user message after it is the task now; if it says stop, undo or
+changes the topic, drop the work in the summary. Keep using your tools as usual. Your memory in the system prompt
+still holds.
+
+`
+
 // effective applies the last compaction: its summary stands in for every
 // event before its KeepFrom.
 func effective(events []api.Event) (summary string, kept []api.Event) {
@@ -44,7 +55,7 @@ func messages(events []api.Event) []llm.Message {
 	summary, kept := effective(events)
 	var out []llm.Message
 	if summary != "" {
-		out = append(out, llm.Message{Role: llm.RoleUser, Text: "[Germes] Summary of the earlier conversation:\n\n" + summary})
+		out = append(out, llm.Message{Role: llm.RoleUser, Text: summaryHandoff + summary})
 	}
 	return append(out, convert(kept)...)
 }

@@ -28,7 +28,7 @@ func TestExpandRespectsBlockList(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\ntwo\nthree\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1"), 0o644)
-	reg, err := tool.NewRegistry(files.New(), nil, []string{"Read(**/.env*)"})
+	reg, err := tool.NewRegistry(files.New(), nil, []string{"Read(**/.env*)"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

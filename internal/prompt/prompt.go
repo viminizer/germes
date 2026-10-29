@@ -29,6 +29,12 @@ var germesInfo string
 //go:embed overseer.md
 var overseerRole string
 
+//go:embed coding.md
+var codingBrief string
+
+//go:embed execution.md
+var executionRules string
+
 const (
 	maxProjectFile = 20_000 // characters of AGENTS.md / CLAUDE.md in the prompt
 	maxSkillDesc   = 200    // characters of each skill description in the index
@@ -112,8 +118,16 @@ func (b *Builder) Create(ctx context.Context, w Where, role Role) (Prompt, error
 
 	// Stable first: identity, how to work, Germes itself. Then the project,
 	// then what changes more often: skills, memory, today.
-	system := []string{strings.TrimSpace(soul), strings.TrimSpace(guidance), germes}
-	extra := []string{germes} // Claude has its own identity and guidance
+	// System is for Germes' own loop, which runs GPT models: the execution
+	// rules target their known failure modes. Claude has its own identity
+	// and guidance, so Extra carries only the Germes parts.
+	system := []string{strings.TrimSpace(soul), strings.TrimSpace(guidance), strings.TrimSpace(executionRules)}
+	ws := workspace(dir)
+	if ws != "" {
+		system = append(system, strings.TrimSpace(codingBrief))
+	}
+	system = append(system, germes)
+	extra := []string{germes}
 	if role == RoleOverseer {
 		system = append(system, strings.TrimSpace(overseerRole))
 		extra = append(extra, strings.TrimSpace(overseerRole))
@@ -133,6 +147,10 @@ func (b *Builder) Create(ctx context.Context, w Where, role Role) (Prompt, error
 	if wt := worktreeNote(w); wt != "" && role != RoleOverseer {
 		system = append(system, wt)
 		extra = append(extra, wt)
+	}
+	if ws != "" {
+		system = append(system, ws)
+		extra = append(extra, ws)
 	}
 	system = append(system, fmt.Sprintf("# Environment\n\nToday: %s\nWorking folder: %s", time.Now().Format("2006-01-02"), dir))
 	return Prompt{System: strings.Join(system, "\n\n"), Extra: strings.Join(extra, "\n\n")}, nil

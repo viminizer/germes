@@ -514,7 +514,7 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_enter", "worktree_exit"}},
 		daemon.ToolsetMCPOverseer: {Tools: append([]string{"session_search"}, control...)},
 	}
-	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
+	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked, filepath.Join(p.home, "tool-output"))
 	if err != nil {
 		return nil, nil, err
 	}

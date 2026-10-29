@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -23,11 +25,13 @@ type Registry struct {
 	tools    map[string]Tool
 	toolsets map[string]Toolset
 	blocked  []rule
+	spillDir string // long outputs are saved here in full; "" = cut them
 }
 
-// NewRegistry checks and stores the tools, toolsets and block list.
-func NewRegistry(tools []Tool, toolsets map[string]Toolset, blocked []string) (*Registry, error) {
-	r := &Registry{tools: map[string]Tool{}, toolsets: toolsets}
+// NewRegistry checks and stores the tools, toolsets and block list. Outputs
+// too long for the model are saved in spillDir ("" = cut instead).
+func NewRegistry(tools []Tool, toolsets map[string]Toolset, blocked []string, spillDir string) (*Registry, error) {
+	r := &Registry{tools: map[string]Tool{}, toolsets: toolsets, spillDir: spillDir}
 	for _, t := range tools {
 		if _, dup := r.tools[t.Name]; dup {
 			return nil, fmt.Errorf("tool %q registered twice", t.Name)
@@ -113,7 +117,29 @@ func (r *Registry) Run(ctx context.Context, name string, c Call) (res Result) {
 		}
 		return Result{IsError: true, Output: cut(err.Error())}
 	}
-	return Result{Output: cut(out)}
+	return Result{Output: r.shorten(c.SessionID, name, out)}
+}
+
+// shorten keeps an output within maxOutput characters. The full output is
+// saved to a file the model can read in parts, so nothing is lost; without
+// a spill folder (or when saving fails) the middle is cut.
+func (r *Registry) shorten(sessionID, name, out string) string {
+	runes := []rune(out)
+	if len(runes) <= maxOutput || r.spillDir == "" {
+		return cut(out)
+	}
+	// ponytail: spill files are never deleted; add cleanup when the folder grows.
+	dir := filepath.Join(r.spillDir, sessionID)
+	path := filepath.Join(dir, fmt.Sprintf("%d-%s.txt", time.Now().UnixNano(), name))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return cut(out)
+	}
+	if err := os.WriteFile(path, []byte(out), 0o600); err != nil {
+		return cut(out)
+	}
+	part := maxOutput / 2
+	return string(runes[:part]) + fmt.Sprintf("\n\n[Germes] The output is %d characters; the middle is not shown. The full output is in %s: "+
+		"read parts of it with Read (offset, limit) or search it with Grep.\n\n", len(runes), path) + string(runes[len(runes)-part:])
 }
 
 func (r *Registry) names() []string {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/viminizer/germes/internal/tool"
 )
@@ -22,8 +23,38 @@ const (
 	maxMatches   = 200
 )
 
-// New returns the file tools.
+// New returns the file tools. They share what each session has read, so
+// Write refuses to overwrite a file the session has not seen as it is now.
 func New() []tool.Tool {
+	seen := &readLog{at: map[string]time.Time{}}
+	read := func(ctx context.Context, c tool.Call, a readArgs) (string, error) {
+		out, err := read(ctx, c, a)
+		if err == nil {
+			seen.mark(c.SessionID, resolve(c.Dir, a.FilePath))
+		}
+		return out, err
+	}
+	write := func(ctx context.Context, c tool.Call, a writeArgs) (string, error) {
+		p := resolve(c.Dir, a.FilePath)
+		if !seen.isCurrent(c.SessionID, p) {
+			return "", fmt.Errorf("%s exists and changed since you last read it (or you never did). Read it first, then write; for a small change use Edit", a.FilePath)
+		}
+		out, err := write(ctx, c, a)
+		if err == nil {
+			seen.mark(c.SessionID, p)
+			out += lint(p)
+		}
+		return out, err
+	}
+	edit := func(ctx context.Context, c tool.Call, a editArgs) (string, error) {
+		out, err := edit(ctx, c, a)
+		if err == nil {
+			p := resolve(c.Dir, a.FilePath)
+			seen.mark(c.SessionID, p)
+			out += lint(p)
+		}
+		return out, err
+	}
 	return []tool.Tool{
 		{Name: "Read", Toolset: "files", MatchArg: "file_path", Run: tool.NewRun(read),
 			Description: "Read a text file. Returns numbered lines. Use offset and limit for big files.",
@@ -140,6 +171,13 @@ func edit(ctx context.Context, c tool.Call, a editArgs) (string, error) {
 	}
 	text := string(b)
 	count := strings.Count(text, a.OldString)
+	if count == 0 {
+		// Models often escape text that is not escaped in the file. Undo
+		// that only when the result matches the file exactly once.
+		if old := unescape(a.OldString); old != a.OldString && strings.Count(text, old) == 1 {
+			a.OldString, a.NewString, count = old, unescape(a.NewString), 1
+		}
+	}
 	switch {
 	case count == 0:
 		return "", errors.New("old_string not found; read the file and copy the text exactly")
@@ -159,6 +197,11 @@ func edit(ctx context.Context, c tool.Call, a editArgs) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("edited %s (%d replacement(s))", a.FilePath, max(1, count*boolInt(a.ReplaceAll))), nil
+}
+
+// unescape undoes backslash escaping a model added: \\ \" \'.
+func unescape(s string) string {
+	return strings.NewReplacer(`\\`, `\`, `\"`, `"`, `\'`, `'`).Replace(s)
 }
 
 func boolInt(b bool) int {

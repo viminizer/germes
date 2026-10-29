@@ -52,7 +52,7 @@ type Daemon struct {
 	startedAt time.Time
 	stop      chan struct{}
 	stopOnce  sync.Once
-	update    chan struct{} // tests trigger a hand-over through it
+	update    chan struct{} // a new binary or config: hand over (watchFiles, or a test)
 }
 
 var _ api.Service = (*Daemon)(nil)
@@ -133,7 +133,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 			ownSocket = false // the new daemon's now
 			cancelServe()
-			d.shutdown(srv)
+			shutdown(srv)
 			return d.finishTurns(private, sig)
 		}
 		break
@@ -141,7 +141,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	slog.Info("daemon stopping")
 	cancelServe()
-	d.shutdown(srv)
+	shutdown(srv)
 	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// Jobs first: a job goroutine must not start a round in a stopped manager.
@@ -225,9 +225,7 @@ func (d *Daemon) servePrivate() (*privateServer, error) {
 func (p *privateServer) close() {
 	os.Remove(p.registry)
 	p.cancel()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	p.srv.Shutdown(ctx)
+	shutdown(p.srv)
 	os.Remove(p.socket)
 }
 
@@ -271,7 +269,7 @@ wait:
 }
 
 // shutdown stops a server: no new requests, open ones get a few seconds.
-func (d *Daemon) shutdown(srv *http.Server) {
+func shutdown(srv *http.Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

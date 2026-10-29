@@ -58,7 +58,7 @@ const usage = `usage:
   germes job ls|start|stop|rm <id>  list, start, stop or delete jobs
   germes reserve on|off <engine>  keep or drop an engine's usage reserve
   germes daemon stop    stop the daemon
-  germes daemon restart restart the daemon (it also updates itself when idle)`
+  germes daemon restart restart the daemon, cutting running turns (updates hand over on their own without cutting)`
 
 // paths are the files under the Germes home folder.
 type paths struct {

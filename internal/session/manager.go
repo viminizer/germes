@@ -81,15 +81,19 @@ func NewManager(store Store, runner Runner, opts Options) *Manager {
 		workers: map[string]*worker{}, hub: hub{watchers: map[*watcher]struct{}{}}}
 }
 
-// Start marks turns that were running when the daemon stopped as
-// interrupted. Turns an old daemon still runs are left alone.
+// Start marks turns that no process runs any more as interrupted: turns cut
+// when the daemon stopped, or when an old daemon died finishing them. Turns
+// this manager or an old daemon runs are left alone. Safe to call again.
 func (m *Manager) Start(ctx context.Context) error {
 	page, err := m.store.ListSessions(ctx, api.SessionFilter{Status: api.StatusWorking, Limit: 500})
 	if err != nil {
 		return err
 	}
 	for _, s := range page.Items {
-		if m.opts.Elsewhere != nil && m.opts.Elsewhere.IsBusy(ctx, s.ID) {
+		m.mu.Lock()
+		_, running := m.workers[s.ID]
+		m.mu.Unlock()
+		if running || (m.opts.Elsewhere != nil && m.opts.Elsewhere.IsBusy(ctx, s.ID)) {
 			continue
 		}
 		w, err := m.newWorker(ctx, s)

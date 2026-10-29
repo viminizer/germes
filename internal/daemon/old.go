@@ -60,7 +60,7 @@ func (o *OldDaemons) load(ctx context.Context) {
 		_, err = c.GetDaemon(pingCtx)
 		cancel()
 		if err != nil {
-			os.Remove(file) // a crashed old daemon
+			removeEntry(file) // a crashed old daemon
 			continue
 		}
 		o.mu.Lock()
@@ -72,11 +72,20 @@ func (o *OldDaemons) load(ctx context.Context) {
 
 // relay passes the live events of every old daemon on to this daemon's
 // watchers, until that daemon exits or ctx ends. A dropped stream is opened
-// again while the old daemon still answers.
+// again while the old daemon still answers. When it is gone, turns it left
+// unfinished (it crashed) are marked interrupted.
 func (o *OldDaemons) relay(ctx context.Context, sessions *session.Manager) {
 	for file, c := range o.clients() {
 		go func() {
-			defer o.drop(file)
+			defer func() {
+				o.drop(file)
+				if ctx.Err() == nil {
+					removeEntry(file) // gone; a crashed one could not remove it
+					if err := sessions.Start(ctx); err != nil {
+						slog.Error("recover sessions of an old daemon", "err", err)
+					}
+				}
+			}()
 			for ctx.Err() == nil {
 				events, err := c.Watch(ctx, api.WatchFilter{})
 				if err != nil {
@@ -114,4 +123,12 @@ func (o *OldDaemons) drop(file string) {
 	o.mu.Lock()
 	delete(o.list, file)
 	o.mu.Unlock()
+}
+
+// removeEntry removes a registry file and the socket it names.
+func removeEntry(file string) {
+	if b, err := os.ReadFile(file); err == nil {
+		os.Remove(strings.TrimSpace(string(b)))
+	}
+	os.Remove(file)
 }

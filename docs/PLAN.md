@@ -777,10 +777,11 @@ type Request struct {
 ### Codex token (inside `llm/codex`, no separate auth module)
 
 Same as Hermes (`hermes/hermes_cli/auth_codex.py`):
-- Germes keeps its own copy in `~/.germes/auth.json`.
-- First run: import from `~/.codex/auth.json`. Germes only reads that file, never writes it.
-- Refresh: write the new token to `~/.germes/auth.json` only.
-- Refresh tokens are single-use. If Codex CLI already used it (refresh rejected), import again from `~/.codex/auth.json`. Still failing: tell me to run `codex login`.
+- Germes keeps its own copy in `~/.germes/auth/codex.json`. First run: import from `~/.codex/auth.json`.
+- The access token lives about 10 days and the Codex CLI refreshes it on its own. So when Germes' token is about to expire, it first takes the CLI's token if that one is fresh.
+- Only when both are expiring does Germes refresh. Refresh tokens are single-use, so it then writes the new tokens back to `~/.codex/auth.json` (other fields kept), or the Codex CLI would be logged out. (Changed in M2: before, Germes never wrote that file.)
+- Refresh fails for good: tell me to run `codex login`.
+- Checked live in M2: tool call round trip with `gpt-6.1-sol`, and the usage endpoint (only a `seven_day` window came back).
 - Later, maybe: Germes' own login (Hermes has a device-code login), so Germes and Codex CLI never share a token.
 
 ## Job module
@@ -1184,7 +1185,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
 
 0. Skeleton: `go.mod`, `cmd/germes`, import test (R2), CI. Done.
 1. First working chat: TUI -> daemon -> session -> `engine/claude`, with `api`, `store`, minimal `config`, daemon auto-start, `ls`, `stop`, `-c`, `attach`. Done.
-2. Own loop: `llm/codex`, `engine/loop`, `tool`, `env`, file and shell tools, `prompt`.
+2. Own loop: `llm/codex`, `engine/loop`, `tool`, `env`, file and shell tools, `prompt`. Done. Until the router, the daemon uses the first engine in config order that can run (Codex login found, or `claude` on PATH).
 3. Router: limits, reserves, handoff, Codex <-> Claude switching.
 4. Memory and skills: `memory`, `skill`, search, compaction.
 5. Worktrees.

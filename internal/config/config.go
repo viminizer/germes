@@ -21,14 +21,15 @@ type Config struct {
 
 // Engine configures one engine.
 type Engine struct {
-	Name  string `yaml:"name"`
-	Model string `yaml:"model,omitempty"` // "" = the engine's default
+	Name   string `yaml:"name"`
+	Model  string `yaml:"model,omitempty"`  // "" = the engine's default
+	Effort string `yaml:"effort,omitempty"` // reasoning effort (codex-api), "" = medium
 }
 
 // New returns the default config, written on first run.
 func New() Config {
 	return Config{
-		Engines: []Engine{{Name: "claude-cli"}},
+		Engines: []Engine{{Name: "codex-api"}, {Name: "claude-cli"}},
 		Blocked: []string{"Bash(sudo *)", "Bash(rm -rf /*)", "Read(.env)", "Read(**/.env*)"},
 	}
 }
@@ -83,8 +84,8 @@ func (c Config) check() error {
 		return errors.New("config: no engines")
 	}
 	for _, e := range c.Engines {
-		if e.Name != "claude-cli" {
-			return fmt.Errorf("config: unknown engine %q (only claude-cli for now)", e.Name)
+		if e.Name != "claude-cli" && e.Name != "codex-api" {
+			return fmt.Errorf("config: unknown engine %q (use codex-api or claude-cli)", e.Name)
 		}
 	}
 	for _, b := range c.Blocked {

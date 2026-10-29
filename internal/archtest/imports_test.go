@@ -24,6 +24,14 @@ var allowed = map[string][]string{
 	"internal/tui":           {"internal/api"},
 	"internal/cli":           {"internal/api"},
 	"internal/archtest":      {},
+	"internal/env":           {},
+	"internal/tool":          {},
+	"internal/llm":           {},
+	"internal/llm/codex":     {"internal/llm"},
+	"internal/prompt":        {"internal/memory", "internal/skill"},
+	"internal/engine/loop":   {"internal/engine", "internal/llm", "internal/tool", "internal/prompt", "internal/api"},
+	"internal/tools/files":   {"internal/tool", "internal/env"},
+	"internal/tools/shell":   {"internal/tool", "internal/env"},
 }
 
 func TestImports(t *testing.T) {

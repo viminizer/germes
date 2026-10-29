@@ -20,9 +20,17 @@ import (
 	"github.com/viminizer/germes/internal/cli"
 	"github.com/viminizer/germes/internal/config"
 	"github.com/viminizer/germes/internal/daemon"
+	"github.com/viminizer/germes/internal/engine"
 	"github.com/viminizer/germes/internal/engine/claude"
+	"github.com/viminizer/germes/internal/engine/loop"
+	"github.com/viminizer/germes/internal/env"
+	"github.com/viminizer/germes/internal/llm/codex"
+	"github.com/viminizer/germes/internal/prompt"
 	"github.com/viminizer/germes/internal/session"
 	"github.com/viminizer/germes/internal/store"
+	"github.com/viminizer/germes/internal/tool"
+	"github.com/viminizer/germes/internal/tools/files"
+	"github.com/viminizer/germes/internal/tools/shell"
 	"github.com/viminizer/germes/internal/tui"
 )
 
@@ -124,8 +132,13 @@ func run(args []string) error {
 }
 
 func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, cont bool) error {
-	if _, err := exec.LookPath("claude"); err != nil {
-		return errors.New("no engine found: install Claude Code (https://claude.com/claude-code) and log in with `claude`")
+	cfg, err := config.Load(p.config)
+	if err != nil {
+		return err
+	}
+	engineName, ok := pickEngine(p, cfg)
+	if !ok {
+		return errors.New("no engine found: log in with `codex login`, or install Claude Code (https://claude.com/claude-code)")
 	}
 	if err := ensureDaemon(ctx, p, client); err != nil {
 		return err
@@ -153,7 +166,7 @@ func runTUI(ctx context.Context, p paths, client *api.Client, sessionID string, 
 		dir, project = s.Dir, s.Project
 	}
 	t := tui.New(client, tui.Options{
-		Dir: dir, Project: project, SessionID: sessionID, Version: version, Engine: claude.Name,
+		Dir: dir, Project: project, SessionID: sessionID, Version: version, Engine: engineName,
 		EnsureDaemon: func(ctx context.Context) error { return ensureDaemon(ctx, p, client) },
 	})
 	return t.Run(ctx)
@@ -197,7 +210,10 @@ func runDaemon(p paths) error {
 	}
 	defer st.Close()
 
-	eng := claude.New(claude.Options{Model: cfg.GetEngine(claude.Name).Model, Blocked: cfg.Blocked})
+	eng, err := newEngine(p, cfg, st)
+	if err != nil {
+		return err
+	}
 	sessions := session.NewManager(st, eng)
 	err = daemon.New(sessions, version).Run(context.Background(), p.socket, p.lock)
 	if !errors.Is(err, daemon.ErrUpdated) {
@@ -261,4 +277,53 @@ func waitDaemonGone(ctx context.Context, client *api.Client) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return errors.New("the old daemon did not stop")
+}
+
+// pickEngine returns the first engine in config order that can run here.
+// ponytail: one engine per daemon until the router (milestone 3) switches.
+func pickEngine(p paths, cfg config.Config) (string, bool) {
+	for _, e := range cfg.Engines {
+		switch e.Name {
+		case "codex-api":
+			if codex.IsAvailable(p.home, codexDir()) {
+				return e.Name, true
+			}
+		case claude.Name:
+			if _, err := exec.LookPath("claude"); err == nil {
+				return e.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
+// newEngine builds the engine pickEngine chose, with its tools.
+func newEngine(p paths, cfg config.Config, st *store.Store) (engine.Engine, error) {
+	name, ok := pickEngine(p, cfg)
+	if !ok {
+		return nil, errors.New("no engine found: log in with `codex login`, or install Claude Code")
+	}
+	ec := cfg.GetEngine(name)
+	if name == claude.Name {
+		return claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked}), nil
+	}
+	tools := append(files.New(), shell.New(env.NewLocal())...)
+	toolsets := map[string]tool.Toolset{
+		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
+		"project": {Includes: []string{"core"}},
+	}
+	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)
+	if err != nil {
+		return nil, err
+	}
+	client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
+	return loop.New(client, reg, prompt.NewBuilder(p.home), st, loop.Options{Name: name, Toolsets: []string{"project"}}), nil
+}
+
+func codexDir() string {
+	if d := os.Getenv("CODEX_HOME"); d != "" {
+		return d
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".codex")
 }

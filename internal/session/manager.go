@@ -219,10 +219,11 @@ func (m *Manager) GetSession(ctx context.Context, id string) (api.Session, error
 	return s, nil
 }
 
-// UpdateSession renames a session.
+// UpdateSession renames a session, or moves it into or out of its own git
+// worktree (from the next turn).
 func (m *Manager) UpdateSession(ctx context.Context, u api.SessionUpdate) error {
 	title := strings.TrimSpace(u.Title)
-	if title == "" && !u.LeaveWorktree {
+	if title == "" && !u.LeaveWorktree && !u.EnterWorktree {
 		return api.NewError(api.CodeInvalid, "nothing to change")
 	}
 	m.saveMu.Lock()
@@ -242,6 +243,14 @@ func (m *Manager) UpdateSession(ctx context.Context, u api.SessionUpdate) error 
 			return err
 		}
 		s.Dir, s.Branch = s.Project, ""
+	}
+	if u.EnterWorktree {
+		if s.Branch != "" {
+			return api.NewError(api.CodeInvalid, "session %s already works in its worktree %s", s.ID, s.Dir)
+		}
+		if err := m.createWorktree(ctx, &s); err != nil {
+			return api.NewError(api.CodeInvalid, "no worktree: %v", err)
+		}
 	}
 	s.UpdatedAt = time.Now()
 	return m.store.UpdateSession(ctx, s)
@@ -318,7 +327,7 @@ func (m *Manager) createSession(ctx context.Context, r api.MessageRequest, text 
 			Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
 		return s, "", m.store.CreateSession(ctx, s)
 	}
-	dir, noWorktree := r.Dir, r.NoWorktree
+	dir := r.Dir
 	if dir == "" {
 		return api.Session{}, "", api.NewError(api.CodeInvalid, "no session id and no folder")
 	}
@@ -328,29 +337,51 @@ func (m *Manager) createSession(ctx context.Context, r api.MessageRequest, text 
 	s := api.Session{ID: api.NewID(), Title: titleOf(text), Project: GetProjectRoot(dir), Dir: dir,
 		Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
 	warning := ""
-	switch {
-	case m.opts.Worktrees != "" && !noWorktree && worktree.IsRepo(ctx, s.Project):
-		wt, err := worktree.Create(ctx, m.opts.Worktrees, s.Project, s.ID)
-		if err != nil {
-			slog.Warn("create worktree", "session", s.ID, "err", err)
-			reason := "git failed; details in the daemon log"
-			if errors.Is(err, worktree.ErrNoCommits) {
-				reason = err.Error()
-			}
-			warning = "no worktree for this session (" + reason + "), so it works in the project folder"
-		} else {
-			s.Dir, s.Branch = wt.Dir, wt.Branch
+	if r.Worktree {
+		if err := m.createWorktree(ctx, &s); err != nil {
+			warning = "no worktree for this session (" + err.Error() + "), so it works in the project folder"
 		}
-	case !worktree.IsRepo(ctx, s.Project):
-		busy, err := m.store.ListSessions(ctx, api.SessionFilter{Project: s.Project, Status: api.StatusWorking, Limit: 1})
-		if err == nil && len(busy.Items) > 0 {
-			warning = "another session is working in this folder and it is not a git repo, so changes may clash"
-		}
+	}
+	if warning == "" && s.Branch == "" && m.isOthersFolder(ctx, s) {
+		warning = "another session is working in this folder, so changes may clash (start with --worktree to avoid it)"
 	}
 	if err := m.store.CreateSession(ctx, s); err != nil {
 		return api.Session{}, "", err
 	}
 	return s, warning, nil
+}
+
+// isOthersFolder reports whether another session is working in s.Dir. A
+// read error says no: it only skips a warning.
+func (m *Manager) isOthersFolder(ctx context.Context, s api.Session) bool {
+	busy, err := m.store.ListSessions(ctx, api.SessionFilter{Project: s.Project, Status: api.StatusWorking, Limit: 50})
+	if err != nil {
+		return false
+	}
+	for _, o := range busy.Items {
+		if o.Dir == s.Dir {
+			return true
+		}
+	}
+	return false
+}
+
+// createWorktree gives the session its own git worktree and branch. The
+// error says why not, in words for the user (details go to the log).
+func (m *Manager) createWorktree(ctx context.Context, s *api.Session) error {
+	if m.opts.Worktrees == "" || !worktree.IsRepo(ctx, s.Project) {
+		return errors.New("the folder is not a git repo")
+	}
+	wt, err := worktree.Create(ctx, m.opts.Worktrees, s.Project, s.ID)
+	if errors.Is(err, worktree.ErrNoCommits) {
+		return err
+	}
+	if err != nil {
+		slog.Warn("create worktree", "session", s.ID, "err", err)
+		return errors.New("git failed; details in the daemon log")
+	}
+	s.Dir, s.Branch = wt.Dir, wt.Branch
+	return nil
 }
 
 // GetProjectRoot walks up from dir to the folder holding .git. No git: dir.

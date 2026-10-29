@@ -19,7 +19,7 @@ type Options struct {
 	SessionID    string // "" = start a new session on the first message
 	JobID        string // attached to a job: follow its new rounds
 	First        string // a message sent as soon as the TUI opens
-	NoWorktree   bool   // a new session works in Dir, not in its own worktree
+	Worktree     bool   // a new session gets its own git worktree
 	Version      string
 	Engine       string
 	EnsureDaemon func(context.Context) error // starts the daemon if it is gone

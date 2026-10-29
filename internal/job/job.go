@@ -413,7 +413,7 @@ func (s *Scheduler) plainRound(reply, failure string) round {
 // round before, and saves it as the job's latest session.
 func (s *Scheduler) sendRound(ctx context.Context, j api.Job, text string) (string, error) {
 	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: j.Dir, Text: text,
-		NoWorktree: j.NoWorktree, SameDirAs: j.SessionID})
+		Worktree: !j.NoWorktree, SameDirAs: j.SessionID})
 	if err != nil {
 		return "", err
 	}

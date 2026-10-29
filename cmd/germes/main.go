@@ -56,7 +56,7 @@ var version = "dev"
 const usage = `usage:
   germes                start a new session in this folder
   germes -c             continue the last session in this folder
-  germes --no-worktree  start a session in this folder instead of its own git worktree
+  germes --worktree     start a session in its own git worktree (default: in this folder)
   germes attach <id>    open any session, or a job's latest round (follows new rounds)
   germes setup telegram talk to Germes from a Telegram group (topics bound to projects)
   germes overseer       open the overseer: one session that controls Germes (sessions, jobs) for you
@@ -180,7 +180,7 @@ func run(args []string) error {
 
 	fs := flag.NewFlagSet("germes", flag.ContinueOnError)
 	cont := fs.Bool("c", false, "continue the last session in this folder")
-	noWorktree := fs.Bool("no-worktree", false, "work in this folder, not in the session's own git worktree")
+	wt := fs.Bool("worktree", false, "work in the session's own git worktree, not in this folder")
 	fs.Usage = func() { fmt.Fprintln(os.Stderr, usage) }
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -188,15 +188,15 @@ func run(args []string) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unknown command %q\n%s", fs.Arg(0), usage)
 	}
-	return runTUI(ctx, p, client, tuiStart{cont: *cont, noWorktree: *noWorktree})
+	return runTUI(ctx, p, client, tuiStart{cont: *cont, worktree: *wt})
 }
 
 // tuiStart says how the TUI opens.
 type tuiStart struct {
-	sessionID  string // a session or job to open; "" = a new session
-	cont       bool   // open the last session in this folder
-	noWorktree bool   // a new session works in this folder
-	first      string // a message to send right away
+	sessionID string // a session or job to open; "" = a new session
+	cont      bool   // open the last session in this folder
+	worktree  bool   // a new session gets its own git worktree
+	first     string // a message to send right away
 }
 
 func runTUI(ctx context.Context, p paths, client *api.Client, start tuiStart) error {
@@ -250,7 +250,7 @@ func runTUI(ctx context.Context, p paths, client *api.Client, start tuiStart) er
 		dir, project = s.Dir, s.Project
 	}
 	t := tui.New(client, tui.Options{
-		Dir: dir, Project: project, SessionID: sessionID, JobID: jobID, Version: version, Engine: engineName, NoWorktree: start.noWorktree, First: start.first,
+		Dir: dir, Project: project, SessionID: sessionID, JobID: jobID, Version: version, Engine: engineName, Worktree: start.worktree, First: start.first,
 		EnsureDaemon: func(ctx context.Context) error { return ensureDaemon(ctx, p, client) },
 	})
 	return t.Run(ctx)
@@ -491,13 +491,13 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 	toolsets := map[string]tool.Toolset{
 		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
 		"learn":   {Tools: []string{"memory", "skill_view", "skill_save"}},
-		"project": {Tools: []string{"session_search", "worktree_exit"}, Includes: []string{"core", "learn"}},
+		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit"}, Includes: []string{"core", "learn"}},
 		"review":  {Includes: []string{"learn"}},
 		// The overseer controls Germes too; it has no worktree to leave.
 		"overseer": {Tools: append([]string{"session_search"}, control...), Includes: []string{"core", "learn"}},
 		// Claude gets only what it lacks through MCP: it has its own files and
 		// shell, and edits memory and skills as files.
-		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_exit"}},
+		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_enter", "worktree_exit"}},
 		daemon.ToolsetMCPOverseer: {Tools: append([]string{"session_search"}, control...)},
 	}
 	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked)

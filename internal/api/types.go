@@ -114,11 +114,11 @@ type WatchFilter struct {
 // MessageRequest sends text to a session. No SessionID: a new session is
 // created in Dir.
 type MessageRequest struct {
-	SessionID  string `json:"session_id,omitempty"`
-	Dir        string `json:"dir,omitempty"`
-	Text       string `json:"text"`
-	NoWorktree bool   `json:"no_worktree,omitempty"` // new session works in Dir, not in its own worktree
-	SameDirAs  string `json:"same_dir_as,omitempty"` // new session works where this session works (a job's rounds share a worktree)
+	SessionID string `json:"session_id,omitempty"`
+	Dir       string `json:"dir,omitempty"`
+	Text      string `json:"text"`
+	Worktree  bool   `json:"worktree,omitempty"`    // a new session gets its own git worktree; false = works in Dir
+	SameDirAs string `json:"same_dir_as,omitempty"` // new session works where this session works (a job's rounds share a worktree)
 }
 
 // MessageResult says which session got the message.
@@ -141,6 +141,9 @@ type SessionUpdate struct {
 	// LeaveWorktree moves the session to the project folder and removes its
 	// worktree. Refused while the worktree has unmerged work.
 	LeaveWorktree bool `json:"leave_worktree,omitempty"`
+	// EnterWorktree moves the session into its own new git worktree. Refused
+	// outside a git repo or when it has one.
+	EnterWorktree bool `json:"enter_worktree,omitempty"`
 }
 
 // JobStatus is where a job is in its life.

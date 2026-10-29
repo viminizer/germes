@@ -130,7 +130,7 @@ func (b *Builder) Create(ctx context.Context, w Where, role Role) (Prompt, error
 			extra = append(extra, part)
 		}
 	}
-	if wt := worktreeNote(w); wt != "" {
+	if wt := worktreeNote(w); wt != "" && role != RoleOverseer {
 		system = append(system, wt)
 		extra = append(extra, wt)
 	}
@@ -206,7 +206,10 @@ func readOptional(path string) (string, error) {
 // finish or leave it.
 func worktreeNote(w Where) string {
 	if w.Branch == "" {
-		return ""
+		return `# Your folder
+
+This session works in the project's main checkout, where other sessions and the user may work too.
+When the user asks for a worktree (or to work apart from others), call worktree_enter: from the next turn you work in your own git worktree and branch.`
 	}
 	return fmt.Sprintf(`# Your worktree
 

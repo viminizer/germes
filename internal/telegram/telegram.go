@@ -306,7 +306,7 @@ func (t *Telegram) bindTo(ctx context.Context, thread int64, project string) {
 	t.state.Topics[thread] = topic{Project: project}
 	t.mu.Unlock()
 	t.save()
-	t.reply(ctx, thread, "Bound to "+project+". Messages here go to a session there (its own git worktree).")
+	t.reply(ctx, thread, "Bound to "+project+". Messages here go to a session there (ask it for a worktree if you want one).")
 }
 
 // reply sends text to a topic, logging failures (the user cannot be told).

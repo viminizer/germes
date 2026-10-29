@@ -1061,7 +1061,7 @@ Go's standard `flag` package with a switch on the subcommand. No Cobra.
 
 | Command | Runs |
 |---|---|
-| `germes`, `-c`, `--resume`, `attach <id>`, `overseer`, `--no-worktree` | TUI |
+| `germes`, `-c`, `--resume`, `attach <id>`, `overseer`, `--worktree` | TUI |
 | `germes daemon` | wires everything, `daemon.Run` |
 | `germes mcp --session <id>` | MCP server |
 | `ls`, `stop`, `job add/ls/start/stop/rm`, `reserve on/off`, `daemon restart`, `pin` | `internal/cli` |
@@ -1133,16 +1133,16 @@ Rule: startup only reads local files. Slow work happens after the TUI is visible
 
 ## Worktrees
 
-Every session in a git project works in its own git worktree, unless I say not to or imply it. Two sessions on one project never clash.
+A session works in the project folder by default (Kevin, issue #2, 2026-10-29). It gets its own git worktree when I ask for one, so sessions on one project do not clash.
 
-- Created on the session's first message: `~/.germes/worktrees/<project>/<session id>`, branch `germes/<session id>`, from the project's current `HEAD`.
-- The session's `Dir` is the worktree. Tools, engines and `AGENTS.md` all work there.
-- Opt out:
-  - Explicit: `germes --no-worktree`, Telegram `/new here`.
-  - Implied ("work directly on main", "no worktree"): the prompt tells the agent it is in a worktree, and it has a tool `worktree_exit` that moves the session to the project folder and removes the worktree if it has no changes.
-- Jobs: one worktree for the whole job (all rounds share it, so progress carries over).
-- Telegram: a bound topic's session gets its own worktree like any session.
-- Folder is not a git repo: no worktree. If another session is already active in that folder, warn me.
+- Opt in:
+  - At start: `germes --worktree`; the overseer's `session_send` with `worktree: true`.
+  - In words ("make a worktree", "work apart from the others"): the prompt tells the agent it is in the main checkout, and the tool `worktree_enter` (`UpdateSession` with `EnterWorktree`) moves the session into a new worktree from the next turn. Refused outside a git repo or when it has one.
+- A worktree: `~/.germes/worktrees/<project>-<hash>/<session id>`, branch `germes/<session id>`, from the project's current `HEAD`. The session's `Dir` is the worktree; tools, engines and `AGENTS.md` work there.
+- Leave: `worktree_exit` moves the session back to the project folder and removes the worktree if it has no unmerged work.
+- Jobs keep their own worktree by default (all rounds share it; workflows' `merge` needs it); `germes job add --no-worktree` works in the folder.
+- Telegram: a bound topic's session works in the project folder, like any session; ask it for a worktree.
+- A new session without a worktree, in a folder where another session is working: a warning that changes may clash.
 - Finish: when I ask (`/merge` or in words), the agent rebases on the project's main branch, fast-forwards it, removes the worktree and deletes the branch.
 - Cleanup: a worktree with no changes is removed when its session is deleted or cleaned up. A worktree with changes is never removed automatically; `germes ls` shows it.
 
@@ -1239,7 +1239,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - The prompt tells the agent it is in a worktree and how to finish: commit, rebase, fast-forward the main checkout, then `worktree_exit`.
    - `worktree_exit` (and deleting a session) refuses while the worktree has uncommitted changes or unmerged commits; otherwise it removes the worktree and branch, and the session works in the project from the next turn.
    - No worktree possible (no commits yet, git error): the session works in the project folder with a short warning. Not a git repo and another session working there: a warning that changes may clash.
-   - `germes --no-worktree` opts out. Claude sessions get worktrees too, but `worktree_exit` reaches Claude only with MCP (milestone 7); until then a Claude session can merge with git, and stays pointed at its worktree folder.
+   - `germes --no-worktree` opts out. (Changed by issue #2: worktrees are opt-in, see "Worktrees".) Claude sessions get worktrees too, but `worktree_exit` reaches Claude only with MCP (milestone 7); until then a Claude session can merge with git, and stays pointed at its worktree folder.
    - Checked live: fallback warning, then the full flow (worktree, commit, merge into master, worktree_exit; worktree and branch gone).
 5b. TUI pass: `/clear`, slash suggestions, `@` references. Done:
    - `/clear` keeps the session saved and wipes the screen and scrollback: the TUI program ends, Germes clears the terminal, and a fresh TUI starts with a new (unsaved until the first message) session. Clearing from inside Bubble Tea's inline renderer garbled the screen, so it restarts instead.

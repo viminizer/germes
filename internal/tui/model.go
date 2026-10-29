@@ -306,7 +306,7 @@ func (m *model) stop(sendQueue bool) tea.Cmd {
 }
 
 func (m *model) send(text string) tea.Cmd {
-	req := api.MessageRequest{SessionID: m.sessionID, Dir: m.opts.Dir, Text: text, NoWorktree: m.opts.NoWorktree}
+	req := api.MessageRequest{SessionID: m.sessionID, Dir: m.opts.Dir, Text: text, Worktree: m.opts.Worktree}
 	return func() tea.Msg {
 		res, err := m.svc.SendMessage(m.ctx, req)
 		return sentMsg{sessionID: res.SessionID, warning: res.Warning, err: err}

@@ -74,14 +74,17 @@ func New(svc api.Service) []tool.Tool {
 		},
 		{
 			Name: "session_send", Toolset: "sessions",
-			Description: "Send a message to a session (it runs as that session's next turn). Without id, start a new session in dir (a project folder; it gets its own git worktree).",
-			Schema:      json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"dir":{"type":"string"},"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`),
+			Description: "Send a message to a session (it runs as that session's next turn). Without id, start a new session in dir (a project folder); " +
+				"worktree: true gives the new session its own git worktree, apart from other sessions.",
+			Schema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"dir":{"type":"string"},"text":{"type":"string"},` +
+				`"worktree":{"type":"boolean"}},"required":["text"],"additionalProperties":false}`),
 			Run: tool.NewRun(func(ctx context.Context, c tool.Call, a struct {
-				ID   string `json:"id"`
-				Dir  string `json:"dir"`
-				Text string `json:"text"`
+				ID       string `json:"id"`
+				Dir      string `json:"dir"`
+				Text     string `json:"text"`
+				Worktree bool   `json:"worktree"`
 			}) (string, error) {
-				res, err := svc.SendMessage(ctx, api.MessageRequest{SessionID: a.ID, Dir: a.Dir, Text: a.Text})
+				res, err := svc.SendMessage(ctx, api.MessageRequest{SessionID: a.ID, Dir: a.Dir, Text: a.Text, Worktree: a.Worktree})
 				if err != nil {
 					return "", err
 				}

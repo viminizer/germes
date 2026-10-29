@@ -190,7 +190,7 @@ func TestStopAndSendQueue(t *testing.T) {
 	}
 }
 
-func TestSessionGetsOwnWorktree(t *testing.T) {
+func TestSessionEntersAndLeavesWorktree(t *testing.T) {
 	ctx := context.Background()
 	project := t.TempDir()
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
@@ -202,16 +202,27 @@ func TestSessionGetsOwnWorktree(t *testing.T) {
 		}
 	}
 	m := newTestManager(t, fakeRunner{})
+	// By default a session works in the project folder.
 	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: project, Text: "hi"})
 	if err != nil || res.Warning != "" {
 		t.Fatalf("send: %v %q", err, res.Warning)
+	}
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	next(t, ch, api.KindTurnDone)
+	if s, _ := m.GetSession(ctx, res.SessionID); s.Dir != project || s.Branch != "" {
+		t.Fatalf("new session = %+v", s)
+	}
+	// Asked for one, it moves into its own worktree.
+	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: res.SessionID, EnterWorktree: true}); err != nil {
+		t.Fatal(err)
 	}
 	s, _ := m.GetSession(ctx, res.SessionID)
 	if s.Branch != "germes/"+s.ID || s.Dir == project || s.Project != project {
 		t.Fatalf("session = %+v", s)
 	}
-	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: s.ID})
-	next(t, ch, api.KindTurnDone)
+	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: s.ID, EnterWorktree: true}); err == nil {
+		t.Fatal("entered a second worktree")
+	}
 
 	// Work in the worktree: neither leaving nor deleting may lose it.
 	os.WriteFile(s.Dir+"/new.txt", []byte("x"), 0o644)

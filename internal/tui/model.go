@@ -372,7 +372,7 @@ func (m *model) printBanner() tea.Cmd {
 	b := banner{Version: m.opts.Version, Project: m.opts.Project, Session: m.sessionID, Engine: m.status.Engine}
 	out := b.view(m.width)
 	if m.startNotice != "" {
-		out += "\n" + message{Kind: kindNotice, Text: m.startNotice}.view(m.width)
+		out += "\n" + message{Kind: kindNotice, Text: m.startNotice}.view(m.width) + "\n"
 	}
 	return tea.Println(out)
 }

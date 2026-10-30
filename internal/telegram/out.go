@@ -37,6 +37,8 @@ func (t *Telegram) watch(ctx context.Context) {
 			case ev.Kind == api.KindNotice:
 				t.reply(ctx, t.threadFor(ctx, ev.SessionID), "🔔 "+ev.Text)
 			case !asked:
+			case ev.Kind == api.KindStatus:
+				t.reply(ctx, thread, "⏳ "+ev.Text)
 			case ev.Kind == api.KindText:
 				last[ev.SessionID] = ev.Text
 			case ev.Kind == api.KindToolCall && ev.Tool != nil && ev.Tool.Name == api.ToolSendFile:

@@ -50,6 +50,7 @@ const (
 	KindTextDelta      EventKind = "text_delta"
 	KindQueue          EventKind = "queue"
 	KindNotice         EventKind = "notice" // Text: a message for the user (a job's are live only; "plan saved" is saved)
+	KindStatus         EventKind = "status" // Text: what a turn is waiting on (a retry); live only, shown only where the turn was asked
 	KindText           EventKind = "text"
 	KindToolCall       EventKind = "tool_call"
 	KindToolResult     EventKind = "tool_result"

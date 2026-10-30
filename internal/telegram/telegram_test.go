@@ -430,6 +430,23 @@ func TestAnswerAfterAHandOverReachesTheTopic(t *testing.T) {
 	}
 }
 
+func TestStatusGoesOnlyToTheTopicThatAsked(t *testing.T) {
+	svc := &fakeService{events: make(chan api.Event, 10), working: map[string]bool{"s1": true}}
+	fake, _ := startBotFrom(t, svc, savedState(t, "s1", 7))
+	svc.events <- api.Event{SessionID: "s2", Kind: api.KindStatus, Text: "retry for a TUI session"} // nobody asked from Telegram
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindStatus, Text: "Trying again in 6s"}
+	if fake.waitSent(t, "⏳ Trying again in 6s") != 7 {
+		t.Fatal("the status went to the wrong topic")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for _, p := range fake.sent {
+		if strings.Contains(p["text"].(string), "TUI session") {
+			t.Fatal("a status of a session not asked from Telegram was sent")
+		}
+	}
+}
+
 func TestAnswerLostWhileNoBotWatchedIsTold(t *testing.T) {
 	svc := &fakeService{events: make(chan api.Event, 10)} // s1 is idle: its turn ended unseen
 	statePath := savedState(t, "s1", 7)

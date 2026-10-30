@@ -224,6 +224,8 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			case llm.KindError:
 				l.fail(ctx, out, ch.Err)
 				return
+			case llm.KindStatus:
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindStatus, Text: ch.Text})
 			}
 		}
 		if ctx.Err() != nil {

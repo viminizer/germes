@@ -291,6 +291,9 @@ func (w *worker) handle(ev engine.Event) {
 		w.emit(api.Event{Kind: api.KindEngineSwitched, Text: ev.Text, Engine: ev.Engine})
 	case engine.KindError:
 		w.emit(api.Event{Kind: api.KindError, Text: ev.Err.Error()})
+	case engine.KindStatus:
+		// Live only, like a text delta: a retry status is no use in the history.
+		w.m.SendEvent(api.Event{SessionID: w.sess.ID, Time: time.Now(), Kind: api.KindStatus, Text: ev.Text})
 	case engine.KindDone:
 		w.sess.Engine = ev.Engine
 		if ev.ResumeID != "" {

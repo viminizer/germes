@@ -74,8 +74,12 @@ func runStreams(first string, rest ...string) (bool, []llm.Chunk, int) {
 
 func TestTemporaryStreamErrorIsSentAgain(t *testing.T) {
 	ok, chunks, resends := runStreams(serverError, answer)
-	if !ok || resends != 1 || len(chunks) != 1 || chunks[0].Text != "hi" {
-		t.Fatalf("completed %v, resends %d, chunks %+v; want the answer after one resend", ok, resends, chunks)
+	if !ok || resends != 1 || len(chunks) != 2 || chunks[1].Text != "hi" {
+		t.Fatalf("completed %v, resends %d, chunks %+v; want a status, then the answer after one resend", ok, resends, chunks)
+	}
+	// The user sees why it waits, and for how long.
+	if n := chunks[0]; n.Kind != llm.KindStatus || n.Text != "codex: server_error: try again. Trying again in 0s (retry 1 of 2)." {
+		t.Errorf("notice %+v", n)
 	}
 }
 
@@ -100,7 +104,8 @@ func TestStreamIsNotSentAgain(t *testing.T) {
 
 func TestStreamGivesUpAfterTheRetries(t *testing.T) {
 	ok, chunks, resends := runStreams(serverError, serverError)
-	if ok || resends != streamRetries || len(chunks) != 1 || !strings.Contains(chunks[0].Err.Error(), "server_error") {
+	last := chunks[len(chunks)-1]
+	if ok || resends != streamRetries || len(chunks) != streamRetries+1 || last.Kind != llm.KindError || !strings.Contains(last.Err.Error(), "server_error") {
 		t.Fatalf("completed %v, resends %d, chunks %+v; want the error after %d resends", ok, resends, chunks, streamRetries)
 	}
 }
@@ -119,11 +124,14 @@ func TestOverloadedStreamIsSentAgain(t *testing.T) {
 
 func TestRetryAfterIsRead(t *testing.T) {
 	for event, want := range map[string]time.Duration{
-		`{"type":"error","code":"server_is_overloaded","retry_after":6}`:                          6 * time.Second,
-		`{"type":"error","error":{"code":"server_is_overloaded","retry_after":"1.5"}}`:            1500 * time.Millisecond, // as a text
-		`{"type":"response.failed","response":{"error":{"code":"server_error","retry_after":2}}}`: 2 * time.Second,
-		`{"type":"error","code":"server_is_overloaded","retry_after":9999}`:                       maxRetryAfter,
-		`{"type":"error","code":"server_is_overloaded","message":"Please try again later."}`:      0,
+		`{"type":"error","code":"server_is_overloaded","retry_after":6}`:                              6 * time.Second,
+		`{"type":"error","error":{"code":"server_is_overloaded","retry_after":"1.5"}}`:                1500 * time.Millisecond, // as a text
+		`{"type":"response.failed","response":{"error":{"code":"server_error","retry_after":2}}}`:     2 * time.Second,
+		`{"type":"error","code":"server_is_overloaded","retry_after":9999}`:                           maxRetryAfter,
+		`{"type":"error","code":"server_is_overloaded","message":"Please try again later."}`:          0,
+		`{"type":"error","code":"rate_limit_exceeded","message":"Slow down. Retry after 6 seconds."}`: 6 * time.Second, // in the message
+		`{"type":"error","error":{"code":"server_error","message":"retry in 2.5s"}}`:                  2500 * time.Millisecond,
+		`{"type":"error","code":"server_error","message":"retry in 9s","retry_after":3}`:              3 * time.Second, // the field wins
 	} {
 		e, _ := (&Client{}).stream(context.Background(), strings.NewReader("data: "+event+"\n\n"), make(chan llm.Chunk, 1))
 		if e.wait != want || !e.retry {

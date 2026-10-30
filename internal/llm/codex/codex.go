@@ -147,6 +147,10 @@ func (c *Client) run(ctx context.Context, body io.ReadCloser, resend func() (io.
 		slog.Warn("codex stream failed; sending the request again", "attempt", attempt, "err", end.chunk.Err)
 		// The backend's own retry_after wins when it asks for longer.
 		wait := max(time.Duration(attempt)*c.retryWait, end.wait)
+		// A wait can be long (up to maxRetryAfter): say so, as Hermes shows a
+		// countdown (hermes/agent/turn_recovery_autorecover.py).
+		stream.Send(ctx, out, llm.Chunk{Kind: llm.KindStatus,
+			Text: fmt.Sprintf("%v. Trying again in %s (retry %d of %d).", end.chunk.Err, wait.Round(time.Second), attempt, streamRetries)})
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
@@ -373,10 +377,16 @@ type streamEnd struct {
 	wait  time.Duration // the backend's retry_after, 0 when it gave none
 }
 
-// retryAfter reads retry_after (seconds, a number or a text) from an error
-// event: at the top level, under "error", or under "response"."error"
-// (Hermes reads the top level and "error" too: hermes/agent/retry_utils.py).
-func retryAfter(data string) time.Duration {
+// retryAfterText finds a wait in a message, like Hermes's
+// _RETRY_AFTER_SECONDS_RE (hermes/agent/retry_utils.py): "retry after 6
+// seconds", "retry in 2.5s".
+var retryAfterText = regexp.MustCompile(`(?i)retry\s+(?:after\s+|in\s+)?(\d+(?:\.\d+)?)\s*(?:sec|secs|seconds|s\b)`)
+
+// retryAfter reads how long an error event asks to wait: retry_after
+// (seconds, a number or a text) at the top level, under "error" or under
+// "response"."error", else a wait in its message (Hermes reads the same
+// places: hermes/agent/retry_utils.py). 0 when it asks for none.
+func retryAfter(data, message string) time.Duration {
 	type field struct {
 		RetryAfter json.RawMessage `json:"retry_after"`
 	}
@@ -387,13 +397,15 @@ func retryAfter(data string) time.Duration {
 			Error json.RawMessage `json:"error"`
 		} `json:"response"`
 	}
-	if json.Unmarshal([]byte(data), &ev) != nil {
-		return 0
-	}
+	json.Unmarshal([]byte(data), &ev)
 	var nested, failed field
 	json.Unmarshal(ev.Error, &nested)
 	json.Unmarshal(ev.Response.Error, &failed)
-	for _, raw := range []json.RawMessage{ev.RetryAfter, nested.RetryAfter, failed.RetryAfter} {
+	var inText json.RawMessage
+	if m := retryAfterText.FindStringSubmatch(message); m != nil {
+		inText = json.RawMessage(m[1])
+	}
+	for _, raw := range []json.RawMessage{ev.RetryAfter, nested.RetryAfter, failed.RetryAfter, inText} {
 		var v any
 		json.Unmarshal(raw, &v)
 		secs, _ := v.(float64)
@@ -435,7 +447,7 @@ type item struct {
 func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chunk) (end *streamEnd, sent bool) {
 	fail := func(code, message, data string) *streamEnd {
 		return &streamEnd{chunk: llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + errorText(code, message))},
-			retry: transientCodes[code], wait: retryAfter(data)}
+			retry: transientCodes[code], wait: retryAfter(data, message)}
 	}
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 64*1024), 32*1024*1024)

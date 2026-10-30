@@ -70,6 +70,7 @@ const (
 	KindLimitHit  Kind = "limit_hit"
 	KindDone      Kind = "done"
 	KindError     Kind = "error"
+	KindStatus    Kind = "status" // a status line for the user, live only (Text)
 )
 
 // Phase says what an assistant text is: progress while the model works,

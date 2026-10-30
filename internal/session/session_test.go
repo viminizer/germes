@@ -16,10 +16,12 @@ import (
 
 // fakeRunner answers every turn with a delta, a text and done. When block is
 // set, it waits for it before answering. prompts records each turn's prompt.
+// status, when set, is sent first.
 type fakeRunner struct {
 	block   chan struct{}
 	prompts chan string
 	turns   chan engine.Turn
+	status  string
 }
 
 func (f fakeRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
@@ -38,6 +40,9 @@ func (f fakeRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event
 			case <-ctx.Done():
 				return
 			}
+		}
+		if f.status != "" {
+			out <- engine.Event{Kind: engine.KindStatus, Text: f.status}
 		}
 		out <- engine.Event{Kind: engine.KindTextDelta, Text: "o"}
 		out <- engine.Event{Kind: engine.KindText, Text: "ok"}
@@ -114,6 +119,28 @@ func TestSendAndWatch(t *testing.T) {
 	first := next(t, replay, api.KindText)
 	if first.Seq != 5 { // user 1, text 2, done 3, user 4, text 5
 		t.Fatalf("replay gave text seq %d, want 5", first.Seq)
+	}
+}
+
+func TestEngineStatusIsLiveOnly(t *testing.T) {
+	ctx := context.Background()
+	block := make(chan struct{})
+	m := newTestManager(t, fakeRunner{block: block, status: "codex: overloaded. Trying again in 6s (retry 1 of 2)."})
+	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	close(block)
+	if ev := next(t, ch, api.KindStatus); ev.Text != "codex: overloaded. Trying again in 6s (retry 1 of 2)." || ev.SessionID != res.SessionID {
+		t.Fatalf("status = %+v", ev)
+	}
+	next(t, ch, api.KindTurnDone)
+	page, _ := m.ListEvents(ctx, api.EventFilter{SessionID: res.SessionID})
+	for _, ev := range page.Items {
+		if ev.Kind == api.KindStatus {
+			t.Fatal("a retry status was saved in the history")
+		}
 	}
 }
 

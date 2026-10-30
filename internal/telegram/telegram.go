@@ -99,7 +99,7 @@ func New(svc api.Service, opts Options) *Telegram {
 	b := &bot{base: base + "/bot" + opts.Token, files: base + "/file/bot" + opts.Token, http: &http.Client{}}
 	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}},
 		replyGeneration: map[string]uint64{}, replySending: map[string]int{}, replyDone: map[string]int64{},
-		output: replyOutput{last: map[string]string{}, sending: map[string]bool{}, limited: map[string]bool{}, seq: map[string]int64{}, noticeSeq: map[string]int64{}, replaying: map[string]bool{}}}
+		output: replyOutput{last: map[string]string{}, sending: map[string]bool{}, limited: map[string]bool{}, seq: map[string]int64{}, noticeSeq: map[string]int64{}, replaying: map[string]bool{}, held: map[string][]api.Event{}}}
 	if b, err := os.ReadFile(opts.StatePath); err == nil {
 		if err := json.Unmarshal(b, &t.state); err != nil {
 			slog.Warn("telegram: state file is broken; starting without bindings", "path", opts.StatePath, "err", err)
@@ -221,32 +221,79 @@ func (t *Telegram) ask(ctx context.Context, thread int64, text string, plan bool
 	}
 }
 
-// tellLostAnswers runs at start. A saved session with no working, paused
-// or queued turn ended while no bot watched (the daemon crashed or restarted,
-// or the turn ended during a hand-over), so its answer is lost: its topic is
-// told, and it is forgotten. Pending turns keep their saved destination.
+// tellLostAnswers runs at start, while the watcher already runs. Pending
+// turns keep their saved destination. A turn that ended while no bot
+// watched (during a hand-over, or just now) has its answer sent from the
+// stored history. Only a turn that never finished (the daemon crashed or
+// restarted) is lost: its topic is told, and it is forgotten.
 func (t *Telegram) tellLostAnswers(ctx context.Context) {
 	t.mu.Lock()
 	waiting := maps.Clone(t.state.ReplyTo)
 	t.mu.Unlock()
-	lost := false
 	for id, thread := range waiting {
-		s, err := t.svc.GetSession(ctx, id)
-		if err != nil && !api.IsNotFound(err) {
-			slog.Warn("telegram: check a waiting session", "session", id, "err", err)
-			continue // kept: the next start checks again
-		}
-		if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
-			continue
-		}
-		t.mu.Lock()
-		delete(t.state.ReplyTo, id)
-		t.mu.Unlock()
-		lost = true
-		t.reply(ctx, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+		t.recoverAnswer(ctx, id, thread)
 	}
-	if lost {
-		t.save()
+}
+
+// recoverAnswer holds outputMu, so the watcher cannot deliver or forget the
+// same answer at the same time.
+func (t *Telegram) recoverAnswer(ctx context.Context, id string, thread int64) {
+	t.outputMu.Lock()
+	defer t.outputMu.Unlock()
+	t.mu.Lock()
+	_, waiting := t.state.ReplyTo[id]
+	t.mu.Unlock()
+	if !waiting {
+		return // the watcher already delivered it
+	}
+	s, err := t.svc.GetSession(ctx, id)
+	if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
+		return
+	}
+	var turn []api.Event
+	if err == nil {
+		turn, err = t.lastTurn(ctx, id)
+	}
+	if err != nil && !api.IsNotFound(err) {
+		slog.Warn("telegram: check a waiting session", "session", id, "err", err)
+		return // kept: the next start checks again
+	}
+	if len(turn) > 0 && turn[len(turn)-1].Kind == api.KindTurnDone {
+		// Its turn_done cleans up; live copies are then ignored.
+		for _, ev := range turn {
+			t.sendReplyEvent(ctx, ev)
+		}
+		return
+	}
+	t.mu.Lock()
+	delete(t.state.ReplyTo, id)
+	t.mu.Unlock()
+	t.save()
+	t.reply(ctx, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+}
+
+// lastTurn reads a session's stored events from its last user message on,
+// without notices: they are routed on their own.
+func (t *Telegram) lastTurn(ctx context.Context, id string) ([]api.Event, error) {
+	var turn []api.Event
+	var after int64
+	for {
+		page, err := t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: after, Limit: 1000})
+		if err != nil {
+			return nil, err
+		}
+		for _, ev := range page.Items {
+			if ev.Kind == api.KindUserMessage {
+				turn = turn[:0]
+			}
+			if ev.Kind != api.KindNotice {
+				turn = append(turn, ev)
+			}
+			after = ev.Seq
+		}
+		if page.Next == "" || len(page.Items) == 0 {
+			return turn, nil
+		}
 	}
 }
 

@@ -66,6 +66,33 @@
 - `docs/PLAN.md` Telegram failure contract documents both behaviors and the new regression names.
 - Checks, all exit 0: listed regressions `-count=100`; focused tests; race tests; `make check`; `git diff --check`; base diff check. Evidence: `/tmp/germes-r6-fix2-path` -> `/tmp/germes-r6-fix2.*`. Both review gates must run again on the new commit.
 
+### Round 6 third check
+
+- HEAD `813d1f301202482de1a599baef8cd44c473510c0`, clean tree; `origin/main` still `28b473d` after fetch. All exit 0: `make check` (`/tmp/germes-r6-check3.log`), focused tests (`/tmp/germes-r6-focused3.log`), race tests (`/tmp/germes-r6-race3.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 third independent Codex review (HEAD `813d1f3`)
+
+- Evidence `/tmp/germes-r6-review3.Xmd1mf/` (transcript.log, verdict.txt, exit 0, session `01a18e12-fe54-70c2-bde8-779f8ba61cde`, read-only / never). HEAD, status and worktree diff unchanged. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections. One `find -H /tmp` exited 1 only on an unrelated unreadable dir, after listing the check logs; not a coverage gap. Transcript verdict: "Actionable findings: 2" (verdict.txt prints it joined with the next line).
+- Open findings for the fix step:
+  1. P2 `internal/telegram/telegram.go:234`: `Run` starts the watcher before `tellLostAnswers`. A saved session can finish during startup: the watcher delivers and removes `ReplyTo`, but startup still deletes its cloned entry and sends a false "answer was lost"; or startup deletes the destination before the watcher reads the answer, which is then dropped. Fix: coordinate startup reconciliation with output processing. Regression: hold the startup lookup while a live completion arrives.
+  2. P2 `internal/telegram/out.go:35`: during creation-replay backoff `replaying[id]` stays set while `outputMu` is released, so the watcher drops live-only events for that ID, including the Seq-0 error and `turn_done` from `worker.lose`. They cannot be replayed from history, so the topic stays waiting and later gets a false lost warning. Fix: keep live Seq-0 terminal events for the replaying session and process them after stored history. Regression: replay backoff plus an unsaved completion.
+
+### Round 6 third consistency audit (read-only, HEAD `813d1f3`)
+
+- Both Codex findings independently CONFIRMED.
+  1. `telegram.go:130-138`: watcher (and typing) goroutines start, then `tellLostAnswers` (telegram.go:227) clones `ReplyTo` and checks each session without `outputMu`. A turn that ends during startup (normal during a hand-over) reads idle/empty: startup deletes the entry and warns "lost" while the answer is still in the watcher stream (then dropped at `case !asked`) or was already delivered (false warning). Pre-existing on main (`28b473d` telegram.go:112-114), but inside this responsibility (reply retention across restart/hand-over), so it must be fixed.
+  2. `out.go:56-78`: during replay backoff `outputMu` is released with `replaying[id]` set, and `watch` (out.go:34) drops every event for that ID except notice/learned. `worker.lose` (`internal/session/worker.go:412`) publishes the error and `turn_done` only live with Seq 0 when saving fails; a broken database makes both the failed save and the failed history read likely at the same time. Those events are gone for good, so the topic stays waiting.
+- Caution for the fix: the hub (`internal/session/watch.go:51-55`) drops a watcher whose buffer is full, and `watch` resubscribes without `AfterSeq`. Do not hold `outputMu` around long network calls more than today, or live events can be dropped. Suggested shapes: (1) serialize startup reconciliation with output (e.g. take `outputMu` per session check) and, before declaring an idle session lost, check whether its stored history ends in a `turn_done` the bot has not delivered, and deliver/clean up through the same path instead of warning; (2) in `watch`, for a replaying ID, keep Seq-0 events (`KindError`, `KindTurnDone`) in a small per-ID list and pass them to `sendReplyEvent` after `registerCreated` finishes its stored replay.
+- Peers: `registerCreated` and `finishReply` already use stored history as the source of truth; reuse that. Rules R1-R48 unique; PLAN matches the code except these gaps. Result: FINDINGS.
+
+### Round 6 third fix (both findings)
+
+- `internal/telegram/telegram.go`: `tellLostAnswers` now calls `recoverAnswer` per waiting session. It holds `outputMu` (the watcher cannot deliver or forget the same answer at the same time), skips a session the watcher already finished, keeps working/paused/queued sessions, and on lookup/history errors keeps the entry (next start checks again). For an idle or missing session it reads the last turn from stored history (`lastTurn`: events from the last `user_message`, notices excluded, bounded pages of 1000). If that turn ends in `turn_done`, the events go through `sendReplyEvent`: the answer is sent and `turn_done` cleans up through `finishReply` (later live copies hit `!asked` and are ignored). Only an unfinished turn gets the "answer was lost" warning. Known limit (documented in PLAN): an old bot that sent the answer but stopped before saving cleanup makes the new one send it again.
+- `internal/telegram/out.go`: while `replaying[id]`, `watch` keeps Seq-0 `KindError`/`KindTurnDone` (unsaved, issue #25) in `output.held[id]`; `registerCreated` sends them after the stored replay, then clears them.
+- New regressions in `internal/telegram/lifecycle_test.go`: `TestRunStartupRecoversFinishedTurn/{missed,live}`, `TestRunCreationKeepsUnsavedCompletion`. BEFORE (HEAD `out.go`/`telegram.go` via `-overlay`): all failed, exit 1 (false lost warning instead of the answer; unsaved error/answer dropped, topic stuck). AFTER: pass. No existing test changed.
+- `docs/PLAN.md` Telegram failure contract: startup recovery, held unsaved completions, regression names.
+- Checks, all exit 0: 11 Telegram reply regressions `-count=100`; focused tests; race tests; `make check`; `git diff --check`; base diff check. Evidence: `/tmp/germes-r6-fix3-path` -> `/tmp/germes-r6-fix3.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

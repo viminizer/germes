@@ -1005,3 +1005,114 @@ func TestRunUnsavedTurnDoneFinishesReply(t *testing.T) {
 		})
 	}
 }
+
+// A saved turn can end while no bot watched (during a hand-over: "missed")
+// or while the new bot checks it at start ("live"). Either way its answer
+// is sent once from the stored history, with no false "answer was lost".
+func TestRunStartupRecoversFinishedTurn(t *testing.T) {
+	for _, name := range []string{"missed", "live"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				path := savedState(t, "s1", 7)
+				svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 3)}}}}
+				svc.history = []api.Event{
+					{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+					{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "the answer"},
+					{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+				}
+				looking, answer := make(chan struct{}), make(chan struct{})
+				first := true
+				svc.lookup = func(context.Context, string) (api.Session, error) {
+					if first && name == "live" {
+						first = false
+						close(looking)
+						<-answer // the turn ends while startup checks it
+					}
+					return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+				}
+				tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+				tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+				tg.bot.http.Transport = tr
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- tg.Run(ctx) }()
+				if name == "live" {
+					<-looking
+					svc.events <- svc.history[1]
+					svc.events <- svc.history[2]
+					close(answer)
+				}
+				<-tr.polls
+				synctest.Wait()
+				if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" || tr.sent[0]["message_thread_id"] != float64(7) {
+					t.Errorf("sent = %v, want the answer once in topic 7", tr.sent)
+				}
+				if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+					t.Error("the finished turn is still waiting")
+				}
+				cancel()
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
+// A completion that could not be saved (Seq 0, issue #25) can arrive while
+// creation replay waits for history. Replay cannot find it, so it is held
+// and handled after the stored events.
+func TestRunCreationKeepsUnsavedCompletion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project"}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &planNoticeService{failed: make(chan struct{}), replay: make(chan struct{}), creationService: creationService{failures: 1, registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 10)}}}}}
+		svc.history = []api.Event{
+			{SessionID: "created", Seq: 1, Kind: api.KindUserMessage, Text: "first request"},
+			{SessionID: "created", Seq: 2, Kind: api.KindText, Text: "partial"},
+		}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "created", Status: api.StatusIdle}, nil
+		}
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			return api.MessageResult{SessionID: "created"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		tr.updates <- []update{msg(1, 8, kevin, "first request")}
+		<-svc.failed
+		svc.events <- api.Event{SessionID: "created", Kind: api.KindError, Text: "could not save the conversation"}
+		svc.events <- api.Event{SessionID: "created", Kind: api.KindTurnDone}
+		synctest.Wait() // both arrive during replay backoff
+		close(svc.replay)
+		time.Sleep(retryWait)
+		<-tr.polls
+		synctest.Wait()
+		want := []string{"⚠ could not save the conversation", "partial"}
+		if len(tr.sent) != len(want) {
+			t.Errorf("sent = %v, want %q", tr.sent, want)
+		} else {
+			for i, text := range want {
+				if p := tr.sent[i]; p["text"] != text || p["message_thread_id"] != float64(8) {
+					t.Errorf("reply %d = %v, want %q in topic 8", i, p, text)
+				}
+			}
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["created"]; waiting {
+			t.Error("the unsaved completion left the topic waiting")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

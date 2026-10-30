@@ -30,9 +30,14 @@ func (t *Telegram) watch(ctx context.Context) {
 		}
 		for ev := range events {
 			t.outputMu.Lock()
+			switch {
 			// Replay resends saved events only; live-only ones pass through.
-			if !t.output.replaying[ev.SessionID] || ev.Kind == api.KindNotice || ev.Kind == api.KindLearned {
+			case !t.output.replaying[ev.SessionID] || ev.Kind == api.KindNotice || ev.Kind == api.KindLearned:
 				t.sendReplyEvent(ctx, ev)
+			case ev.Seq == 0 && (ev.Kind == api.KindError || ev.Kind == api.KindTurnDone):
+				// Not saved (issue #25): replay cannot find it, so it
+				// waits for the end of the replay.
+				t.output.held[ev.SessionID] = append(t.output.held[ev.SessionID], ev)
 			}
 			t.outputMu.Unlock()
 		}
@@ -48,6 +53,7 @@ type replyOutput struct {
 	seq       map[string]int64
 	noticeSeq map[string]int64 // globally routed notices cannot acknowledge unseen replies
 	replaying map[string]bool
+	held      map[string][]api.Event // unsaved completions that arrived during replay
 }
 
 // registerCreated replays only the returned session, while live output is
@@ -56,7 +62,14 @@ type replyOutput struct {
 func (t *Telegram) registerCreated(ctx context.Context, id string, thread int64) {
 	t.outputMu.Lock()
 	t.output.replaying[id] = true
-	defer func() { delete(t.output.replaying, id); t.outputMu.Unlock() }()
+	defer func() {
+		for _, ev := range t.output.held[id] {
+			t.sendReplyEvent(ctx, ev)
+		}
+		delete(t.output.held, id)
+		delete(t.output.replaying, id)
+		t.outputMu.Unlock()
+	}()
 	t.mu.Lock()
 	t.replyGeneration[id]++
 	t.state.ReplyTo[id] = thread

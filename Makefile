@@ -1,6 +1,6 @@
-# Version comes from git (R24): the base commit is 0.1.0, each commit on main
-# adds one patch step.
-VERSION := 0.1.$(shell echo $$(( $$(git rev-list --count HEAD) - 1 )))
+# Version comes from git (R24): the base commit is 0.1.0; patch and minor
+# roll over after 99, carrying into the next component.
+VERSION := $(shell n=$$(( $$(git rev-list --count HEAD) - 1 + 100 )); printf '%d.%d.%d' $$((n / 10000)) $$((n / 100 % 100)) $$((n % 100)))
 
 .PHONY: build install check
 

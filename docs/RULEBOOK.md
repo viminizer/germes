@@ -349,9 +349,9 @@ When behavior or a decision changes, update `PLAN.md` or this rulebook in the sa
 
 ## R24. Version comes from git
 
-A base commit is 0.1.0 and every commit on the main branch adds one patch step. No file holds the version, and no commit edits one.
+A base commit is 0.1.0 and each additional commit reachable from the build's HEAD adds one patch step. Patch and minor range from 0 to 99: 0.1.99 becomes 0.2.0, and 0.99.99 becomes 1.0.0. Major has no rollover limit. No file holds the version, and no commit edits one.
 
-- From: default rulebook
+- From: default rulebook; rollover after 99 requested by Kevin, 2026-10-30
 - Check: no version string in source files; the build reads it from git.
 - Example: none yet
 

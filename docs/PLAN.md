@@ -1367,7 +1367,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
 Notes from M1:
 - `api.Service` has only the methods M1 needs; later milestones add theirs.
 - `GERMES_HOME` overrides `~/.germes` (useful for trying things).
-- Version comes from git through `make build` (R24).
+- Version comes from git through `make build` and `make install` (R24): count commits reachable from HEAD, starting at 0.1.0. Patch and minor roll over after 99, carrying into the next component (0.1.99 → 0.2.0; 0.99.99 → 1.0.0); major is unbounded.
 
 ## Answer quality (from Hermes, 2026-10-30)
 

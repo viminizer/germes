@@ -316,7 +316,12 @@ func runDaemon(p paths) error {
 
 	// Background reviews end with the daemon, before the store closes.
 	ctx, cancel := context.WithCancel(context.Background())
-	reviews := engine.NewReviews(ctx)
+	// A review says what it saved to its session; reviews start only after
+	// a turn, so sessions is set by then.
+	var sessions *session.Manager
+	reviews := engine.NewReviews(ctx, p.home, func(id, text string) {
+		sessions.SendEvent(api.Event{SessionID: id, Time: time.Now(), Kind: api.KindLearned, Text: text})
+	})
 	defer reviews.Wait()
 	defer cancel()
 	rt, reg, err := newRouter(p, cfg, st, reviews)
@@ -324,7 +329,7 @@ func runDaemon(p paths) error {
 		return err
 	}
 	old := daemon.NewOldDaemons(filepath.Join(p.home, "old"))
-	sessions := session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg), Elsewhere: old,
+	sessions = session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg), Elsewhere: old,
 		Checkpoints: filepath.Join(p.home, "checkpoints")})
 	tools := registryTools{reg: reg, sessions: sessions}
 	jobs := job.NewScheduler(st, sessions, job.Options{Tools: tools, Workflows: filepath.Join(p.home, "workflows")})

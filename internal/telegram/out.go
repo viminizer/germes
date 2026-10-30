@@ -37,6 +37,12 @@ func (t *Telegram) watch(ctx context.Context) {
 			switch {
 			case ev.Kind == api.KindNotice:
 				t.reply(ctx, t.threadFor(ctx, ev.SessionID), "🔔 "+ev.Text)
+			case ev.Kind == api.KindLearned:
+				// Only where this session talks, like Hermes ("💾 Memory
+				// updated" in its own chat): never a project topic or General.
+				if thread, ok := t.ownThread(ev.SessionID); ok {
+					t.reply(ctx, thread, "💾 "+ev.Text)
+				}
 			case !asked:
 			case ev.Kind == api.KindStatus:
 				t.reply(ctx, thread, "⏳ "+ev.Text)
@@ -87,18 +93,9 @@ func (t *Telegram) upload(ctx context.Context, thread int64, path string) {
 // threadFor finds the topic of a session: the topic it was asked from, the
 // topic bound to it or to its project, else General.
 func (t *Telegram) threadFor(ctx context.Context, sessionID string) int64 {
-	t.mu.Lock()
-	if thread, ok := t.state.ReplyTo[sessionID]; ok {
-		t.mu.Unlock()
+	if thread, ok := t.ownThread(sessionID); ok {
 		return thread
 	}
-	for thread, tp := range t.state.Topics {
-		if tp.SessionID == sessionID {
-			t.mu.Unlock()
-			return thread
-		}
-	}
-	t.mu.Unlock()
 	s, err := t.svc.GetSession(ctx, sessionID)
 	if err != nil {
 		return 0
@@ -219,4 +216,23 @@ func scanRepos(dir string) []string {
 		return nil
 	})
 	return repos
+}
+
+// ownThread is the topic of the session itself: the one waiting for its
+// answer, the one bound to it, or General for the overseer.
+func (t *Telegram) ownThread(sessionID string) (int64, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if thread, ok := t.state.ReplyTo[sessionID]; ok {
+		return thread, true
+	}
+	if sessionID == api.OverseerID {
+		return 0, true
+	}
+	for thread, tp := range t.state.Topics {
+		if tp.SessionID == sessionID {
+			return thread, true
+		}
+	}
+	return 0, false
 }

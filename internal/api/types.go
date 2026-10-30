@@ -49,8 +49,9 @@ const (
 	KindUserMessage    EventKind = "user_message"
 	KindTextDelta      EventKind = "text_delta"
 	KindQueue          EventKind = "queue"
-	KindNotice         EventKind = "notice" // Text: a message for the user (a job's are live only; "plan saved" is saved)
-	KindStatus         EventKind = "status" // Text: what a turn is waiting on (a retry); live only, shown only where the turn was asked
+	KindNotice         EventKind = "notice"  // Text: a message for the user (a job's are live only; "plan saved" is saved)
+	KindStatus         EventKind = "status"  // Text: what a turn is waiting on (a retry); live only, shown only where the turn was asked
+	KindLearned        EventKind = "learned" // Text: what a background review saved (memory, skills); live only, shown in the session's own place
 	KindText           EventKind = "text"
 	KindToolCall       EventKind = "tool_call"
 	KindToolResult     EventKind = "tool_result"

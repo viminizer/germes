@@ -76,7 +76,7 @@ func TestRunReviewsAfterTenToolCalls(t *testing.T) {
 		turn = append(turn, toolUse("Bash", `{"command":"ls"}`))
 	}
 	logFile := fakeClaude(t, "/no-grant", append(turn, `{"type":"result","subtype":"success","session_id":"s1","result":"ok"}`)...)
-	_, runs := runTurn(t, New(Options{GermesHome: home, Reviews: engine.NewReviews(context.Background())}), t.TempDir(), logFile)
+	_, runs := runTurn(t, New(Options{GermesHome: home, Reviews: engine.NewReviews(context.Background(), "", nil)}), t.TempDir(), logFile)
 	if len(runs) != 2 || !strings.Contains(runs[1], "--resume s1 --fork-session") {
 		t.Fatalf("runs %q", runs)
 	}
@@ -90,7 +90,7 @@ func TestRunSkipsReviewAfterSavingMemory(t *testing.T) {
 	}
 	turn = append(turn, toolUse("Edit", `{"file_path":"`+filepath.Join(home, "memories", "MEMORY.md")+`"}`))
 	logFile := fakeClaude(t, "/no-grant", append(turn, `{"type":"result","subtype":"success","session_id":"s1","result":"ok"}`)...)
-	_, runs := runTurn(t, New(Options{GermesHome: home, Reviews: engine.NewReviews(context.Background())}), t.TempDir(), logFile)
+	_, runs := runTurn(t, New(Options{GermesHome: home, Reviews: engine.NewReviews(context.Background(), "", nil)}), t.TempDir(), logFile)
 	if len(runs) != 1 {
 		t.Fatalf("runs %q", runs)
 	}

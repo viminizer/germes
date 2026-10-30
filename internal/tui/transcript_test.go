@@ -53,3 +53,16 @@ func TestRoutineCallsPrintAsOneLine(t *testing.T) {
 		t.Fatalf("got %+v, want the group, then the failed call", got)
 	}
 }
+
+// A memory call says what it saves, a remove what it removed (issue #18).
+func TestMemoryCallsSayWhatTheySave(t *testing.T) {
+	for args, want := range map[string]string{
+		`{"action":"add","target":"user","text":"likes short answers"}`:         `Memory added (about you): "likes short answers"`,
+		`{"action":"replace","target":"agent","old_text":"x","text":"uses Go"}`: `Memory updated (agent notes): "uses Go"`,
+		`{"action":"remove","target":"agent","old_text":"an old note"}`:         `Memory removed (agent notes): "an old note"`,
+	} {
+		if got := toolLabel(&api.ToolCall{Name: "memory", Args: []byte(args)}, ""); got != want {
+			t.Errorf("%s: got %q, want %q", args, got, want)
+		}
+	}
+}

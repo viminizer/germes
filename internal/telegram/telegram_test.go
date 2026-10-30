@@ -486,3 +486,26 @@ func TestLimitLinesOncePerTurn(t *testing.T) {
 		t.Fatalf("%d limit lines; want 1 per turn", n)
 	}
 }
+
+// A review's "saved" line goes to the session's own topic, and nowhere for a
+// session that has none (a TUI session): no project topic, no General.
+func TestReviewSavesGoOnlyToTheSessionsTopic(t *testing.T) {
+	svc := &fakeService{events: make(chan api.Event, 10), working: map[string]bool{"s1": true}}
+	fake, _ := startBotFrom(t, svc, savedState(t, "s1", 7))
+	svc.events <- api.Event{SessionID: "tui", Kind: api.KindLearned, Text: "saved by the review: memory (about you)"}
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindLearned, Text: "saved by the review: skill fix-issues"}
+	svc.events <- api.Event{SessionID: api.OverseerID, Kind: api.KindLearned, Text: "saved by the review: memory (agent notes)"}
+	if fake.waitSent(t, "💾 saved by the review: skill fix-issues") != 7 {
+		t.Fatal("the review line went to the wrong topic")
+	}
+	if fake.waitSent(t, "memory (agent notes)") != 0 {
+		t.Fatal("the overseer's review line did not go to General")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for _, p := range fake.sent {
+		if strings.Contains(p["text"].(string), "about you") {
+			t.Fatal("a TUI session's review line reached Telegram")
+		}
+	}
+}

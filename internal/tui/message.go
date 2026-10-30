@@ -147,10 +147,32 @@ func toolLabel(t *api.ToolCall, dir string) string {
 	if tasks, ok := args["tasks"].([]any); ok && t.Name == "delegate_task" {
 		return fmt.Sprintf("%s(%d tasks)", t.Name, len(tasks))
 	}
+	if label := memoryLabel(t, args); label != "" {
+		return label
+	}
 	if p := toolPreview(t, dir); p != "" {
 		return fmt.Sprintf("%s(%q)", t.Name, p)
 	}
 	return t.Name
+}
+
+// memoryLabel says what a memory call saves: Memory added (about you):
+// "likes short answers". A remove shows the removed text (issue #18).
+func memoryLabel(t *api.ToolCall, args map[string]any) string {
+	verbs := map[string]string{"add": "added", "replace": "updated", "remove": "removed"}
+	verb, ok := verbs[fmt.Sprint(args["action"])]
+	if t.Name != "memory" || !ok {
+		return ""
+	}
+	where := "agent notes"
+	if args["target"] == "user" {
+		where = "about you"
+	}
+	text, _ := args["text"].(string)
+	if verb == "removed" {
+		text, _ = args["old_text"].(string)
+	}
+	return fmt.Sprintf("Memory %s (%s): %q", verb, where, ansi.Truncate(firstLine(text), 64, "…"))
 }
 
 // toolPreview is the call's most telling argument, short, or "".

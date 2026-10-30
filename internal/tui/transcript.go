@@ -70,7 +70,7 @@ func (t *transcript) applyEvent(ev api.Event) []message {
 		return []message{{Kind: kindSwitch, Text: ev.Text}}
 	case api.KindNotice:
 		return []message{{Kind: kindAlert, Text: ev.Text}}
-	case api.KindStatus:
+	case api.KindStatus, api.KindLearned:
 		return []message{{Kind: kindNotice, Text: ev.Text}}
 	case api.KindAttachment:
 		return []message{{Kind: kindNotice, Text: "attached: " + attachedNames(ev.Text)}}

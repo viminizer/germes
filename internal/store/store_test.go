@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,6 +88,99 @@ func TestNewPreservesFilesystemPath(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestNewAtTheSameTimeMigratesOnce(t *testing.T) {
+	// The daemon and `germes doctor` can open the database at once after an
+	// update; both must succeed and each migration must run once.
+	for range 10 {
+		// An existing database (WAL mode) with updates still to run.
+		path := filepath.Join(t.TempDir(), "germes.db")
+		db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)`); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+		errs := make(chan error, 4)
+		for range cap(errs) {
+			go func() {
+				s, err := New(path)
+				if err == nil {
+					s.Close()
+				}
+				errs <- err
+			}()
+		}
+		for range cap(errs) {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestNewOpensWhileAnotherProcessWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "germes.db")
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	holder, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if _, err := holder.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer holder.ExecContext(ctx, `ROLLBACK`)
+	// Nothing to migrate: opening needs no write lock.
+	start := time.Now()
+	other, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.Close()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("opening waited %s for the write lock", d)
+	}
+}
+
+func TestIsBusy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "germes.db")
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	holder, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if _, err := holder.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer holder.ExecContext(ctx, `ROLLBACK`)
+	// No busy timeout: the second writer is refused at once.
+	other, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	_, busy := other.Exec(`BEGIN IMMEDIATE`)
+	if !IsBusy(busy) || !IsBusy(fmt.Errorf("migration 013_job_cuts: %w", busy)) {
+		t.Errorf("a held database is not busy: %v", busy)
+	}
+	if IsBusy(errors.New("disk I/O error")) || IsBusy(nil) {
+		t.Error("another error is busy")
 	}
 }
 

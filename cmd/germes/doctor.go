@@ -47,7 +47,12 @@ func doctor(ctx context.Context, p paths, client *api.Client) error {
 	if err == nil {
 		st.Close()
 	}
-	check("database "+p.db, errText(err), "move the file away (Germes starts a new one); never edit it")
+	fix := "move the file away (Germes starts a new one); never edit it"
+	if store.IsBusy(err) {
+		// The file is fine; another Germes process (an update's migration) held it.
+		fix = "another Germes process is using it; run `germes doctor` again in a moment"
+	}
+	check("database "+p.db, errText(err), fix)
 
 	pid, err := daemon.GetLockHolder(p.lock)
 	switch {

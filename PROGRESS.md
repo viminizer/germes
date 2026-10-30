@@ -145,6 +145,7 @@
 - New `catchUp`, called by `watch` after every successful `Watch`: for each waiting session with a last seen sequence (and not in creation replay), sends the stored events after it through `sendReplyEvent` (existing dedup). Sessions with no cursor wait for their own `turn_done`, whose gap replay covers them, so files the old bot already sent are not uploaded again.
 - PLAN Telegram contract: recheck, catch-up, and hard-restart wording corrected (a hard restart saves an interrupted error and `turn_done`, so its topic gets that error, not the lost warning).
 - New regressions: `TestRunStartupWaitsForFinalSave`, `TestRunWatchCatchesUpAfterDrop` (new `dropService` fake hands out streams so the test can drop one). BEFORE (HEAD code via `-overlay`): both failed, exit 1 (false lost warning; answer never sent, topic stuck). AFTER: pass. All `TestRun*` `-count=100` pass. Evidence: `/tmp/germes-r6-fix5-path` -> `/tmp/germes-r6-fix5.*`.
+- Committed as `008db74`, then rebased the branch onto `origin/main` `90e12a7ff54057678af8c4ee81ab0372223af2b1` with no conflicts. Main's overlap in `session/manager.go` and `worker.go` only adds session titles (`Titles` option, `namings`, `nameSession` at turn start) and does not touch claim/finish ordering. After the rebase, all exit 0: focused tests, race tests, `make check`, `git diff --check`, `git diff origin/main...HEAD --check`; rule numbers R46/R47/R48 still unique. Both review gates must run again on the rebased HEAD.
 
 ## Active: germes-continuous-quality-loop / round 5 / fix
 

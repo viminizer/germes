@@ -275,7 +275,11 @@ func (t *Telegram) recoverAnswer(ctx context.Context, id string, thread int64) {
 // ignored); a turn that never finished tells the topic lost and forgets it.
 // Runs with outputMu held.
 func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost string) {
+	var generation uint64
 	for rechecked := false; ; rechecked = true {
+		t.mu.Lock()
+		generation = t.replyGeneration[id]
+		t.mu.Unlock()
 		s, err := t.svc.GetSession(ctx, id)
 		if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
 			return
@@ -337,6 +341,11 @@ func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost str
 		}
 	}
 	t.mu.Lock()
+	if t.replyGeneration[id] != generation || t.replySending[id] > 0 {
+		// A newer request registered meanwhile: its own turn finishes it.
+		t.mu.Unlock()
+		return
+	}
 	delete(t.state.ReplyTo, id)
 	delete(t.state.Answered, id)
 	t.mu.Unlock()

@@ -364,6 +364,31 @@
 - New regression `TestRunLostTurnTextIsNotReused` (stored text without a saved `turn_done`, lost at start, then a turn ending with only an error). BEFORE (HEAD `telegram.go` via `-overlay`): failed, exit 1 ("old partial" sent after the error). AFTER: pass. No existing test changed.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix14-path` -> `/tmp/germes-r6-fix14.*`. Both review gates must run again on the new commit.
 
+### Round 6 fifteenth check
+
+- HEAD `14d4af56b8bfc3c6328ae3444b4d371d37915b0b`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check15.log`), focused tests (`/tmp/germes-r6-focused15.log`), race tests (`/tmp/germes-r6-race15.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 fifteenth independent Codex review (HEAD `14d4af5`)
+
+- Evidence `/tmp/germes-r6-review15.PpJ4Pv/` (transcript.log, verdict.txt, exit 0, session `01a18f07-9450-7f50-88a9-15347eff2884`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections; peers, wiring, file.Save callers, check logs. R1-R48 unique. VERDICT: Actionable findings: 2.
+- Open findings for the fix step:
+  1. P2 `out.go:171`: a `user_message` does not clear `output.last`. History `user A, text A, user B, error B, turn_done B` (A's completion unsaved and missed, B failed with no text): replay keeps A's text across B's user message and sends it at B's completion. Suggested: clear abandoned per-turn output at each genuine (deduplicated) `user_message`; regression with that history.
+  2. P2 `telegram.go:340`: the `settle` lost branch deletes `ReplyTo` without checking `replyGeneration`/`replySending`. During a reconnect catch-up the poller can register and accept a follow-up while settle's second check is in flight; settle then deletes the newer registration and its answer is ignored. Suggested: capture the generation before the lookups and only delete under `mu` if it is unchanged and no send is in flight, else recheck/keep; barrier regression.
+
+### Round 6 fifteenth consistency audit (read-only, HEAD `14d4af5`)
+
+- Finding 1 CONFIRMED: the `user_message` case (`out.go:171-172`) only calls `markAnswered`; `output.last`/`output.limited` are cleared only at a handled `turn_done` (`out.go:189-194`) or the lost branch. When A's `turn_done` was never saved and its live copy was missed, a replay of `user A, text A, user B, error B, turn_done B` sends A's text as B's answer. Rare (save failure plus a missed live event), but the fix is one line and matches the turn model (a new user message starts a new turn). Fix: in that case also drop `output.last` and `output.limited` for the session. Regression with that history.
+- Finding 2 CONFIRMED: the `settle` lost branch (`telegram.go:339-341`) deletes `ReplyTo`/`Answered` with no generation or in-flight check, unlike `finishReply`, which compares `replyGeneration` and `replySending` under `mu` (`out.go`, cleanup switch). `catchUp` runs `settle` on the watcher while the poller can register a follow-up, and `settle` releases `outputMu` during its one-second recheck. Fix: capture `replyGeneration[id]` at the start of each check; in the lost branch delete only if it is unchanged and `replySending[id] == 0` under `mu`, else return and keep the topic (its own turn will finish it). Regression: register a follow-up during the recheck wait; the follow-up keeps its topic and gets its answer.
+- Scope note: 15 review cycles. Both fixes are small and local; the remaining items are documented limits. R1-R48 unique. Result: FINDINGS.
+
+### Round 6 fifteenth fix (new turn drops stale text; settle keeps a newer registration)
+
+- `internal/telegram/out.go`: the stored `user_message` case also drops `output.last` and `output.limited` for the session, so text from a turn whose `turn_done` never came cannot become the next turn's answer.
+- `internal/telegram/telegram.go` `settle`: captures `replyGeneration[id]` at the start of each check; the lost branch deletes only if it is unchanged and `replySending[id] == 0` under `mu`, else it returns and keeps the topic for the newer request (same guard as `finishReply`).
+- New regressions: `TestRunNewTurnDropsUnfinishedText` (history `user A, text A, user B, error B, turn_done B`), `TestRunSettleKeepsNewerRegistration` (follow-up registered while the second settle check is in flight). BEFORE (HEAD code via `-overlay`): both failed, exit 1 ("answer A" sent as B's answer; the follow-up's topic was removed and its answer never sent). AFTER: pass. No existing test changed.
+- PLAN: lost branch keeps a newer registration; each stored `user_message` drops stale turn output; regression names.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix15-path` -> `/tmp/germes-r6-fix15.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

@@ -1857,3 +1857,115 @@ func TestRunLostTurnTextIsNotReused(t *testing.T) {
 		}
 	})
 }
+
+// A's turn_done was never saved and was missed live; queued B then failed
+// without text. Replaying both, A's text must not become B's answer.
+func TestRunNewTurnDropsUnfinishedText(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"reply_to":{"s1":7},"answered":{"s1":0}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 1)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "A"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "answer A"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindUserMessage, Text: "B"},
+			{SessionID: "s1", Seq: 4, Kind: api.KindError, Text: "boom"},
+			{SessionID: "s1", Seq: 5, Kind: api.KindTurnDone},
+		}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		synctest.Wait()
+		if len(tr.sent) != 1 || tr.sent[0]["text"] != "⚠ boom" {
+			t.Errorf("sent = %v, want only B's error", tr.sent)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A reconnect settles a waiting session whose turn looks unfinished. If a
+// follow-up request registers while that check is in flight, the old
+// verdict must not remove the newer request's topic.
+func TestRunSettleKeepsNewerRegistration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project","session_id":"s1"}},"reply_to":{"s1":8}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &dropService{streams: make(chan chan api.Event)}
+		var calls atomic.Int32
+		looking, release := make(chan struct{}), make(chan struct{})
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			switch calls.Add(1) {
+			case 1:
+				return api.Session{ID: "s1", Status: api.StatusWorking}, nil // kept at start
+			case 3:
+				close(looking)
+				<-release // the second settle check, in flight
+			}
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			return api.MessageResult{SessionID: "s1"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		first := make(chan api.Event)
+		svc.streams <- first
+		<-tr.polls
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "old"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "old partial"},
+		}
+		close(first) // dropped
+		second := make(chan api.Event, 3)
+		svc.streams <- second
+		<-looking
+		tr.updates <- []update{msg(1, 8, kevin, "next")}
+		<-tr.polls // the follow-up is registered and accepted
+		close(release)
+		synctest.Wait()
+		next := []api.Event{
+			{SessionID: "s1", Seq: 3, Kind: api.KindUserMessage, Text: "next"},
+			{SessionID: "s1", Seq: 4, Kind: api.KindText, Text: "answer next"},
+			{SessionID: "s1", Seq: 5, Kind: api.KindTurnDone},
+		}
+		svc.history = append(svc.history, next...)
+		for _, ev := range next {
+			second <- ev
+		}
+		synctest.Wait()
+		answered := false
+		for _, p := range tr.sent {
+			if p["text"] == "answer next" && p["message_thread_id"] == float64(8) {
+				answered = true
+			}
+		}
+		if !answered {
+			t.Errorf("sent = %v, want the follow-up answered in topic 8", tr.sent)
+		}
+		cancel()
+		close(second)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

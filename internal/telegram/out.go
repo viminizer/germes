@@ -169,6 +169,10 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 		}
 	case !asked:
 	case ev.Kind == api.KindUserMessage && ev.Seq != 0:
+		// A new turn: output left by one whose turn_done never came (not
+		// saved, and missed live) is not this turn's answer.
+		delete(t.output.last, ev.SessionID)
+		delete(t.output.limited, ev.SessionID)
 		t.markAnswered(ev.SessionID, ev.Seq-1, false)
 	case ev.Kind == api.KindStatus:
 		t.reply(ctx, thread, "⏳ "+ev.Text)

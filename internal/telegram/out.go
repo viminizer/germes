@@ -127,8 +127,14 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 		delete(t.output.seq, ev.SessionID)
 		delete(t.output.noticeSeq, ev.SessionID)
 	}
-	if asked && ev.Kind == api.KindTurnDone && ev.Seq > t.output.seq[ev.SessionID]+1 && !t.replayMissed(ctx, ev) {
-		return // unknown: the topic keeps waiting, and the next start settles it
+	if asked && ev.Seq != 0 && ev.Kind != api.KindNotice {
+		// A stored event after a gap: send what this bot missed first, or
+		// an earlier unanswered turn would be skipped. With no watermark,
+		// only a turn_done can tell its turn was missed.
+		after, known := t.watermark(ev.SessionID)
+		if (known && ev.Seq > after+1 || !known && ev.Kind == api.KindTurnDone) && !t.replayMissed(ctx, ev) {
+			return // unknown: the topic keeps waiting, and the next start settles it
+		}
 	}
 	seq := t.output.seq
 	if ev.Kind == api.KindNotice {
@@ -279,25 +285,18 @@ func (t *Telegram) finishSent(ctx context.Context, id string) {
 }
 
 // replayMissed sends the stored events of a waiting session that this bot
-// did not see live before done, its turn_done: the bot attached during a
-// hand-over, or the hub dropped its stream. With nothing seen yet it starts
-// after the saved answered boundary, else at the turn's user message. Runs
-// with outputMu held.
-func (t *Telegram) replayMissed(ctx context.Context, done api.Event) bool {
-	after := t.output.seq[done.SessionID]
-	if after == 0 {
-		t.mu.Lock()
-		answered, known := t.state.Answered[done.SessionID]
-		t.mu.Unlock()
+// did not see live before ev: the bot attached during a hand-over, or the
+// hub dropped its stream. It starts after the watermark, else (ev is a
+// turn_done) at the turn's user message. Runs with outputMu held.
+func (t *Telegram) replayMissed(ctx context.Context, ev api.Event) bool {
+	after, known := t.watermark(ev.SessionID)
+	if !known {
 		after = -1
-		if known {
-			after = answered
-		}
 	}
-	missed, err := t.storedEvents(ctx, done.SessionID, after, done.Seq)
+	missed, err := t.storedEvents(ctx, ev.SessionID, after, ev.Seq)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			slog.Warn("telegram: read missed events", "session", done.SessionID, "err", err)
+			slog.Warn("telegram: read missed events", "session", ev.SessionID, "err", err)
 		}
 		return false
 	}
@@ -305,6 +304,19 @@ func (t *Telegram) replayMissed(ctx context.Context, done api.Event) bool {
 		t.sendReplyEvent(ctx, ev)
 	}
 	return true
+}
+
+// watermark is the last stored event of a waiting session this bot has
+// handled: the last one seen, else the saved answered boundary. Runs with
+// outputMu held.
+func (t *Telegram) watermark(id string) (int64, bool) {
+	if seq := t.output.seq[id]; seq != 0 {
+		return seq, true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	answered, known := t.state.Answered[id]
+	return answered, known
 }
 
 // callKey names a tool call across sessions: call ids are only unique in one.

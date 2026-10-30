@@ -220,6 +220,29 @@
 - PLAN Telegram contract: answered boundary, all outstanding turns, same-bot restart cleanup; regression names.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix8-path` -> `/tmp/germes-r6-fix8.*`. Both review gates must run again on the new commit.
 
+### Round 6 ninth check
+
+- HEAD `1eef66f12dd05706c1368dd510ad10a067ab8512`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check9.log`), focused tests (`/tmp/germes-r6-focused9.log`), race tests (`/tmp/germes-r6-race9.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 ninth independent Codex review (HEAD `1eef66f`)
+
+- Evidence `/tmp/germes-r6-review9.cSj4pN/` (transcript.log, verdict.txt, exit 0, session `01a18e92-58f7-7260-bc26-1da4a2759596`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections; peers, wiring, file.Save callers, check logs. R1-R48 unique. VERDICT: Actionable findings: 1.
+- Open finding for the fix step:
+  1. P2 `out.go:130`, `out.go:141`, `telegram.go:275`: unanswered turn A finishes and queued B starts before the new bot subscribes. Startup sees B working and returns without replaying A. B's first live event (seq 5) moves `output.seq` straight to 5, so B's `turn_done` (6) sees no gap; only B's answer goes out, and cleanup removes the destination and `Answered`. A's answer is lost without any failure. Suggested: replay missing stored history before advancing the cursor on any stored reply event (not only `turn_done`), or reconcile from the saved boundary after subscription even while busy; regression with A finished before subscription and B still working.
+
+### Round 6 ninth consistency audit (read-only, HEAD `1eef66f`)
+
+- Finding CONFIRMED: `settle` (`telegram.go:274-276`) returns for a working/paused/queued session before any replay, and `sendReplyEvent` (`out.go:130-141`) checks for a sequence gap only on `turn_done`, while any stored event advances `output.seq`. With `answered` = 0 saved (old bot saw user A), A done at 3 and B started at 4 before subscription, B's first live event (5) sets the cursor to 5, B's `turn_done` (6) sees no gap, B's answer goes out and cleanup drops `answered`: A's answer is lost. Happens when a queued follow-up is running across a hand-over; no failure needed.
+- Suggested fix, reusing `replayMissed`: run the gap check on every stored non-notice event of a waiting session (not only `turn_done`), with the watermark `max(output.seq, answered)`; when neither is known keep today's behaviour (only `turn_done` replays the last turn). `replayMissed` then sends events strictly between the watermark and the current event; A's `turn_done` inside that replay calls `finishReply`, which keeps the topic because B is working. Stored notices also make gaps; that only costs an extra empty read. Regression: A finished and B working at start with `answered` saved; B's events then arrive live; both answers sent, then cleanup. Update PLAN (gap check on any stored event).
+- Nothing else: R1-R48 unique; state file compatibility (old files without `answered`) holds. Result: FINDINGS.
+
+### Round 6 ninth fix (gap check on any stored event)
+
+- `internal/telegram/out.go`: `sendReplyEvent` now checks for a gap on every stored non-notice event of a waiting session, against the new `watermark` (last seen sequence, else the saved `answered` boundary); with no watermark only a `turn_done` triggers the last-turn replay, as before. `replayMissed` takes any event and uses the same watermark. A queued turn still running at start can no longer hide an earlier finished one: its first live event replays the missed turn first (that turn's `turn_done` keeps the topic because the session is still working).
+- New regression `TestRunLiveGapSendsEarlierTurn` (A finished, B working at start, `answered` saved; B's events arrive live). BEFORE (HEAD `out.go` via `-overlay`): failed, exit 1 (only "answer B"). AFTER: pass. No existing test changed.
+- PLAN: gap check on any stored event with the watermark; regression name added.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix9-path` -> `/tmp/germes-r6-fix9.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

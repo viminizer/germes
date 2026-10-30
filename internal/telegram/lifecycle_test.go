@@ -1495,3 +1495,62 @@ func TestRunSameBotRestartFinishesReply(t *testing.T) {
 		}
 	})
 }
+
+// A finished unanswered and queued B was still working when the new bot
+// started. B's first live event comes after a gap: A's stored answer goes
+// out first, then B's.
+func TestRunLiveGapSendsEarlierTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"reply_to":{"s1":7},"answered":{"s1":0}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 2)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "A"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "answer A"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+			{SessionID: "s1", Seq: 4, Kind: api.KindUserMessage, Text: "B"},
+		}
+		var finished atomic.Bool
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			if finished.Load() {
+				return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+			}
+			return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls // the start kept s1: B is working
+		synctest.Wait()
+		textB := api.Event{SessionID: "s1", Seq: 5, Kind: api.KindText, Text: "answer B"}
+		doneB := api.Event{SessionID: "s1", Seq: 6, Kind: api.KindTurnDone}
+		svc.history = append(svc.history, textB, doneB)
+		finished.Store(true)
+		svc.events <- textB
+		svc.events <- doneB
+		synctest.Wait()
+		want := []string{"answer A", "answer B"}
+		if len(tr.sent) != len(want) {
+			t.Errorf("sent = %v, want %q", tr.sent, want)
+		} else {
+			for i, text := range want {
+				if p := tr.sent[i]; p["text"] != text || p["message_thread_id"] != float64(7) {
+					t.Errorf("reply %d = %v, want %q in topic 7", i, p, text)
+				}
+			}
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Error("the finished turns are still waiting")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

@@ -60,3 +60,14 @@ func TestGuardSendsBackUncheckedChanges(t *testing.T) {
 		t.Fatal("nudged twice in one turn")
 	}
 }
+
+func TestGuardRunsAFailedCallAgainAfterAnEdit(t *testing.T) {
+	g := newGuard(t.TempDir())
+	test := bash("go test ./...")
+	g.note(test, tool.Result{IsError: true})
+	g.note(test, tool.Result{IsError: true})
+	g.note(llm.ToolCall{Name: "Edit"}, tool.Result{})
+	if g.refuse(test) != "" {
+		t.Fatal("refused a check after the code changed")
+	}
+}

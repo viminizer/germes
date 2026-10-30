@@ -40,14 +40,16 @@ func New(e env.Environment) []tool.Tool {
 				return "", err
 			}
 			out := strings.TrimRight(res.Output, "\n")
-			switch {
-			case res.TimedOut:
-				out += fmt.Sprintf("\n[timed out after %s]", timeout)
-			case res.ExitCode != 0:
-				out += fmt.Sprintf("\n[exit code %d]", res.ExitCode)
-			}
 			if strings.TrimSpace(out) == "" {
 				out = "(no output)"
+			}
+			// A command that fails is an error result: workflow on_fail
+			// steps and the loop guard read it.
+			switch {
+			case res.TimedOut:
+				return "", fmt.Errorf("%s\n[timed out after %s]", out, timeout)
+			case res.ExitCode != 0:
+				return "", fmt.Errorf("%s\n[exit code %d]", out, res.ExitCode)
 			}
 			return out, nil
 		}),

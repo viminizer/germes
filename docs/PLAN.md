@@ -780,7 +780,7 @@ func NewDocker(...) *Docker // later, for --sandbox
 
 - Local runs `bash -c <cmd>` in the project folder.
 - Timeout or Esc kills the whole process group, so child processes do not keep running.
-- A non-zero exit code is a normal result the model sees. `error` only means "could not start".
+- A non-zero exit code is a normal `Result` here; `error` only means "could not start". The Bash tool turns a non-zero exit or a timeout into an error result that keeps the output and ends with `[exit code N]`: workflow `on_fail` and the loop guard read it (until 2026-10-30 it was a plain result, so failing run steps passed).
 - A fresh shell for every call: `cd` and `export` do not carry over (same as Claude Code).
 - Skipped: long-running background processes (dev servers). Add when an app needs one.
 
@@ -1217,7 +1217,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Blocked tool call: error result identifying the configured rule; the handler never runs. File-path normalization and newline wildcard matching follow the Permissions contract above.
 - Timeout: kill the whole process group, error result.
 - Huge output: cut to about 50k characters with a note.
-- Non-zero exit code: normal result.
+- Non-zero exit code: an error result with the output and `[exit code N]`; the model sees all of it. A long one is saved to a file like any long output. The loop guard forgets failed calls once files change.
 - Memory file full: error asking the model to merge entries first.
 - Two sessions on one project: separate worktrees (see "Worktrees").
 - `@` reference fails (file missing, blocked by the block list, URL fails, git error): that reference shows `[error: …]` inside the attachment; the message still goes. Too much text: each reference is cut at 50k characters, and references past 120k in total are left out with a note.

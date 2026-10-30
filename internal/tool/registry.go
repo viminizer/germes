@@ -117,7 +117,7 @@ func (r *Registry) Run(ctx context.Context, name string, c Call) (res Result) {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return Result{IsError: true, Output: fmt.Sprintf("%s timed out after %s", name, defaultTimeout)}
 		}
-		return Result{IsError: true, Output: cut(err.Error())}
+		return Result{IsError: true, Output: r.shorten(c.SessionID, name, err.Error())}
 	}
 	return Result{Output: r.shorten(c.SessionID, name, out)}
 }

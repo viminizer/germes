@@ -55,7 +55,9 @@ func (g *guard) note(c llm.ToolCall, res tool.Result) string {
 	}
 	switch c.Name {
 	case "Write", "Edit":
+		// Changed files: a call that failed before may pass now.
 		g.edited = true
+		clear(g.fails)
 	case "Bash":
 		if isCheck(c.Args) {
 			g.edited = false

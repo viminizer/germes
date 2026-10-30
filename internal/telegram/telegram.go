@@ -72,8 +72,9 @@ type Telegram struct {
 	replySending    map[string]int
 	replyDone       map[string]int64 // turn_done seq seen while a send was in flight
 	// handled is the last stored event seen per session this bot has
-	// answered before, also while nobody waits for it: a new request
-	// starts its answered boundary there.
+	// answered before, also while nobody waits for it, kept after its
+	// topic is forgotten: copies of older events still on their way after
+	// a new request registers the session are skipped.
 	handled map[string]int64
 
 	outputMu sync.Mutex // serializes stored creation replay with the live watcher
@@ -460,16 +461,6 @@ func (t *Telegram) sendMessage(ctx context.Context, thread int64, r api.MessageR
 		t.replyGeneration[id]++
 		t.replySending[id]++
 		t.state.ReplyTo[id] = thread
-		if _, known := t.state.Answered[id]; !known {
-			// Without it, a restart or a dropped watch before this bot sees
-			// the new user message would recover only the last turn.
-			if seq, ok := t.handled[id]; ok {
-				if t.state.Answered == nil {
-					t.state.Answered = map[string]int64{}
-				}
-				t.state.Answered[id] = seq
-			}
-		}
 	}
 	t.mu.Unlock()
 

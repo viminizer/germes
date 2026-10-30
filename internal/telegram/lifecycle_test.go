@@ -1555,79 +1555,6 @@ func TestRunLiveGapSendsEarlierTurn(t *testing.T) {
 	})
 }
 
-// A new request to a session this bot already answered starts its boundary
-// at the last event it handled. If the watch is dropped before the bot sees
-// the new user message and two turns finish, both answers still go out.
-func TestRunRegistrationSeedsAnsweredBoundary(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "telegram.json")
-		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project","session_id":"s1"}}}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		svc := &dropService{streams: make(chan chan api.Event)}
-		svc.lookup = func(context.Context, string) (api.Session, error) {
-			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
-		}
-		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
-			return api.MessageResult{SessionID: "s1"}, nil
-		}
-		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
-		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
-		tg.bot.http.Transport = tr
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		done := make(chan error, 1)
-		go func() { done <- tg.Run(ctx) }()
-		first := make(chan api.Event, 3)
-		svc.streams <- first
-		<-tr.polls
-		// An earlier turn, seen and answered: the topic is forgotten.
-		tr.updates <- []update{msg(1, 8, kevin, "first")}
-		<-tr.polls
-		svc.history = []api.Event{
-			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "first"},
-			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "answer 0"},
-			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
-		}
-		for _, ev := range svc.history {
-			first <- ev
-		}
-		synctest.Wait()
-		close(first) // dropped
-		tr.updates <- []update{msg(2, 8, kevin, "A")}
-		<-tr.polls
-		svc.history = append(svc.history,
-			api.Event{SessionID: "s1", Seq: 4, Kind: api.KindUserMessage, Text: "A"},
-			api.Event{SessionID: "s1", Seq: 5, Kind: api.KindText, Text: "answer A"},
-			api.Event{SessionID: "s1", Seq: 6, Kind: api.KindTurnDone},
-			api.Event{SessionID: "s1", Seq: 7, Kind: api.KindUserMessage, Text: "B"},
-			api.Event{SessionID: "s1", Seq: 8, Kind: api.KindText, Text: "answer B"},
-			api.Event{SessionID: "s1", Seq: 9, Kind: api.KindTurnDone},
-		)
-		second := make(chan api.Event)
-		svc.streams <- second
-		synctest.Wait()
-		want := []string{"answer 0", "answer A", "answer B"}
-		if len(tr.sent) != len(want) {
-			t.Errorf("sent = %v, want %q", tr.sent, want)
-		} else {
-			for i, text := range want {
-				if p := tr.sent[i]; p["text"] != text || p["message_thread_id"] != float64(8) {
-					t.Errorf("reply %d = %v, want %q in topic 8", i, p, text)
-				}
-			}
-		}
-		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
-			t.Error("the finished turns are still waiting")
-		}
-		cancel()
-		close(second)
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-	})
-}
-
 // A session used from Telegram, then from the TUI, then from Telegram again:
 // the TUI turn (its text and its send_file) must not be replayed into the
 // group when the second Telegram request starts its boundary.
@@ -1678,6 +1605,148 @@ func TestRunTUITurnBetweenTelegramRequests(t *testing.T) {
 		want := []string{"answer 1", "answer 2"}
 		if len(tr.sent) != len(want) {
 			t.Errorf("sent = %v, want only %q", tr.sent, want)
+		} else {
+			for i, text := range want {
+				if p := tr.sent[i]; p["text"] != text {
+					t.Errorf("reply %d = %v, want %q", i, p, text)
+				}
+			}
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A TUI turn can be missed entirely while the watch is dropped. The next
+// Telegram request must not replay it into the group.
+func TestRunMissedTUITurnStaysOutOfTelegram(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project","session_id":"s1"}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &dropService{streams: make(chan chan api.Event)}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			return api.MessageResult{SessionID: "s1"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		first := make(chan api.Event, 3)
+		svc.streams <- first
+		<-tr.polls
+		tr.updates <- []update{msg(1, 8, kevin, "first")}
+		<-tr.polls
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "first"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "answer 1"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+		}
+		for _, ev := range svc.history {
+			first <- ev
+		}
+		synctest.Wait()
+		close(first) // dropped; a whole TUI turn happens meanwhile
+		svc.history = append(svc.history,
+			api.Event{SessionID: "s1", Seq: 4, Kind: api.KindUserMessage, Text: "from the TUI"},
+			api.Event{SessionID: "s1", Seq: 5, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "c1", Name: api.ToolSendFile}},
+			api.Event{SessionID: "s1", Seq: 6, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "c1", Output: "/no/such/report.txt"}},
+			api.Event{SessionID: "s1", Seq: 7, Kind: api.KindText, Text: "TUI answer"},
+			api.Event{SessionID: "s1", Seq: 8, Kind: api.KindTurnDone},
+		)
+		second := make(chan api.Event, 3)
+		svc.streams <- second
+		synctest.Wait()
+		tr.updates <- []update{msg(2, 8, kevin, "second")}
+		<-tr.polls
+		next := []api.Event{
+			{SessionID: "s1", Seq: 9, Kind: api.KindUserMessage, Text: "second"},
+			{SessionID: "s1", Seq: 10, Kind: api.KindText, Text: "answer 2"},
+			{SessionID: "s1", Seq: 11, Kind: api.KindTurnDone},
+		}
+		svc.history = append(svc.history, next...)
+		for _, ev := range next {
+			second <- ev
+		}
+		synctest.Wait()
+		want := []string{"answer 1", "answer 2"}
+		if len(tr.sent) != len(want) {
+			t.Errorf("sent = %v, want only %q", tr.sent, want)
+		} else {
+			for i, text := range want {
+				if p := tr.sent[i]; p["text"] != text {
+					t.Errorf("reply %d = %v, want %q", i, p, text)
+				}
+			}
+		}
+		cancel()
+		close(second)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// Late copies of a delivered turn can still be on their way when a new
+// request registers the session again. They must not send it twice.
+func TestRunLateCopiesAfterNewRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project","session_id":"s1"}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 5)}}}}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			return api.MessageResult{SessionID: "s1"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		push := func(events ...api.Event) {
+			for _, ev := range events {
+				svc.events <- ev
+			}
+			synctest.Wait()
+		}
+		tr.updates <- []update{msg(1, 8, kevin, "A")}
+		<-tr.polls
+		a := []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "A"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "answer A"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+		}
+		svc.history = append(svc.history, a...)
+		push(a...)
+		tr.updates <- []update{msg(2, 8, kevin, "B")}
+		<-tr.polls
+		push(a[1], a[2]) // late copies of A, after B registered the session
+		b := []api.Event{
+			{SessionID: "s1", Seq: 4, Kind: api.KindUserMessage, Text: "B"},
+			{SessionID: "s1", Seq: 5, Kind: api.KindText, Text: "answer B"},
+			{SessionID: "s1", Seq: 6, Kind: api.KindTurnDone},
+		}
+		svc.history = append(svc.history, b...)
+		push(b...)
+		want := []string{"answer A", "answer B"}
+		if len(tr.sent) != len(want) {
+			t.Errorf("sent = %v, want %q", tr.sent, want)
 		} else {
 			for i, text := range want {
 				if p := tr.sent[i]; p["text"] != text {

@@ -290,6 +290,33 @@
 - New regression `TestRunTUITurnBetweenTelegramRequests` (Telegram turn, TUI turn with text and `send_file`, Telegram turn). BEFORE (HEAD code via `-overlay`): failed, exit 1 (the TUI file error and "TUI answer" were posted to the group). AFTER: pass. No existing test changed.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix11-path` -> `/tmp/germes-r6-fix11.*`. Both review gates must run again on the new commit.
 
+### Round 6 twelfth check
+
+- HEAD `e860a3500366cf3797f24462bf2e21ac34790c97`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check12.log`), focused tests (`/tmp/germes-r6-focused12.log`), race tests (`/tmp/germes-r6-race12.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 twelfth independent Codex review (HEAD `e860a35`)
+
+- Evidence `/tmp/germes-r6-review12.B4jrkT/` (transcript.log, verdict.txt, exit 0, session `01a18ecd-910b-7722-b2fb-7e40e4b8848b`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files, RULEBOOK and PROGRESS through EOF in reads of at most 160 lines; PLAN scope sections; peers, wiring, file.Save callers, check logs. R1-R48 unique. VERDICT: Actionable findings: 2.
+- Open findings for the fix step:
+  1. P2 `telegram.go:466`: `handled` only advances for events the watcher receives. A TUI turn missed in a watch gap (rate-limit drop) leaves it stale; the next Telegram request seeds `answered` from it and replays that TUI turn (text and `send_file`) into the group. `catchUp` only looks at waiting sessions. PLAN's claim that TUI turns are excluded is too strong.
+  2. P2 `out.go:148`: reply dedup uses only `output.seq`, which cleanup deletes. If catch-up delivered A while live copies of A are still buffered, and a new request registers the session, the delayed copies pass dedup and A (and uploads) are sent again. Suggested: reject stored reply events at or below max(answered boundary, delivery cursor), notice cursor independent.
+- Note for the audit: both findings come from the boundary-seeding added in the tenth/eleventh fixes; reverting the seeding and using `handled` only as a dedup floor would remove finding 1 and fix finding 2, at the cost of widening documented limit (d).
+
+### Round 6 twelfth consistency audit (read-only, HEAD `e860a35`)
+
+- Finding 1 CONFIRMED: `sendMessage` (`telegram.go:463-471`) seeds `answered` from `handled`, and `handled` (`out.go:125-129`) only moves for events the watcher receives; a TUI turn lost in a watch gap leaves it stale, and the seeded boundary replays that turn into the group. The seeding has now caused two regressions in a row (review 11 finding 1, this finding 1). Decision: REVERT the seeding in `sendMessage`. The boundary is again set only from the first `user_message` seen and each handled `turn_done`. Documented limit (d) widens to: a request whose `user_message` the bot never sees, with two turns finishing before it does, recovers only the last answer. That case needs a watch gap or restart plus two complete turns inside it; replaying another client's turn into the group is worse and more frequent.
+- Finding 2 CONFIRMED: reply dedup (`out.go:146-151`) uses only `output.seq`, deleted at cleanup (`out.go:132`, `:252`), so live copies of an already delivered turn still in the stream pass after a new registration. Fix: keep `handled` (in memory, kept after cleanup) only as a dedup floor: skip a stored non-notice event when `ev.Seq <= max(output.seq, handled)` read BEFORE recording it, then record `handled` where the reply cursor is recorded (the current top-of-function update would make every event, and nested gap replays, skip themselves). Keep advancing `handled` for unasked events of known sessions there too, so delayed copies of TUI events are also floored. Notice cursor unchanged.
+- Regressions: remove `TestRunRegistrationSeedsAnsweredBoundary` (it tests the reverted behavior; record why) and keep `TestRunTUITurnBetweenTelegramRequests`; add a TUI turn missed during a dropped watch, then a Telegram request (nothing replayed), and delayed live copies of a delivered turn after re-registration (no second answer). Update PLAN (boundary sources, limit (d), dedup floor).
+- Nothing else: R1-R48 unique. Result: FINDINGS.
+
+### Round 6 twelfth fix (revert boundary seeding; handled as dedup floor)
+
+- `internal/telegram/telegram.go` `sendMessage`: the `answered` seeding from `handled` (tenth fix) is removed; the boundary is again set only from the first `user_message` seen and each handled `turn_done`.
+- `internal/telegram/out.go` `sendReplyEvent`: `handled` is read at the top and used as a dedup floor: a stored non-notice event of a waiting session at or below it is a late copy and is skipped. `handled` is recorded in a `defer` after the event is handled (so nested gap replays are not skipped), for waiting sessions and for sessions already known while nobody waits (TUI turns).
+- Tests: `TestRunRegistrationSeedsAnsweredBoundary` removed (it asserted the reverted seeding). New `TestRunMissedTUITurnStaysOutOfTelegram` (TUI turn missed during a dropped watch, then a Telegram request) and `TestRunLateCopiesAfterNewRequest` (late copies of A after B registered). BEFORE (HEAD code via `-overlay`): both failed, exit 1 (TUI file error and "TUI answer" posted; "answer A" sent twice). AFTER: pass. `TestRunTUITurnBetweenTelegramRequests` kept and passing.
+- PLAN: boundary sources, limit (d) widened (a request whose user message the bot never sees, with two turns finishing first, recovers only the last answer), and the dedup floor.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix12-path` -> `/tmp/germes-r6-fix12.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

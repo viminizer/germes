@@ -122,12 +122,21 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 	t.mu.Lock()
 	thread, asked := t.state.ReplyTo[ev.SessionID]
 	generation := t.replyGeneration[ev.SessionID]
-	if _, known := t.handled[ev.SessionID]; ev.Seq != 0 && ev.Kind != api.KindNotice && (asked || known) {
-		// Also while nobody waits here (a TUI turn), so the next request's
-		// boundary does not replay those turns into Telegram.
-		t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
-	}
+	handled, known := t.handled[ev.SessionID]
 	t.mu.Unlock()
+	stored := ev.Seq != 0 && ev.Kind != api.KindNotice
+	if asked && stored && ev.Seq <= handled {
+		return // already seen: a late copy of an older turn
+	}
+	if stored && (asked || known) {
+		// Also while nobody waits here (a TUI turn). Recorded after the
+		// event is handled, so the gap replay below is not skipped.
+		defer func() {
+			t.mu.Lock()
+			t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
+			t.mu.Unlock()
+		}()
+	}
 	if !asked {
 		delete(t.output.seq, ev.SessionID)
 		delete(t.output.noticeSeq, ev.SessionID)

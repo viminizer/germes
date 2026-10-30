@@ -189,6 +189,7 @@ func (s *Scheduler) StopJob(ctx context.Context, id string) error {
 		if j.Status == api.JobRunning {
 			j.Status = api.JobStopped
 		}
+		j.Finished = j.Runs // the stopped round is dropped, never read later
 		return nil
 	})
 	if err != nil {
@@ -318,7 +319,10 @@ func (s *Scheduler) finishRunningRound(ctx context.Context, id string) bool {
 			s.waitIdle(ctx, j.SessionID, 0)
 		}
 		res = s.runWorkflow(ctx, j)
-	case working:
+	case working || (j.Workflow == "" && j.SessionID != "" && j.Runs > j.Finished):
+		// Still working, or it ended while no scheduler watched (a hand-over
+		// cut in before its result was recorded): read its reply. An idle
+		// session's saved events are read at once.
 		res = s.plainRound(s.waitIdle(ctx, j.SessionID, 0))
 	default:
 		return true
@@ -365,6 +369,7 @@ func (s *Scheduler) advance(ctx context.Context, id string) (api.Job, bool) {
 // finish records how a round ended and reports whether the job runs on.
 func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 	j, err := s.update(ctx, id, func(j *api.Job) error {
+		j.Finished = j.Runs // recorded: a restart does not read it again
 		if j.Status != api.JobRunning {
 			return nil
 		}

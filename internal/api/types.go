@@ -178,6 +178,7 @@ type Job struct {
 	Every      time.Duration     `json:"every"`            // time between round starts; 0 = next round right away
 	MaxRuns    int               `json:"max_runs"`         // 0 = no limit
 	Runs       int               `json:"runs"`
+	Finished   int               `json:"finished"` // rounds whose result was recorded; Runs > Finished: one ended unrecorded (a hand-over cut in)
 	Failures   int               `json:"failures"` // failed rounds in a row
 	NextRunAt  time.Time         `json:"next_run_at"`
 	Status     JobStatus         `json:"status"`

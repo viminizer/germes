@@ -863,6 +863,7 @@ type Job struct {
 
 Each round:
 1. Save `Runs+1` and the next `NextRunAt` before running. A crash never runs a round twice (same as Hermes).
+   Recording the round's result also saves `Finished = Runs` (issue #29), like Hermes's cron marks `last_run_at` only after a run is handled (`hermes/cron/jobs_oneshot_diagnostics.py`). A scheduler that starts (after a hand-over or a restart) and finds `Runs > Finished` with the round's session idle reads that session's last reply and records it, so a `[DONE]` given while no scheduler watched still ends the job. `Runs == Finished`: already recorded, never read twice. Stopping a job sets `Finished = Runs` too: a stopped round is dropped. Migration 012 sets `finished = runs` for older jobs.
 2. Send the prompt through `session.Manager`. Each round gets a new session: fresh context, no special engine mode. The prompt says: read and update `PROGRESS.md`, reply `[DONE]` when nothing is left.
 3. `Watch` that session until `turn_done`.
 4. Reply has `[DONE]`: status `done`.
@@ -1206,7 +1207,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Socket path too long (macOS limit about 104 bytes, deep `GERMES_HOME`): use `/tmp/germes-<uid>-<hash>.sock`.
 - Two daemons start at once: the lock lets one win; the other exits; the client connects to the winner.
 - Old daemon after an upgrade: it hands over at once (see "Daemon module"). The new daemon does not come up: the old one keeps serving. An old daemon that crashes while finishing turns: its stream to the new daemon ends, and the new daemon removes its registry file and socket and marks the turns it left as `interrupted` (checked live with `kill -9`). A `claude` process of a killed daemon runs on alone until its turn ends; its output is lost. Clients holding a kept-alive connection to the old daemon are moved: it closes its main socket and watch streams after the hand-over.
-- Daemon crash in the middle of a turn: on restart the turn is saved as `interrupted`. Jobs continue; advance-before-run means no double round.
+- Daemon crash in the middle of a turn: on restart the turn is saved as `interrupted`. Jobs continue; advance-before-run means no double round, and a round that ended during the hand-over or restart is still read (`Finished`, see "Job module").
 - A goroutine panics (worker, job, telegram): recover it, save an `error` event, the session goes idle. The daemon keeps running.
 - Migration fails or database broken: refuse to start, do not touch the file. Never delete data automatically.
 - Database busy: wait (busy timeout).

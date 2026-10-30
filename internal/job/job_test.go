@@ -154,3 +154,65 @@ func TestStartingAnIdleJobRunsNow(t *testing.T) {
 	}
 	waitJob(t, s, j.ID, func(j api.Job) bool { return j.Runs == 2 && j.Idle == 1 })
 }
+
+// A round can end during a hand-over, while no scheduler watches it: the
+// next scheduler must still read its [DONE] instead of starting a new round.
+func TestRoundThatEndedDuringAHandOverIsRead(t *testing.T) {
+	s, r := newTestScheduler(t, "all finished [DONE]", "an extra round")
+	ctx := context.Background()
+	dir := t.TempDir()
+	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: dir, Text: "round 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitIdleSession(t, s, res.SessionID)
+	// Round 1 was counted and ran, but its result was never recorded.
+	j := api.Job{ID: "handover", Name: "handover", Dir: dir, Prompt: "build it", Status: api.JobStopped, Runs: 1,
+		SessionID: res.SessionID, NextRunAt: time.Now()}
+	if err := s.store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartJob(ctx, j.ID); err != nil { // its goroutine starts like after a hand-over
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobDone || j.Runs != 1 || len(r.turns) != 1 {
+		t.Fatalf("job %s after %d runs and %d turns; want done after the one round", j.Status, j.Runs, len(r.turns))
+	}
+}
+
+// A round whose result was recorded is not read again.
+func TestRecordedRoundIsNotReadAgain(t *testing.T) {
+	s, r := newTestScheduler(t, "all finished [DONE]", "round 2 [DONE]")
+	ctx := context.Background()
+	dir := t.TempDir()
+	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: dir, Text: "round 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitIdleSession(t, s, res.SessionID)
+	// Round 1's result was recorded (Finished), so its [DONE] is not read
+	// again: round 2 runs. This also checks the store keeps Finished.
+	j := api.Job{ID: "recorded", Name: "recorded", Dir: dir, Prompt: "build it", Status: api.JobStopped, Runs: 1, Finished: 1,
+		SessionID: res.SessionID, NextRunAt: time.Now()}
+	if err := s.store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartJob(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobDone || j.Runs != 2 || len(r.turns) != 2 {
+		t.Fatalf("job %s after %d runs and %d turns; want round 2 to run", j.Status, j.Runs, len(r.turns))
+	}
+}
+
+func waitIdleSession(t *testing.T, s *Scheduler, id string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if sess, err := s.sessions.GetSession(context.Background(), id); err == nil && sess.Status == api.StatusIdle {
+			return
+		}
+	}
+	t.Fatal("the round's session never went idle")
+}

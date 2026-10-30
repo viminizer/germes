@@ -131,6 +131,13 @@ func NewHandler(svc Service) http.Handler {
 		}
 		reply(w, r, func() (any, error) { return svc.RunTool(r.Context(), t) })
 	})
+	mux.HandleFunc("POST /tools/check", func(w http.ResponseWriter, r *http.Request) {
+		var t ToolRequest
+		if !decode(w, r, &t) {
+			return
+		}
+		reply(w, r, func() (any, error) { return svc.CheckTool(r.Context(), t) })
+	})
 	return mux
 }
 

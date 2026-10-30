@@ -72,6 +72,7 @@ type Gateway interface {
 type Tools interface {
 	ListTools(toolset string) []api.ToolInfo
 	RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error)
+	CheckTool(ctx context.Context, r api.ToolRequest) (api.ToolVerdict, error)
 }
 
 // The toolsets a CLI engine gets through MCP: Germes' own tools, not the

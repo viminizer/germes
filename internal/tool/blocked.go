@@ -35,20 +35,26 @@ func parseRule(s string) (rule, error) {
 
 // isBlocked checks the call's MatchArg against the rules for its tool.
 func (r *Registry) isBlocked(t Tool, c Call) (string, bool) {
+	return firstMatch(r.blocked, t, c)
+}
+
+// firstMatch returns the first of rules that matches the call, or false. A
+// call whose argument cannot be read safely matches (fail closed).
+func firstMatch(rules []rule, t Tool, c Call) (string, bool) {
 	value := func() (string, error) { return protectedArgument(c.Args, t.MatchArg) }
-	return r.ruleBlocking([]string{t.Name, t.BlockedAs}, t.MatchArg, value, c.Dir)
+	return matchRules(rules, []string{t.Name, t.BlockedAs}, t.MatchArg, value, c.Dir)
 }
 
 // isReadBlocked reports whether a Read rule blocks path.
 func (r *Registry) isReadBlocked(path, dir string) bool {
-	_, blocked := r.ruleBlocking([]string{"Read"}, "file_path", func() (string, error) { return path, nil }, dir)
+	_, blocked := matchRules(r.blocked, []string{"Read"}, "file_path", func() (string, error) { return path, nil }, dir)
 	return blocked
 }
 
-// ruleBlocking returns the first rule of tools that blocks the value of arg
-// (read only when a rule has a pattern), or false.
-func (r *Registry) ruleBlocking(tools []string, arg string, value func() (string, error), dir string) (string, bool) {
-	for _, rl := range r.blocked {
+// matchRules returns the first of rules for tools that matches the value of
+// arg (read only when a rule has a pattern), or false.
+func matchRules(rules []rule, tools []string, arg string, value func() (string, error), dir string) (string, bool) {
+	for _, rl := range rules {
 		if rl.tool == "" || !slices.Contains(tools, rl.tool) {
 			continue
 		}

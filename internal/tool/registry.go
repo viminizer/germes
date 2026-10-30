@@ -30,6 +30,9 @@ type Registry struct {
 	toolsets map[string]Toolset
 	blocked  []rule
 	spillDir string // long outputs are saved here in full; "" = cut them
+
+	hooks       *Hooks     // nil = no hooks (UpdateHooks)
+	globalHooks []hookRule // hooks.Global, parsed
 }
 
 // NewRegistry checks and stores the tools, toolsets and block list. Outputs
@@ -103,8 +106,8 @@ func (r *Registry) Run(ctx context.Context, name string, c Call) (res Result) {
 	if len(c.Args) == 0 {
 		c.Args = json.RawMessage(`{}`)
 	}
-	if rule, blocked := r.isBlocked(t, c); blocked {
-		return Result{IsError: true, Output: fmt.Sprintf("blocked by config (%s). Do not try to work around it; ask the user.", rule)}
+	if why := r.check(ctx, t, c); why != "" {
+		return Result{IsError: true, Output: why}
 	}
 	defer func() {
 		if p := recover(); p != nil {

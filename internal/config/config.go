@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/viminizer/germes/internal/file"
+	"github.com/viminizer/germes/internal/tool"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,9 +18,10 @@ import (
 
 // Config is the whole config file.
 type Config struct {
-	Engines  []Engine `yaml:"engines"`
-	Blocked  []string `yaml:"blocked"`
-	CodeDirs []string `yaml:"code_dirs,omitempty"` // where projects live (Telegram /bind looks here); "" = ~/dev
+	Engines  []Engine    `yaml:"engines"`
+	Blocked  []string    `yaml:"blocked"`
+	Hooks    []tool.Hook `yaml:"hooks,omitempty"`     // before a matching call: run a command or load a skill (issue #42); a project adds .germes/hooks.yaml
+	CodeDirs []string    `yaml:"code_dirs,omitempty"` // where projects live (Telegram /bind looks here); "" = ~/dev
 	// CleanupDays is how long file snapshots and saved tool outputs are
 	// kept unused; 0 = 30.
 	CleanupDays int      `yaml:"cleanup_days,omitempty"`

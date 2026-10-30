@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -77,20 +76,11 @@ func (s *Store) listSkillUses(ctx context.Context, t int64) ([]api.SkillUse, err
 		if err := rows.Scan(&at, &raw); err != nil {
 			return nil, err
 		}
-		var call struct {
-			Args struct {
-				Name     string `json:"name"`
-				Skill    string `json:"skill"`
-				FilePath string `json:"file_path"`
-			} `json:"args"`
-		}
+		var call api.ToolCall
 		if json.Unmarshal([]byte(raw), &call) != nil {
 			continue
 		}
-		name := call.Args.Name + call.Args.Skill
-		if filepath.Base(call.Args.FilePath) == "SKILL.md" {
-			name = filepath.Base(filepath.Dir(call.Args.FilePath))
-		}
+		name := api.GetLoadedSkill(&call)
 		if name == "" {
 			continue
 		}

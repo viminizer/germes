@@ -338,6 +338,18 @@ blocked:
 - Registry patterns match the whole candidate; `*` includes slashes and newlines, and leading `**/` also matches at the root. A `url` (WebFetch) is checked as given and as `domain:<host>`, so Claude Code's `WebFetch(domain:example.com)` works on both engines (the host is lowercased). File-path candidates include the raw value, its basename, the cleaned absolute target, that target's basename and its path relative to `Call.Dir`. Basename denials therefore also cover equivalent paths ending in `/.` or containing parent segments. For `file_path`, `~/` expands using the same home lookup as the file tools (if no home is available, both treat it literally). Absolute input stays absolute rather than being joined to the project folder.
 - Matching is lexical, not a sandbox: symlinks are not resolved. A shell command, as written and without its quotes and escapes, is split at every separator, line, subshell and substitution, and each part is checked from every word on, so `ls` then `sudo x` on the next line, `$(sudo x)`, `bash -c 'sudo x'` and `env sudo x` are all caught (#22). This is not a shell parser: it errs toward blocking (a commit message that mentions sudo) and cannot see a command built at run time. Claude's native tools use the CLI's own matcher. Regression checks for the registry contract: `go test ./internal/tool -run TestBlockList`.
 - `engine/claude`: allow all tools, pass the list as `--disallowedTools`, and `--permission-prompts none` so anything that would ask is refused. Never `--dangerously-skip-permissions` (my global rule).
+- One rule set for both engines (issue #42, R47): `tool.Registry.Check` decides every call, the block list and then the hooks. The Germes loop gets it in `Registry.Run`. Claude gets a `PreToolUse` hook through `--settings` that runs `germes hook check --session <id>` for every tool call (timeout 11 minutes); it asks the daemon (`CheckTool`, same registry) and exits 2 with the reason when the call may not run, which claude shows the model. Germes' own MCP tools are skipped there (the daemon checks them when they run). No daemon, an unreadable call or a failed check: blocked. `--disallowedTools` stays as a first line, but Germes decides: a multi-line `sudo` is blocked on Claude by the same checker as on Codex (checked live). Claude-only tools (MultiEdit, NotebookEdit) are matched on their usual command or path argument.
+- Hooks: in `config.yaml` (`hooks:`) and a project's `.germes/hooks.yaml`, read on each check:
+
+  ```yaml
+  hooks:
+    - before: Bash(gh pr create*)   # Tool(pattern), like a block rule
+      run: make check               # must pass; else the call is blocked with its output (last 4000 characters)
+    - before: Bash(gh pr create*)
+      skill: failure-cases          # must be loaded since the session's last edit (Write, Edit, MultiEdit, NotebookEdit)
+  ```
+
+  A `run` command runs in the session's folder (10 minutes at most) directly, not as a tool, so a hook never triggers itself. A skill counts as loaded by `skill_view`, Claude's `Skill` tool, or a Read of its `SKILL.md` (`api.GetLoadedSkill`, as insights count them). Not done: hooks after a call or at turn start/end; engines that cannot enforce the rules (both can today, so the router has nothing to skip; add `Enforces` with the third engine).
 - No approval events, no `waiting` status, no approval code anywhere.
 
 ### Resume ids

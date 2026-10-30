@@ -36,6 +36,7 @@ type Service interface {
 	GetInsights(ctx context.Context, since time.Time) (Insights, error)
 	ListTools(ctx context.Context, sessionID string) ([]ToolInfo, error)
 	RunTool(ctx context.Context, r ToolRequest) (ToolResult, error)
+	CheckTool(ctx context.Context, r ToolRequest) (ToolVerdict, error)
 }
 
 // EventLister lists stored events (the Service, or the store).

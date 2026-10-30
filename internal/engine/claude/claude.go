@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/viminizer/germes/internal/stream"
+	"github.com/viminizer/germes/internal/text"
 	"io"
 	"log/slog"
 	"os"
@@ -200,7 +201,7 @@ func (c *Claude) args(t engine.Turn, extra string, dirs []string) []string {
 		"--permission-prompts", "none",
 	}
 	if c.opts.Germes != "" {
-		args = append(args, "--mcp-config", c.mcpConfig(t.SessionID))
+		args = append(args, "--mcp-config", c.mcpConfig(t.SessionID), "--settings", c.hookSettings(t.SessionID))
 	}
 	for _, d := range dirs {
 		args = append(args, "--add-dir", d)
@@ -245,6 +246,25 @@ func (c *Claude) mcpConfig(sessionID string) string {
 		server["env"] = map[string]string{"GERMES_HOME": c.opts.GermesHome}
 	}
 	b, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{mcpServer: server}})
+	return string(b)
+}
+
+// hookTimeout is how long claude waits for `germes hook check`: a hook's
+// run: command may take up to 10 minutes (make check).
+const hookTimeout = 11 * 60
+
+// hookSettings is the --settings JSON that sends every tool call claude
+// makes through Germes' own check, `germes hook check` (issue #42): the
+// same block list and hooks as the Germes loop, decided by one registry.
+func (c *Claude) hookSettings(sessionID string) string {
+	cmd := text.QuoteShell(c.opts.Germes) + " hook check --session " + text.QuoteShell(sessionID)
+	if c.opts.GermesHome != "" {
+		cmd = "GERMES_HOME=" + text.QuoteShell(c.opts.GermesHome) + " " + cmd
+	}
+	hook := map[string]any{"type": "command", "command": cmd, "timeout": hookTimeout}
+	b, _ := json.Marshal(map[string]any{"hooks": map[string]any{
+		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{hook}}},
+	}})
 	return string(b)
 }
 

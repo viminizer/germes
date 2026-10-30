@@ -75,6 +75,8 @@ The same action uses the same word in every module. If one module uses `Fetch` f
 | constructor | `New` |
 | release a resource (Go's `io.Closer`) | `Close` |
 | answer yes or no (returns a bool) | `Is` / `Has` |
+| decide whether something may happen (returns why not) | `Check` |
+| make text safe to use as one shell word | `Quote` |
 | fill in references (@file, @diff…) with what they point to | `Expand` |
 | put new text where old text is, inside a string | `Replace` |
 
@@ -183,6 +185,14 @@ During a hand-over an older daemon still runs on the database, so a normal migra
 - Check: `go test ./internal/store -run TestAdditiveMigrationsKeepOlderDaemonsWorking` passes; no `DROP`, `RENAME`, or `NOT NULL` column without `DEFAULT` outside a `.contract.sql` file; only `cmd/germes/main.go` (the daemon) calls `store.New`.
 - Example: `internal/store/migrate_test.go` (`TestRenameOverlapKeepsBothVersionsWrites`)
 
+## R47. One rule set for every engine
+
+Whether a tool call may run is decided in one place, `tool.Registry.Check` (the block list, then the hooks), for every engine. The Germes loop gets it through `Registry.Run`; an engine that runs its own tools (Claude) asks it before each call (`germes hook check`, Claude's PreToolUse hook), and its own controls (`--disallowedTools`) are only a first line, never the decision. A new engine is added the same way: route its tool calls through `Check`, never a copy of the rules. Anything that keeps `Check` from deciding (no daemon, a broken hooks file, a hook that cannot run) blocks the call.
+
+- From: issue #42, 2026-10-30
+- Check: an engine package has no rule matching of its own; `go test ./internal/tool -run 'Hook|CheckTools'` and `go test ./internal/cli -run TestCheckHook` pass.
+- Example: `internal/tool/hooks.go`, `internal/cli/hook.go`
+
 ## Default rules
 
 ### Code
@@ -209,7 +219,7 @@ Kevin does not want duplicate logic. If it can be avoided, it must be avoided: t
 
 - From: default rulebook. Strengthened by Kevin 2026-10-29, audit: "i do not want duplicate logic, if it can be avoided, we must avoid it, otherwise, we can create duplicate logic in very rare cases"
 - Check: `go run github.com/mibk/dupl@latest -t 40 ./internal ./cmd` for copied blocks, and search by meaning (the same job done twice with other words), e.g. channel sends, safe file writes, argument decoding, text cutting, event paging.
-- Shared pieces today: `stream.Send`, `file.Save`, `file.DeleteOld`, `text.Shorten`, `text.Replace`, `text.Transcript`, `api.ListAllEvents`, `api.IsNotFound` / `api.HasCode`, `tool.NewRun`.
+- Shared pieces today: `stream.Send`, `file.Save`, `file.DeleteOld`, `text.Shorten`, `text.Replace`, `text.Transcript`, `text.QuoteShell`, `api.ListAllEvents`, `api.IsNotFound` / `api.HasCode`, `api.GetLoadedSkill`, `tool.NewRun`, `tool.Registry.Check`.
 - Example: `internal/text/text.go`
 
 ## R9. No dead code

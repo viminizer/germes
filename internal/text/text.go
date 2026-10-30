@@ -18,6 +18,11 @@ func Shorten(s string, n int) string {
 	return s
 }
 
+// QuoteShell quotes s as one shell word, so the shell reads it as data.
+func QuoteShell(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // Errors of Replace.
 var (
 	ErrNoMatch     = errors.New("the old text was not found; read it again and copy it exactly")

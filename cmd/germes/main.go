@@ -65,6 +65,7 @@ const usage = `usage:
   germes setup telegram talk to Germes from a Telegram group (topics bound to projects)
   germes overseer       open the overseer: one session that controls Germes (sessions, jobs) for you
   germes mcp --session <id>  MCP server with Germes' tools (claude starts it on its own)
+  germes hook check --session <id>  check one of claude's tool calls (claude runs it on its own)
   germes ls             list sessions
   germes insights [--days 30]  how Germes was used: sessions, turns, tools, skills
   germes stop <id>      stop a session's current step
@@ -168,6 +169,18 @@ func run(args []string) error {
 		return setupTelegram(p)
 	case "overseer":
 		return runTUI(ctx, p, client, tuiStart{sessionID: api.OverseerID})
+	case "hook":
+		// Claude's PreToolUse hook (issue #42). Exit 2 blocks the call; the
+		// reason on stderr goes to claude. No daemon: blocked, not started.
+		fs := flag.NewFlagSet("hook", flag.ContinueOnError)
+		sessionID := fs.String("session", "", "the Germes session claude works for")
+		if len(args) < 2 || args[1] != "check" || fs.Parse(args[2:]) != nil || *sessionID == "" {
+			return errors.New("usage: germes hook check --session <id> (claude runs it by itself)")
+		}
+		if !cli.CheckHook(ctx, client, *sessionID, os.Stdin, os.Stderr) {
+			os.Exit(2)
+		}
+		return nil
 	case "mcp":
 		fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 		sessionID := fs.String("session", "", "the session whose tools to serve")
@@ -426,6 +439,9 @@ func setupTelegram(p paths) error {
 	return nil
 }
 
+// hookTimeout is how long a hook's run: command may take (`make check`).
+const hookTimeout = 10 * time.Minute
+
 // registryTools runs tools for the daemon and jobs, with the block list,
 // in the session's folder unless the request names one.
 type registryTools struct {
@@ -442,21 +458,39 @@ func (t registryTools) ListTools(toolset string) []api.ToolInfo {
 }
 
 func (t registryTools) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
+	c, err := t.call(ctx, r)
+	if err != nil {
+		return api.ToolResult{}, err
+	}
+	res := t.reg.Run(ctx, r.Name, c)
+	return api.ToolResult{Output: res.Output, IsError: res.IsError}, nil
+}
+
+func (t registryTools) CheckTool(ctx context.Context, r api.ToolRequest) (api.ToolVerdict, error) {
+	c, err := t.call(ctx, r)
+	if err != nil {
+		return api.ToolVerdict{}, err
+	}
+	return api.ToolVerdict{Reason: t.reg.Check(ctx, r.Name, c)}, nil
+}
+
+// call is the request as a tool call, in the session's folder unless it
+// names one.
+func (t registryTools) call(ctx context.Context, r api.ToolRequest) (tool.Call, error) {
 	if r.Name == "" {
-		return api.ToolResult{}, api.NewError(api.CodeInvalid, "no tool name")
+		return tool.Call{}, api.NewError(api.CodeInvalid, "no tool name")
 	}
 	if r.Dir == "" {
 		if r.SessionID == "" {
-			return api.ToolResult{}, api.NewError(api.CodeInvalid, "no session and no folder")
+			return tool.Call{}, api.NewError(api.CodeInvalid, "no session and no folder")
 		}
 		s, err := t.sessions.GetSession(ctx, r.SessionID)
 		if err != nil {
-			return api.ToolResult{}, err
+			return tool.Call{}, err
 		}
 		r.Dir = s.Dir
 	}
-	res := t.reg.Run(ctx, r.Name, tool.Call{SessionID: r.SessionID, Dir: r.Dir, Args: r.Args})
-	return api.ToolResult{Output: res.Output, IsError: res.IsError}, nil
+	return tool.Call{SessionID: r.SessionID, Dir: r.Dir, Args: r.Args}, nil
 }
 
 // startDaemon starts `germes daemon` in the background, logging to the
@@ -570,6 +604,15 @@ func newRouter(p paths, cfg config.Config, st *store.Store, reviews *engine.Revi
 		daemon.ToolsetMCPOverseer: {Tools: append([]string{"session_search", api.ToolSendFile}, control...)},
 	}
 	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked, filepath.Join(p.home, "tool-output"))
+	if err != nil {
+		return nil, nil, err
+	}
+	// One rule set for both engines (issue #42): the registry decides for the
+	// Germes loop, and Claude asks it through `germes hook check`.
+	err = reg.UpdateHooks(tool.Hooks{Global: cfg.Hooks, Events: st, Run: func(ctx context.Context, dir, cmd string) (string, bool, error) {
+		res, err := env.NewLocal().Run(ctx, cmd, dir, hookTimeout)
+		return res.Output, err == nil && res.ExitCode == 0 && !res.TimedOut, err
+	}})
 	if err != nil {
 		return nil, nil, err
 	}

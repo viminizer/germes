@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/viminizer/germes/internal/text"
 )
 
 // Workflow is a fixed order of steps a job follows each round.
@@ -254,7 +256,7 @@ func fillCommand(cmd string, values map[string]string) string {
 		}
 		if !set[name] {
 			set[name] = true
-			fmt.Fprintf(&head, "GERMES_VALUE_%s=%s\n", name, shellQuote(v))
+			fmt.Fprintf(&head, "GERMES_VALUE_%s=%s\n", name, text.QuoteShell(v))
 		}
 		ref := "${GERMES_VALUE_" + name + "}"
 		switch quoteAfter(cmd[:m[0]]) {
@@ -295,8 +297,4 @@ func quoteAfter(s string) byte {
 		}
 	}
 	return quote
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

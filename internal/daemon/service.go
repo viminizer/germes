@@ -118,6 +118,12 @@ func (d *Daemon) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult
 	return d.opts.Tools.RunTool(ctx, r)
 }
 
+// CheckTool says whether a tool call may run (Claude's own tools ask it
+// through `germes hook check`).
+func (d *Daemon) CheckTool(ctx context.Context, r api.ToolRequest) (api.ToolVerdict, error) {
+	return d.opts.Tools.CheckTool(ctx, r)
+}
+
 // ListCheckpoints lists the snapshots of a session's folder.
 func (d *Daemon) ListCheckpoints(ctx context.Context, sessionID string) ([]api.Checkpoint, error) {
 	return d.sessions.ListCheckpoints(ctx, sessionID)

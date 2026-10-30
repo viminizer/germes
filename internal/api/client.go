@@ -201,6 +201,12 @@ func (c *Client) RunTool(ctx context.Context, r ToolRequest) (ToolResult, error)
 	return res, c.call(ctx, "POST", "/tools/run", r, &res)
 }
 
+// CheckTool asks whether a tool call may run, without running it.
+func (c *Client) CheckTool(ctx context.Context, r ToolRequest) (ToolVerdict, error) {
+	var v ToolVerdict
+	return v, c.call(ctx, "POST", "/tools/check", r, &v)
+}
+
 func (c *Client) call(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {

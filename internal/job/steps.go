@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/viminizer/germes/internal/api"
+	"github.com/viminizer/germes/internal/text"
 )
 
 // runTimeout is how long a workflow command may run (the Bash tool's max).
@@ -351,12 +352,12 @@ func (r *wfRound) merge(ctx context.Context) (string, bool) {
 	if sess.Branch == "" {
 		return "nothing to merge: the job works in the project folder", true
 	}
-	project := shellQuote(sess.Project)
+	project := text.QuoteShell(sess.Project)
 	script := fmt.Sprintf(`set -e
 main=$(git -C %[1]s rev-parse --abbrev-ref HEAD)
 git rebase "$main" || { git rebase --abort; echo "rebase onto $main failed: resolve it, commit, and merge again"; exit 1; }
 git -C %[1]s merge --ff-only %[2]s
-echo "merged %[3]s into $main"`, project, shellQuote(sess.Branch), sess.Branch)
+echo "merged %[3]s into $main"`, project, text.QuoteShell(sess.Branch), sess.Branch)
 	return r.bash(ctx, script)
 }
 

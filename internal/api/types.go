@@ -256,6 +256,12 @@ type ToolResult struct {
 	IsError bool   `json:"is_error,omitempty"`
 }
 
+// ToolVerdict says whether a tool call may run: the block list and hooks
+// decide it for every engine (issue #42).
+type ToolVerdict struct {
+	Reason string `json:"reason,omitempty"` // why it may not; "" = it may
+}
+
 // Daemon describes the running daemon.
 type Daemon struct {
 	Version   string    `json:"version"`

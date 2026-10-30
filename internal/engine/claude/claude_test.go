@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,5 +94,35 @@ func TestRunSkipsReviewAfterSavingMemory(t *testing.T) {
 	_, runs := runTurn(t, New(Options{GermesHome: home, Reviews: engine.NewReviews(context.Background(), "", nil)}), t.TempDir(), logFile)
 	if len(runs) != 1 {
 		t.Fatalf("runs %q", runs)
+	}
+}
+
+// Every tool claude runs goes through `germes hook check` for this session
+// (issue #42), with a timeout a run: hook fits in.
+func TestArgsSendToolsThroughGermesCheck(t *testing.T) {
+	c := New(Options{Germes: "/opt/my germes", GermesHome: "/home/k/.germes"})
+	args := c.args(engine.Turn{SessionID: "s1"}, "", nil)
+	i := slices.Index(args, "--settings")
+	if i < 0 {
+		t.Fatalf("no --settings in %q", args)
+	}
+	var s struct {
+		Hooks struct {
+			PreToolUse []struct {
+				Matcher string
+				Hooks   []struct {
+					Type, Command string
+					Timeout       int
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(args[i+1]), &s); err != nil || len(s.Hooks.PreToolUse) != 1 {
+		t.Fatalf("settings %s: %v", args[i+1], err)
+	}
+	h := s.Hooks.PreToolUse[0]
+	want := `GERMES_HOME='/home/k/.germes' '/opt/my germes' hook check --session 's1'`
+	if h.Matcher != "*" || h.Hooks[0].Type != "command" || h.Hooks[0].Command != want || h.Hooks[0].Timeout < 600 {
+		t.Fatalf("hook %+v\nwant command %s", h, want)
 	}
 }

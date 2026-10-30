@@ -84,10 +84,12 @@ func (s statusBar) view(width int) string {
 	if s.LastTurn > 0 {
 		parts = append(parts, styleMuted.Render("✓ "+shortDuration(s.LastTurn)))
 	}
-	// The title bold in accent; before there is one, the project.
+	// The title bold in accent, losing its end when long, like Hermes;
+	// before there is one, the project, losing its start.
 	right, rightStyle := s.Title, styleAccent.Bold(true)
+	cut := func(s string, n int) string { return ansi.Truncate(s, n, "…") }
 	if right == "" {
-		right, rightStyle = s.Project, styleLabel
+		right, rightStyle, cut = s.Project, styleLabel, truncateLeft
 	}
 	if s.Branch != "" {
 		right += " (" + s.Branch + ")"
@@ -97,7 +99,7 @@ func (s statusBar) view(width int) string {
 		left := lead + strings.Join(parts, styleMuted.Render(" │ "))
 		room := width - lipgloss.Width(left) - 3 - 2 // a gap of 3, then "─ "
 		if right != "" && room >= min(minRight, lipgloss.Width(right)) {
-			r := lead + rightStyle.Render(truncateLeft(right, room))
+			r := lead + rightStyle.Render(cut(right, room))
 			return left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(r)) + r
 		}
 		if len(parts) <= keep {

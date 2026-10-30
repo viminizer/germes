@@ -221,8 +221,9 @@ func TestStopAndSendQueue(t *testing.T) {
 	}
 }
 
-func TestSessionEntersAndLeavesWorktree(t *testing.T) {
-	ctx := context.Background()
+// newGitProject makes a git project with one commit.
+func newGitProject(t *testing.T) string {
+	t.Helper()
 	project := t.TempDir()
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
 		cmd := exec.Command("git", args...)
@@ -232,6 +233,12 @@ func TestSessionEntersAndLeavesWorktree(t *testing.T) {
 			t.Fatalf("git %v: %s", args, out)
 		}
 	}
+	return project
+}
+
+func TestSessionEntersAndLeavesWorktree(t *testing.T) {
+	ctx := context.Background()
+	project := newGitProject(t)
 	m := newTestManager(t, fakeRunner{})
 	// By default a session works in the project folder.
 	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: project, Text: "hi"})
@@ -273,6 +280,56 @@ func TestSessionEntersAndLeavesWorktree(t *testing.T) {
 	}
 }
 
+func TestLeavingASharedWorktreeMovesEverySession(t *testing.T) {
+	ctx := context.Background()
+	project := newGitProject(t)
+	block := make(chan struct{})
+	m := newTestManager(t, fakeRunner{block: block})
+	// A job's rounds: the second works in the first one's worktree.
+	first, err := m.SendMessage(ctx, api.MessageRequest{Dir: project, Worktree: true, Text: "round 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block <- struct{}{}
+	waitIdle(t, m, first.SessionID)
+	second, err := m.SendMessage(ctx, api.MessageRequest{SameDirAs: first.SessionID, Text: "round 2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := mustSession(t, m, first.SessionID).Dir
+
+	// While round 2 works there, the worktree stays.
+	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: first.SessionID, LeaveWorktree: true}); !api.HasCode(err, api.CodeInvalid) {
+		t.Fatalf("left a worktree another session works in: %v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("worktree gone: %v", err)
+	}
+
+	block <- struct{}{}
+	waitIdle(t, m, second.SessionID)
+	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: second.SessionID, LeaveWorktree: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{first.SessionID, second.SessionID} {
+		if s := mustSession(t, m, id); s.Dir != project || s.Branch != "" {
+			t.Errorf("session %s still in %s (branch %q)", id, s.Dir, s.Branch)
+		}
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("worktree kept: %v", err)
+	}
+}
+
+func mustSession(t *testing.T, m *Manager, id string) api.Session {
+	t.Helper()
+	s, err := m.GetSession(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 func TestPlanTurnSavesThePlan(t *testing.T) {
 	ctx := context.Background()
 	project := t.TempDir()
@@ -298,15 +355,7 @@ func TestPlanTurnSavesThePlan(t *testing.T) {
 
 func TestRollbackToBeforeATurn(t *testing.T) {
 	ctx := context.Background()
-	project := t.TempDir()
-	for _, args := range [][]string{{"init", "-q"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = project
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %s", args, out)
-		}
-	}
+	project := newGitProject(t)
 	os.WriteFile(filepath.Join(project, "a.txt"), []byte("before"), 0o644)
 	st, err := store.New(filepath.Join(t.TempDir(), "germes.db"))
 	if err != nil {

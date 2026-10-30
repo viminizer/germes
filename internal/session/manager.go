@@ -244,13 +244,9 @@ func (m *Manager) UpdateSession(ctx context.Context, u api.SessionUpdate) error 
 		s.Title = title
 	}
 	if u.LeaveWorktree {
-		if s.Branch == "" {
-			return api.NewError(api.CodeInvalid, "session %s is not in a worktree", s.ID)
-		}
-		if err := m.deleteWorktree(ctx, s); err != nil {
+		if err := m.leaveWorktree(ctx, &s); err != nil {
 			return err
 		}
-		s.Dir, s.Branch = s.Project, ""
 	}
 	if u.EnterWorktree {
 		if s.Branch != "" {
@@ -262,6 +258,35 @@ func (m *Manager) UpdateSession(ctx context.Context, u api.SessionUpdate) error 
 	}
 	s.UpdatedAt = time.Now()
 	return m.store.UpdateSession(ctx, s)
+}
+
+// leaveWorktree removes s's worktree and moves s back to the project folder.
+// A job's rounds share one worktree: all of them leave it, or none, so no
+// session is left in a deleted folder. The caller saves s.
+func (m *Manager) leaveWorktree(ctx context.Context, s *api.Session) error {
+	if s.Branch == "" {
+		return api.NewError(api.CodeInvalid, "session %s is not in a worktree", s.ID)
+	}
+	others, err := m.listSharing(ctx, *s)
+	if err != nil {
+		return err
+	}
+	for _, o := range others {
+		if m.isBusy(ctx, o.ID) {
+			return api.NewError(api.CodeInvalid, "session %s still works in worktree %s: wait until its turn ends", o.ID, s.Dir)
+		}
+	}
+	if err := m.deleteWorktree(ctx, *s); err != nil {
+		return err
+	}
+	s.Dir, s.Branch = s.Project, ""
+	for _, o := range others {
+		o.Dir, o.Branch, o.UpdatedAt = s.Project, "", time.Now()
+		if err := m.store.UpdateSession(ctx, o); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // deleteWorktree removes a session's worktree, or explains why it must stay.
@@ -290,27 +315,41 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	}
 	// A session whose worktree holds work is never deleted with it. A
 	// worktree other sessions still use (a job's rounds) stays.
-	if s.Branch != "" && !m.isShared(ctx, s) {
-		if err := m.deleteWorktree(ctx, s); err != nil {
-			return err
+	// On a read error the worktree is kept.
+	if s.Branch != "" {
+		if others, err := m.listSharing(ctx, s); err == nil && len(others) == 0 {
+			if err := m.deleteWorktree(ctx, s); err != nil {
+				return err
+			}
 		}
 	}
 	return m.store.DeleteSession(ctx, id)
 }
 
-// isShared reports whether another session works in s.Dir. On a read error
-// it says yes, so the worktree is kept.
-func (m *Manager) isShared(ctx context.Context, s api.Session) bool {
+// listSharing lists the other sessions that work in s.Dir (a job's rounds).
+// ponytail: the project's newest 500 sessions; page through them if a job
+// ever runs more rounds than that.
+func (m *Manager) listSharing(ctx context.Context, s api.Session) ([]api.Session, error) {
 	page, err := m.store.ListSessions(ctx, api.SessionFilter{Project: s.Project, Limit: 500})
 	if err != nil {
-		return true
+		return nil, err
 	}
+	var others []api.Session
 	for _, o := range page.Items {
 		if o.ID != s.ID && o.Dir == s.Dir {
-			return true
+			others = append(others, o)
 		}
 	}
-	return false
+	return others, nil
+}
+
+// isBusy reports whether a session runs a turn or has messages waiting,
+// here or in an old daemon that still finishes it.
+func (m *Manager) isBusy(ctx context.Context, id string) bool {
+	m.mu.Lock()
+	w, ok := m.workers[id]
+	m.mu.Unlock()
+	return ok && w.isBusy() || m.opts.Elsewhere != nil && m.opts.Elsewhere.IsBusy(ctx, id)
 }
 
 // ListEvents lists stored events.

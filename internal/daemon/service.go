@@ -113,6 +113,14 @@ func (d *Daemon) GetInsights(ctx context.Context, since time.Time) (api.Insights
 	return d.opts.Insights(ctx, since)
 }
 
+// ListSkills lists the installed skills, sorted by name.
+func (d *Daemon) ListSkills(ctx context.Context) ([]api.Skill, error) {
+	if d.opts.Skills == nil {
+		return nil, errors.New("no skills in this daemon")
+	}
+	return d.opts.Skills(ctx)
+}
+
 // RunTool runs one tool in a session's folder (or r.Dir).
 func (d *Daemon) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
 	return d.opts.Tools.RunTool(ctx, r)

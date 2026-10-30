@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,6 +32,7 @@ func helpText() string {
 	for _, c := range commands {
 		fmt.Fprintf(&b, "  %-16s%s\n", strings.TrimSpace("/"+c.Name+" "+c.Args), c.Help)
 	}
+	b.WriteString("Skills: /<skill> [task] loads a skill first (type / to list them)\n")
 	b.WriteString("References: @file:path[:10-20] @folder:path @diff @staged @git:\"args\" @url:address\n")
 	b.WriteString("Keys: Enter send · Shift+Enter or Alt+Enter new line · Tab complete · Ctrl+C quit\n")
 	b.WriteString("      Esc Esc stop the turn (queued messages then run right away)")
@@ -39,8 +41,10 @@ func helpText() string {
 
 // command runs a slash command.
 func (m *model) command(text string) tea.Cmd {
-	name, arg, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
-	arg = strings.TrimSpace(arg)
+	name, arg := strings.TrimPrefix(text, "/"), ""
+	if i := strings.IndexAny(name, " \n"); i >= 0 {
+		name, arg = name[:i], strings.TrimSpace(name[i+1:])
+	}
 	notice := func(s string) tea.Cmd { return m.print(message{Kind: kindNotice, Text: s}) }
 	fail := func(err error) tea.Msg { return printMsg{[]message{{Kind: kindError, Text: err.Error()}}} }
 
@@ -71,7 +75,7 @@ func (m *model) command(text string) tea.Cmd {
 		if arg == "" {
 			return notice("usage: /plan <task>")
 		}
-		return m.send(arg, true)
+		return m.send(api.MessageRequest{Text: arg, Plan: true})
 	case "overseer":
 		return func() tea.Msg { return switchMsg{id: api.OverseerID} }
 	case "switch":
@@ -125,7 +129,36 @@ func (m *model) command(text string) tea.Cmd {
 			return printMsg{[]message{{Kind: kindNotice, Text: b.String()}}}
 		}
 	}
+	if slices.ContainsFunc(m.suggest.skills, func(s api.Skill) bool { return s.Name == name }) {
+		// The text as typed: the skill's task is the rest, lines and all.
+		return m.send(api.MessageRequest{Text: text, Skill: name})
+	}
 	return notice("unknown command /" + name + " (try /help)")
+}
+
+// isCommand reports whether name is a built-in command: it wins over a
+// skill of the same name.
+func isCommand(name string) bool {
+	for _, c := range commands {
+		if c.Name == name {
+			return true
+		}
+	}
+	return name == "quit"
+}
+
+type skillsMsg struct{ skills []api.Skill }
+
+// loadSkills lists the installed skills for /<skill>. An older daemon has
+// none to give: then there are only the built-in commands.
+func (m *model) loadSkills() tea.Cmd {
+	return func() tea.Msg {
+		skills, err := m.svc.ListSkills(m.ctx)
+		if err != nil {
+			return nil
+		}
+		return skillsMsg{skills: slices.DeleteFunc(skills, func(s api.Skill) bool { return isCommand(s.Name) })}
+	}
 }
 
 type switchMsg struct{ id string }

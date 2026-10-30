@@ -56,9 +56,11 @@ type Manager struct {
 	opts Options
 }
 
-// Expander expands @ references in a message into the text they point to.
+// Expander expands @ references in a message into the text they point to,
+// and loads a skill the user called by name.
 type Expander interface {
 	Expand(ctx context.Context, msg, sessionID, dir string) string
+	LoadSkill(ctx context.Context, name, sessionID, dir string) (out string, isError bool)
 }
 
 // Elsewhere reports whether another process still runs a session: an old
@@ -189,7 +191,7 @@ func (m *Manager) SendMessage(ctx context.Context, r api.MessageRequest) (api.Me
 		m.wg.Add(1)
 		go w.run()
 	}
-	if err := w.enqueue(text, r.Plan); err != nil {
+	if err := w.enqueue(text, r.Plan, r.Skill); err != nil {
 		return api.MessageResult{}, err
 	}
 	return api.MessageResult{SessionID: id, Warning: warning}, nil

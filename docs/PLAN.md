@@ -1010,6 +1010,7 @@ Tool calls (issue #6): routine calls that only look around (Read, Glob, Grep, LS
 
 - `/clear`: keeps the current session (its context stays saved, nothing is deleted) and starts a new one. The new session is only saved when I send a message in it; `/clear` with no message after it leaves nothing behind. Only sessions with context are kept. (Sessions are already created on the first message, so `/clear` works like `/new`.)
 - Slash suggestions: typing `/` shows a list of commands under the input, filtered as I type, like Hermes. Up/Down to pick, Tab or Enter to complete.
+- Skill commands (issue #54, TUI only): `/<skill> [task]` runs a turn that loads the skill first. The list comes from the daemon (`ListSkills`: `~/.germes/skills`, then the read-only `~/.claude/skills`; Germes wins on a name) and shows after the built-in commands with each skill's description. A built-in command wins over a skill of the same name, which is left out of the list. The message is saved as typed (lines and all); the daemon loads the skill through the tool registry as a `skill_view` call, so the block list and hooks apply, the Germes loop sees it in the history, Claude gets its text in the prompt, and insights and skill hooks count it. Telegram is unchanged.
 - `@` references, like Hermes (`hermes/agent/context_references.py`): `@file:path` (optional `:start-end` lines), `@folder:path`, `@diff` (uncommitted), `@staged`, `@git:<args>`, `@url:<url>`. Typing `@` suggests the kinds; after `@file:` / `@folder:` it suggests paths in the project as I type. On send, each reference is expanded through the tools (`Read`, `Glob`, `Bash`, `WebFetch`), so the block list applies, and added to the message, with a size limit; the token stays visible in the message.
 
 Files: `tui.go` (New, Run), `model.go` (state + Update), `view.go`, `picker.go`, `commands.go`.
@@ -1237,6 +1238,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Daemon dies while the TUI is open: show "daemon stopped", start it again, reconnect.
 - Message while busy: waits in the session's queue (max 100), shown above the input (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). One Esc never interrupts: it only shows "Esc again to stop". Esc Esc (within 800 ms) stops the turn, and queued messages then run right away (`StopSession` with `SendQueue`). `germes stop <id>` stops and drops the queue.
 - Daemon stops with messages still queued: the queue lives in memory, so they are lost. Later: save the queue, if this happens in practice.
+- `/<skill>` (issue #54): the skill list cannot be read (an older daemon without `ListSkills`): only the built-in commands are suggested and run. A skill that is gone or blocked by the time the turn starts: its `skill_view` call shows the error, and the turn still runs with the task. Esc drops a queued skill with its message.
 
 ### Engines and models
 - Network error, 5xx or a short rate limit (Codex): 3 tries in all with backoff, then an outage: the router moves the turn to another engine or the session waits (see "Switching on usage limits", item 7).

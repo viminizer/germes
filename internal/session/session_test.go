@@ -457,3 +457,56 @@ func TestTurnDoneSaysHowFullTheContextIs(t *testing.T) {
 		t.Fatalf("turn_done context %+v", done.Context)
 	}
 }
+
+// fakeSkills loads every skill as its name in a heading.
+type fakeSkills struct{}
+
+func (fakeSkills) Expand(context.Context, string, string, string) string { return "" }
+
+func (fakeSkills) LoadSkill(_ context.Context, name, _, _ string) (string, bool) {
+	return "# Skill " + name, false
+}
+
+func TestSkillCommandLoadsTheSkillFirst(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.New(filepath.Join(t.TempDir(), "germes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := make(chan string, 1)
+	m := NewManager(s, fakeRunner{prompts: prompts}, Options{Refs: fakeSkills{}})
+	t.Cleanup(func() { m.Stop(ctx); s.Close() })
+
+	text := "/failure-cases look at\nthe parser"
+	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: text, Skill: "failure-cases"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-prompts; got != text+"\n\n# Skill failure-cases" {
+		t.Fatalf("prompt %q", got)
+	}
+	waitIdle(t, m, res.SessionID)
+	page, err := m.ListEvents(ctx, api.EventFilter{SessionID: res.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []api.EventKind
+	var call, result *api.ToolCall
+	for _, ev := range page.Items {
+		kinds = append(kinds, ev.Kind)
+		switch ev.Kind {
+		case api.KindUserMessage:
+			if ev.Text != text {
+				t.Errorf("user message %q", ev.Text)
+			}
+		case api.KindToolCall:
+			call = ev.Tool
+		case api.KindToolResult:
+			result = ev.Tool
+		}
+	}
+	// Saved as a skill_view call, so insights and skill hooks count it.
+	if api.GetLoadedSkill(call) != "failure-cases" || result == nil || result.ID != call.ID || result.Output != "# Skill failure-cases" {
+		t.Fatalf("events %v: call %+v, result %+v", kinds, call, result)
+	}
+}

@@ -195,6 +195,12 @@ func (c *Client) ListTools(ctx context.Context, sessionID string) ([]ToolInfo, e
 	return tools, c.call(ctx, "GET", "/tools?session="+url.QueryEscape(sessionID), nil, &tools)
 }
 
+// ListSkills lists the installed skills, sorted by name.
+func (c *Client) ListSkills(ctx context.Context) ([]Skill, error) {
+	var skills []Skill
+	return skills, c.call(ctx, "GET", "/skills", nil, &skills)
+}
+
 // RunTool runs one tool in a session's folder.
 func (c *Client) RunTool(ctx context.Context, r ToolRequest) (ToolResult, error) {
 	var res ToolResult

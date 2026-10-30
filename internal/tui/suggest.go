@@ -28,7 +28,8 @@ type suggestion struct {
 type suggestBox struct {
 	items    []suggestion
 	selected int
-	closed   string // input the user closed the box for (Esc); reopens on change
+	closed   string      // input the user closed the box for (Esc); reopens on change
+	skills   []api.Skill // installed skills, after the commands; none named like one
 }
 
 // update recomputes the list for the composer's text.
@@ -36,7 +37,7 @@ func (s *suggestBox) update(input, dir string) {
 	if input != s.closed {
 		s.closed = ""
 	}
-	items := suggestionsFor(input, dir)
+	items := suggestionsFor(input, dir, s.skills)
 	if s.closed != "" {
 		items = nil
 	}
@@ -96,7 +97,7 @@ func (s suggestBox) view(width int) string {
 }
 
 // suggestionsFor returns the completions for the end of input.
-func suggestionsFor(input, dir string) []suggestion {
+func suggestionsFor(input, dir string, skills []api.Skill) []suggestion {
 	if strings.HasPrefix(input, "/") && !strings.ContainsAny(input, " \n") {
 		var out []suggestion
 		for _, c := range commands {
@@ -106,6 +107,11 @@ func suggestionsFor(input, dir string) []suggestion {
 					insert += " "
 				}
 				out = append(out, suggestion{Insert: insert, Label: strings.TrimSpace("/" + c.Name + " " + c.Args), Help: c.Help})
+			}
+		}
+		for _, s := range skills {
+			if strings.HasPrefix("/"+s.Name, input) {
+				out = append(out, suggestion{Insert: "/" + s.Name + " ", Label: "/" + s.Name, Help: s.Description})
 			}
 		}
 		return out

@@ -124,6 +124,9 @@ func NewHandler(svc Service) http.Handler {
 	mux.HandleFunc("GET /tools", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, r, func() (any, error) { return svc.ListTools(r.Context(), r.URL.Query().Get("session")) })
 	})
+	mux.HandleFunc("GET /skills", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, r, func() (any, error) { return svc.ListSkills(r.Context()) })
+	})
 	mux.HandleFunc("POST /tools/run", func(w http.ResponseWriter, r *http.Request) {
 		var t ToolRequest
 		if !decode(w, r, &t) {

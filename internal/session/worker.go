@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ type worker struct {
 	mu      sync.Mutex
 	queue   []string           // messages waiting for the next turn
 	plan    bool               // a queued message asks for a plan turn
+	skills  []string           // skills queued messages load first (/<skill> in the TUI)
 	cancel  context.CancelFunc // cancels the running turn
 	running bool               // turns are running
 	lost    bool               // a save failed in this turn: it stopped, and the user was told
@@ -47,8 +49,8 @@ func (w *worker) run() {
 			}
 			w.setRunning(true)
 			// Everything queued while a turn ran becomes one turn.
-			for texts, plan := w.take(); len(texts) > 0; texts, plan = w.take() {
-				w.runTurn(strings.Join(texts, "\n\n"), plan)
+			for texts, plan, skills := w.take(); len(texts) > 0; texts, plan, skills = w.take() {
+				w.runTurn(strings.Join(texts, "\n\n"), plan, skills)
 			}
 			w.setRunning(false)
 			idle.Reset(idleTime)
@@ -111,7 +113,7 @@ func (w *worker) isBusy() bool {
 }
 
 // enqueue adds a message for the next turn and wakes the worker.
-func (w *worker) enqueue(text string, plan bool) error {
+func (w *worker) enqueue(text string, plan bool, skill string) error {
 	w.mu.Lock()
 	if len(w.queue) >= maxQueue {
 		w.mu.Unlock()
@@ -119,6 +121,9 @@ func (w *worker) enqueue(text string, plan bool) error {
 	}
 	w.queue = append(w.queue, text)
 	w.plan = w.plan || plan
+	if skill != "" {
+		w.skills = append(w.skills, skill)
+	}
 	q := w.queuedLocked()
 	w.mu.Unlock()
 	w.publishQueue(q)
@@ -129,17 +134,17 @@ func (w *worker) enqueue(text string, plan bool) error {
 	return nil
 }
 
-// take empties the queue and returns what was in it, and whether one of
-// the messages asked for a plan.
-func (w *worker) take() ([]string, bool) {
+// take empties the queue and returns what was in it, whether one of the
+// messages asked for a plan, and the skills they load.
+func (w *worker) take() ([]string, bool, []string) {
 	w.mu.Lock()
-	texts, plan := w.queue, w.plan
-	w.queue, w.plan = nil, false
+	texts, plan, skills := w.queue, w.plan, w.skills
+	w.queue, w.plan, w.skills = nil, false, nil
 	w.mu.Unlock()
 	if len(texts) > 0 {
 		w.publishQueue(nil)
 	}
-	return texts, plan
+	return texts, plan, skills
 }
 
 // queued returns a copy of the waiting messages.
@@ -174,7 +179,7 @@ func (w *worker) stopTurn(dropQueue bool) {
 	w.mu.Lock()
 	dropped := dropQueue && len(w.queue) > 0
 	if dropQueue {
-		w.queue = nil
+		w.queue, w.skills = nil, nil
 	}
 	if w.cancel != nil {
 		w.cancel()
@@ -185,7 +190,7 @@ func (w *worker) stopTurn(dropQueue bool) {
 	}
 }
 
-func (w *worker) runTurn(text string, plan bool) {
+func (w *worker) runTurn(text string, plan bool, skills []string) {
 	ctx, cancel := context.WithCancel(w.m.ctx)
 	w.mu.Lock()
 	w.cancel, w.lost = cancel, false
@@ -224,6 +229,9 @@ func (w *worker) runTurn(text string, plan bool) {
 		if att := w.m.opts.Refs.Expand(ctx, text, w.sess.ID, w.sess.Dir); att != "" {
 			w.emit(api.Event{Kind: api.KindAttachment, Text: att})
 			prompt += "\n\n" + att
+		}
+		for _, name := range skills {
+			prompt += "\n\n" + w.loadSkill(ctx, name)
 		}
 	}
 
@@ -341,6 +349,18 @@ func toolOf(t *engine.ToolCall) *api.ToolCall {
 // Save first: a client never sees an event that a crash could lose. A failed
 // save is handled here (lost); the error is returned for the engine waiting
 // on it.
+// loadSkill loads a skill the user called by name, saved as a skill_view
+// call: the Germes loop sees it in the history, and insights and skill hooks
+// count it. It returns the output for an engine that takes the prompt.
+func (w *worker) loadSkill(ctx context.Context, name string) string {
+	args, _ := json.Marshal(map[string]string{"name": name})
+	call := &api.ToolCall{ID: fmt.Sprintf("skill-%d", w.seq+1), Name: "skill_view", Args: args}
+	w.emit(api.Event{Kind: api.KindToolCall, Tool: call})
+	out, isErr := w.m.opts.Refs.LoadSkill(ctx, name, w.sess.ID, w.sess.Dir)
+	w.emit(api.Event{Kind: api.KindToolResult, Tool: &api.ToolCall{ID: call.ID, Name: call.Name, Output: out, IsError: isErr}})
+	return out
+}
+
 func (w *worker) emit(ev api.Event) error {
 	ev.SessionID = w.sess.ID
 	ev.Time = time.Now()

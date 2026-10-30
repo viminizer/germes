@@ -56,6 +56,8 @@ type Options struct {
 	Jobs []api.JobRequest
 	// Insights counts what happened since a time (the store).
 	Insights func(ctx context.Context, since time.Time) (api.Insights, error)
+	// Skills lists the installed skills (the skill store).
+	Skills func(ctx context.Context) ([]api.Skill, error)
 	// RunContractMigrations runs the database updates that remove or rename what
 	// an older daemon may still use (the store). It runs once every older
 	// daemon surely exited; nil = never.

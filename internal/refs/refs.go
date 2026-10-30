@@ -1,7 +1,8 @@
 // Package refs expands @ references in a message, like Hermes
 // (hermes/agent/context_references.py): @file:path[:start-end],
 // @folder:path, @diff, @staged, @git:"args", @url:address. Files and git go
-// through the tool registry, so the block list applies to them too.
+// through the tool registry, so the block list applies to them too. It also
+// loads a skill the user calls by name (/<skill> in the TUI), the same way.
 package refs
 
 import (
@@ -83,6 +84,14 @@ func (e *Expander) Expand(ctx context.Context, msg, sessionID, dir string) strin
 		fmt.Fprintf(&b, "--- %s ---\n%s\n\n", r.String(), strings.TrimRight(body, "\n"))
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// LoadSkill runs skill_view for a skill the user called by name (/<skill>
+// in the TUI): the block list and hooks apply as to the model's own call.
+func (e *Expander) LoadSkill(ctx context.Context, name, sessionID, dir string) (string, bool) {
+	raw, _ := json.Marshal(map[string]string{"name": name})
+	res := e.tools.Run(ctx, "skill_view", tool.Call{SessionID: sessionID, Dir: dir, Args: raw})
+	return res.Output, res.IsError
 }
 
 var lineRange = regexp.MustCompile(`^(.*):(\d+)(?:-(\d+))?$`)

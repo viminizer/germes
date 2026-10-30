@@ -35,6 +35,7 @@ type Service interface {
 
 	GetInsights(ctx context.Context, since time.Time) (Insights, error)
 	ListTools(ctx context.Context, sessionID string) ([]ToolInfo, error)
+	ListSkills(ctx context.Context) ([]Skill, error)
 	RunTool(ctx context.Context, r ToolRequest) (ToolResult, error)
 	CheckTool(ctx context.Context, r ToolRequest) (ToolVerdict, error)
 }

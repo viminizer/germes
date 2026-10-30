@@ -337,7 +337,9 @@ func runDaemon(p paths) error {
 	})
 	defer reviews.Wait()
 	defer cancel()
-	rt, reg, err := newRouter(p, cfg, st, reviews)
+	home, _ := os.UserHomeDir()
+	skillStore := skill.New(filepath.Join(p.home, "skills"), filepath.Join(home, ".claude", "skills"))
+	rt, reg, err := newRouter(p, cfg, st, reviews, skillStore)
 	if err != nil {
 		return err
 	}
@@ -365,6 +367,7 @@ func runDaemon(p paths) error {
 			}
 			slog.Info("cleanup", "tool_outputs", outputs, "snapshot_repos", snapshots, "telegram_files", tgFiles)
 		},
+		Skills:   func(ctx context.Context) ([]api.Skill, error) { return listSkills(ctx, skillStore) },
 		Insights: st.GetInsights, RunContractMigrations: st.RunContractMigrations,
 		Jobs: []api.JobRequest{{Name: "curator", Dir: p.home, Prompt: strings.TrimSpace(prompt.Curator), NoWorktree: true, Repeat: true, Every: 7 * 24 * time.Hour}},
 	}).Run(ctx)
@@ -560,16 +563,27 @@ func availableEngines(p paths, cfg config.Config) []string {
 	return names
 }
 
+// listSkills lists the installed skills for clients (/<skill> in the TUI).
+func listSkills(ctx context.Context, store *skill.Store) ([]api.Skill, error) {
+	list, err := store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.Skill, len(list))
+	for i, s := range list {
+		out[i] = api.Skill{Name: s.Name, Description: s.Description}
+	}
+	return out, nil
+}
+
 // newRouter builds every available engine, in config order, behind the router.
 // newRouter also returns the tool registry: @ references expand through it.
-func newRouter(p paths, cfg config.Config, st *store.Store, reviews *engine.Reviews) (*router.Router, *tool.Registry, error) {
+func newRouter(p paths, cfg config.Config, st *store.Store, reviews *engine.Reviews, skillStore *skill.Store) (*router.Router, *tool.Registry, error) {
 	names := availableEngines(p, cfg)
 	if len(names) == 0 {
 		return nil, nil, errors.New("no engine found: log in with `codex login`, or install Claude Code")
 	}
 	mem := memory.New(filepath.Join(p.home, "memories"))
-	home, _ := os.UserHomeDir()
-	skillStore := skill.New(filepath.Join(p.home, "skills"), filepath.Join(home, ".claude", "skills"))
 	prompts := prompt.NewBuilder(p.home, mem, skillStore)
 
 	tools := append(files.New(), shell.New(env.NewLocal())...)

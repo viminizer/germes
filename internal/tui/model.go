@@ -100,9 +100,9 @@ func (m *model) Init() tea.Cmd {
 		cmds = append(cmds, m.watch(), m.checkJob())
 	}
 	if m.opts.First != "" {
-		cmds = append(cmds, m.send(m.opts.First, false))
+		cmds = append(cmds, m.send(api.MessageRequest{Text: m.opts.First}))
 	}
-	return tea.Batch(cmds...)
+	return tea.Batch(append(cmds, m.loadSkills())...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -136,6 +136,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionMsg:
 		m.showSession(msg.sess)
+		return m, nil
+
+	case skillsMsg:
+		m.suggest.skills = msg.skills
 		return m, nil
 
 	case printMsg:
@@ -264,7 +268,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(text, "/") {
 			return m, m.command(text)
 		}
-		return m, m.send(text, false)
+		return m, m.send(api.MessageRequest{Text: text})
 	}
 	var cmd tea.Cmd
 	m.composer, cmd = m.composer.update(msg)
@@ -317,10 +321,9 @@ func (m *model) stop(sendQueue bool) tea.Cmd {
 	}
 }
 
-// send sends text to the session (a new one in Dir if none). plan: a plan
-// turn, which changes nothing and saves its reply as a plan.
-func (m *model) send(text string, plan bool) tea.Cmd {
-	req := api.MessageRequest{SessionID: m.sessionID, Dir: m.opts.Dir, Text: text, Worktree: m.opts.Worktree, Plan: plan}
+// send sends a message to the session (a new one in Dir if none).
+func (m *model) send(req api.MessageRequest) tea.Cmd {
+	req.SessionID, req.Dir, req.Worktree = m.sessionID, m.opts.Dir, m.opts.Worktree
 	return func() tea.Msg {
 		res, err := m.svc.SendMessage(m.ctx, req)
 		return sentMsg{sessionID: res.SessionID, warning: res.Warning, err: err}

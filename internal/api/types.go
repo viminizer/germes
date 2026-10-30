@@ -140,6 +140,7 @@ type MessageRequest struct {
 	Worktree  bool   `json:"worktree,omitempty"`    // a new session gets its own git worktree; false = works in Dir
 	SameDirAs string `json:"same_dir_as,omitempty"` // new session works where this session works (a job's rounds share a worktree)
 	Plan      bool   `json:"plan,omitempty"`        // a plan turn: change nothing; the reply is saved as a plan file
+	Skill     string `json:"skill,omitempty"`       // a skill the turn loads first (/<skill> in the TUI)
 }
 
 // MessageResult says which session got the message.
@@ -248,6 +249,12 @@ type ToolInfo struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Schema      json.RawMessage `json:"schema"` // JSON Schema of the arguments
+}
+
+// Skill is an installed skill the user can call by name.
+type Skill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // ToolResult is a tool's output.

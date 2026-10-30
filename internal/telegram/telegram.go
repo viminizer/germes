@@ -1,6 +1,7 @@
 // Package telegram talks to Germes from a Telegram group with topics. A
 // topic bound to a project (/bind) talks to that project's session; General
-// and unbound topics talk to the overseer. Answers come back when a turn
+// and unbound topics talk to the overseer. A message that goes to a session
+// gets 👀 at once, so I know it arrived; the answer comes back when the turn
 // ends; job notices go to the project's topic. Files go both ways: a file I
 // send is saved and its path goes to the session; a file the agent sends
 // with send_file is uploaded to the topic. Only the configured user in the
@@ -155,6 +156,7 @@ func (t *Telegram) isAllowed(chatID int64, from *user) bool {
 
 func (t *Telegram) handleMessage(ctx context.Context, m *message) {
 	if f := m.file(); f != nil {
+		t.markSeen(ctx, m)
 		t.askWithFile(ctx, m.topic(), *f, m.Caption)
 		return
 	}
@@ -167,7 +169,18 @@ func (t *Telegram) handleMessage(ctx context.Context, m *message) {
 		t.command(ctx, m.topic(), text)
 		return
 	}
+	t.markSeen(ctx, m)
 	t.ask(ctx, m.topic(), text, false)
+}
+
+// markSeen puts 👀 on my message. A failure only loses the hint, so it is
+// logged, not told.
+func (t *Telegram) markSeen(ctx context.Context, m *message) {
+	params := map[string]any{"chat_id": t.opts.ChatID, "message_id": m.ID,
+		"reaction": []map[string]string{{"type": "emoji", "emoji": "👀"}}}
+	if err := t.bot.call(ctx, "setMessageReaction", params, nil); err != nil {
+		slog.Warn("telegram react", "err", err)
+	}
 }
 
 // ask sends text to the topic's session and waits for its answer there.

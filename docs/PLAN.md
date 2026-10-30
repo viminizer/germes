@@ -1026,7 +1026,7 @@ Not its own module. The overseer is a normal session with:
 ### Messages
 
 - In: `SendMessage` to the topic's session. `/sessions` lists sessions, `/stop` stops the current step.
-- Out: the final answer on `turn_done` (not every token; Telegram rate limits). "typing..." while it works. Long answers split at 4096 characters.
+- Out: the final answer on `turn_done` (not every token; Telegram rate limits). A message (or file) that goes to a session gets a 👀 reaction at once, so I know it arrived; commands answer right away instead. "typing..." while it works. Long answers split at 4096 characters.
 - Notifications (job done or failed, session paused, errors): `Watch` all sessions with a kind filter. Sent to the project's bound topic; otherwise to General.
 - Files in: a document or photo (largest size) is saved in `~/.germes/telegram/files/<unique id>-<name>` (deleted by the daily cleanup after `cleanup_days`), and its caption plus a line `[file from Telegram: <path>]` go to the session. The agent reads it with its own tools.
 - Files out: the `send_file` tool (files toolset; project and overseer, and Claude through MCP) checks the file (up to 50 MB) and returns its full path. It obeys the `Read(...)` block rules too (`Tool.BlockedAs`), so a file that cannot be read cannot be sent. When a session asked from Telegram calls it, the bot uploads the file to that topic with `sendDocument`. In the TUI only the path shows.
@@ -1237,6 +1237,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Message from anyone else: ignored.
 - Bound folder is gone: reply with an error and suggest `/bind`.
 - Long answer: split at 4096 characters.
+- The 👀 reaction fails: logged only; it is a hint, and the message still goes to the session.
 - A file I send cannot be fetched (over 20 MB on Telegram's servers, download or disk error): reply "Could not get the file" with the reason; nothing goes to the session.
 - `send_file` refuses a missing file, a folder or one over 50 MB, so the agent can tell me. The upload fails: reply "Could not send the file" with the reason.
 

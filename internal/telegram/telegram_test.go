@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,7 @@ type fakeAPI struct {
 	updates []update
 	sent    []map[string]any // sendMessage params
 	docs    []sentDoc        // sendDocument uploads
+	reacted []string         // setMessageReaction calls, as "<message id> <emoji>"
 	methods []string         // every method called
 }
 
@@ -70,6 +72,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "sendMessage":
 		f.mu.Lock()
 		f.sent = append(f.sent, params)
+		f.mu.Unlock()
+	case "setMessageReaction":
+		emoji := params["reaction"].([]any)[0].(map[string]any)["emoji"]
+		f.mu.Lock()
+		f.reacted = append(f.reacted, fmt.Sprintf("%v %v", params["message_id"], emoji))
 		f.mu.Unlock()
 	}
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
@@ -372,5 +379,19 @@ func TestSendFileUploadsToTheTopicThatAsked(t *testing.T) {
 
 	if d := fake.waitDoc(t); d.thread != "7" || d.name != "report.txt" || d.content != fileBody {
 		t.Fatalf("uploaded %+v", d)
+	}
+}
+
+func TestMessagesToSessionsGetEyes(t *testing.T) {
+	fake, svc, _ := startBot(t)
+	withFile := msg(3, 0, kevin, "")
+	withFile.Message.Document = &file{ID: "f1", UniqueID: "u1", Name: "a.txt"}
+	fake.push(msg(1, 0, kevin, "what is running?"), msg(2, 0, kevin, "/help"), withFile)
+	fake.waitSent(t, "/bind") // the /help answer
+	svc.waitMessages(t, 2)    // the text and the file reached the overseer
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if want := []string{"1 👀", "3 👀"}; !slices.Equal(fake.reacted, want) {
+		t.Fatalf("reactions %q, want %q (a command gets none)", fake.reacted, want)
 	}
 }

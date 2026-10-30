@@ -83,6 +83,10 @@ type ToolCall struct {
 	IsError bool            `json:"is_error,omitempty"`
 }
 
+// ToolSendFile is the tool that sends a file to the user. Its result's
+// Output is the file's full path; Telegram uploads it from there.
+const ToolSendFile = "send_file"
+
 // Page is one page of a list. Next is "" at the end.
 type Page[T any] struct {
 	Items []T    `json:"items"`

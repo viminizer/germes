@@ -1,8 +1,10 @@
 // Package telegram talks to Germes from a Telegram group with topics. A
 // topic bound to a project (/bind) talks to that project's session; General
 // and unbound topics talk to the overseer. Answers come back when a turn
-// ends; job notices go to the project's topic. Only the configured user in
-// the configured chat is heard. It imports only api.
+// ends; job notices go to the project's topic. Files go both ways: a file I
+// send is saved and its path goes to the session; a file the agent sends
+// with send_file is uploaded to the topic. Only the configured user in the
+// configured chat is heard. It imports only api.
 package telegram
 
 import (
@@ -48,6 +50,7 @@ type Options struct {
 	UserID    int64
 	CodeDirs  []string // where /bind looks for projects
 	StatePath string   // topic bindings and the update offset (telegram.json)
+	FilesDir  string   // where files sent to the bot are saved
 	APIBase   string   // "" = https://api.telegram.org (tests use a fake)
 }
 
@@ -82,7 +85,8 @@ func New(svc api.Service, opts Options) *Telegram {
 	if base == "" {
 		base = "https://api.telegram.org"
 	}
-	t := &Telegram{svc: svc, opts: opts, bot: &bot{base: base + "/bot" + opts.Token, http: &http.Client{}},
+	b := &bot{base: base + "/bot" + opts.Token, files: base + "/file/bot" + opts.Token, http: &http.Client{}}
+	t := &Telegram{svc: svc, opts: opts, bot: b,
 		replyTo: map[string]int64{}, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}}}
 	if b, err := os.ReadFile(opts.StatePath); err == nil {
 		if err := json.Unmarshal(b, &t.state); err != nil {
@@ -150,9 +154,13 @@ func (t *Telegram) isAllowed(chatID int64, from *user) bool {
 }
 
 func (t *Telegram) handleMessage(ctx context.Context, m *message) {
+	if f := m.file(); f != nil {
+		t.askWithFile(ctx, m.topic(), *f, m.Caption)
+		return
+	}
 	text := strings.TrimSpace(m.Text)
 	if text == "" {
-		t.reply(ctx, m.topic(), "Only text messages for now.")
+		t.reply(ctx, m.topic(), "Only text and files for now.")
 		return
 	}
 	if strings.HasPrefix(text, "/") {
@@ -173,6 +181,18 @@ func (t *Telegram) ask(ctx context.Context, thread int64, text string, plan bool
 	t.mu.Lock()
 	t.replyTo[id] = thread
 	t.mu.Unlock()
+}
+
+// askWithFile saves the file and sends its caption and path to the topic's
+// session, so the agent can read it with its own tools.
+func (t *Telegram) askWithFile(ctx context.Context, thread int64, f file, caption string) {
+	path, err := t.bot.download(ctx, f, t.opts.FilesDir)
+	if err != nil {
+		slog.Warn("telegram download", "err", err)
+		t.reply(ctx, thread, "Could not get the file: "+err.Error())
+		return
+	}
+	t.ask(ctx, thread, strings.TrimSpace(caption+"\n\n[file from Telegram: "+path+"]"), false)
 }
 
 // send sends text to the topic's session: its project's session (started

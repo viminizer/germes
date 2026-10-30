@@ -621,7 +621,7 @@ Core tools use Claude Code's names: `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Gr
 ### The real tools
 
 ```
-internal/tools/files/     Read, Write, Edit, Glob, Grep
+internal/tools/files/     Read, Write, Edit, Glob, Grep, send_file
 internal/tools/shell/     Bash (runs through env.Environment)
 internal/tools/memory/    memory
 internal/tools/skills/    skill_view, skill_save, skill_patch
@@ -1028,7 +1028,9 @@ Not its own module. The overseer is a normal session with:
 - In: `SendMessage` to the topic's session. `/sessions` lists sessions, `/stop` stops the current step.
 - Out: the final answer on `turn_done` (not every token; Telegram rate limits). "typing..." while it works. Long answers split at 4096 characters.
 - Notifications (job done or failed, session paused, errors): `Watch` all sessions with a kind filter. Sent to the project's bound topic; otherwise to General.
-- Skipped: voice, images, files. Text only.
+- Files in: a document or photo (largest size) is saved in `~/.germes/telegram/files/<unique id>-<name>` (deleted by the daily cleanup after `cleanup_days`), and its caption plus a line `[file from Telegram: <path>]` go to the session. The agent reads it with its own tools.
+- Files out: the `send_file` tool (files toolset; project and overseer, and Claude through MCP) checks the file (up to 50 MB) and returns its full path. It obeys the `Read(...)` block rules too (`Tool.BlockedAs`), so a file that cannot be read cannot be sent. When a session asked from Telegram calls it, the bot uploads the file to that topic with `sendDocument`. In the TUI only the path shows.
+- Skipped: voice.
 
 ## Config module
 
@@ -1235,6 +1237,8 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Message from anyone else: ignored.
 - Bound folder is gone: reply with an error and suggest `/bind`.
 - Long answer: split at 4096 characters.
+- A file I send cannot be fetched (over 20 MB on Telegram's servers, download or disk error): reply "Could not get the file" with the reason; nothing goes to the session.
+- `send_file` refuses a missing file, a folder or one over 50 MB, so the agent can tell me. The upload fails: reply "Could not send the file" with the reason.
 
 ### MCP
 - Daemon cannot be reached: the tool call returns an error to Claude, Claude continues.
@@ -1320,7 +1324,7 @@ Ported from Hermes' agent loop (`agent/coding_context.py`, `prompt_builder.py`, 
 - Folder rules on the way (`internal/engine/loop/folders.go`, Germes loop; Claude Code reads subfolder CLAUDE.md itself): the first time a tool call reaches a subfolder of the session's folder (`file_path` or `path`), the AGENTS.md or CLAUDE.md of that folder and of the folders between it and the session folder are added to the tool's result, outermost first, once per session. `prompt.LoadRules` reads them, the same way as the project's file in the prompt. Checked live (Codex): a rule in `shapes/AGENTS.md` reached the model and was followed.
 - Clarify (`internal/engine/loop/clarify.go`, Germes loop, not subagents): `clarify` takes up to 4 questions with 2-4 options, the recommended one first. The daemon cannot hold a turn open for a form, so asking ends the turn: the questions become its reply (numbered, options a/b/c) and the user's next message is the answer, the same in the TUI and Telegram. Checked live (Codex): it asked two questions, and the answer "1a, 2a" was followed.
 - Plan mode: `/plan <task>` in the TUI and Telegram sends a message with `Plan` set. The turn changes nothing: the Germes loop gets the `plan` toolset (Read, Glob, Grep, session_search; no subagents), Claude gets Write, Edit, MultiEdit and NotebookEdit blocked, and both get `prompt.PlanMode` (goal, steps with files, checks, risks). The session saves the reply to `<project>/.germes/plans/<date>-<words>.md` and shows a notice; "go" in the same session carries it out. Checked live with both engines: the code stayed unchanged and the plan was saved.
-- Rollback snapshots (`internal/checkpoint`, both engines): before each turn in a git project (not the overseer's home) the session saves its folder into a shadow git repo in `~/.germes/checkpoints/<folder>-<hash>` (`--git-dir`/`--work-tree`, the folder's .gitignore applies, `.germes/` is never included, the project's own git is never touched; a failure is logged and the turn runs on). `ListCheckpoints` / `RestoreCheckpoint` (refused while the session works); `/rollback` in the TUI and Telegram lists them, `/rollback n` puts the files back (changed files restored, files added since removed); the files before a rollback are saved first, so `/rollback 2` undoes it. `api.RunRollback` is the shared command. Checked live: a Claude edit was rolled back and the rollback undone. Cleanup: the daemon runs `Options.Cleanup` at start and once a day; it deletes saved tool outputs older than `cleanup_days` (config, default 30; `Registry.PruneOutputs`) and the snapshot repos of folders that are gone or not snapshot for that long (`checkpoint.Prune`).
+- Rollback snapshots (`internal/checkpoint`, both engines): before each turn in a git project (not the overseer's home) the session saves its folder into a shadow git repo in `~/.germes/checkpoints/<folder>-<hash>` (`--git-dir`/`--work-tree`, the folder's .gitignore applies, `.germes/` is never included, the project's own git is never touched; a failure is logged and the turn runs on). `ListCheckpoints` / `RestoreCheckpoint` (refused while the session works); `/rollback` in the TUI and Telegram lists them, `/rollback n` puts the files back (changed files restored, files added since removed); the files before a rollback are saved first, so `/rollback 2` undoes it. `api.RunRollback` is the shared command. Checked live: a Claude edit was rolled back and the rollback undone. Cleanup: the daemon runs `Options.Cleanup` at start and once a day; it deletes saved tool outputs older than `cleanup_days` (config, default 30; `Registry.PruneOutputs`), files sent to the Telegram bot older than that (`file.DeleteOld`, which `PruneOutputs` uses too), and the snapshot repos of folders that are gone or not snapshot for that long (`checkpoint.Prune`).
 - All items of the list are built.
 
 ## Open items

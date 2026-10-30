@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/viminizer/germes/internal/file"
 )
 
 const (
@@ -135,26 +137,16 @@ func (r *Registry) PruneOutputs(before time.Time) (int, error) {
 	}
 	removed := 0
 	for _, s := range sessions {
-		dir := filepath.Join(r.spillDir, s.Name())
-		files, err := os.ReadDir(dir)
-		if err != nil {
+		if !s.IsDir() {
 			continue
 		}
-		left := len(files)
-		for _, f := range files {
-			info, err := f.Info()
-			if err != nil || !info.ModTime().Before(before) {
-				continue
-			}
-			if err := os.Remove(filepath.Join(dir, f.Name())); err != nil {
-				return removed, err
-			}
-			removed++
-			left--
+		dir := filepath.Join(r.spillDir, s.Name())
+		n, err := file.DeleteOld(dir, before)
+		removed += n
+		if err != nil {
+			return removed, err
 		}
-		if left == 0 {
-			os.Remove(dir) // empty now
-		}
+		os.Remove(dir) // only succeeds once it is empty
 	}
 	return removed, nil
 }

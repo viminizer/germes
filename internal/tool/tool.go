@@ -15,6 +15,7 @@ type Tool struct {
 	Description string
 	Schema      json.RawMessage // JSON Schema of the arguments
 	MatchArg    string          // the argument the block list checks ("command" for Bash)
+	BlockedAs   string          // another tool whose block rules apply too (send_file: Read's)
 	Run         func(ctx context.Context, c Call) (string, error)
 }
 

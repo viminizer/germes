@@ -22,25 +22,42 @@ const (
 	kevin  = 42
 )
 
-// fakeAPI is a Bot API: it hands out updates once and records what the bot
-// sends.
+// fakeAPI is a Bot API: it hands out updates once, serves every file as
+// fileBody, and records what the bot sends.
 type fakeAPI struct {
 	mu      sync.Mutex
 	updates []update
 	sent    []map[string]any // sendMessage params
+	docs    []sentDoc        // sendDocument uploads
 	methods []string         // every method called
 }
 
+type sentDoc struct {
+	thread, name, content string
+}
+
+const fileBody = "the file's bytes"
+
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
-	var params map[string]any
-	json.Unmarshal(body, &params)
+	if strings.Contains(r.URL.Path, "/file/bot") {
+		io.WriteString(w, fileBody)
+		return
+	}
 	method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	f.mu.Lock()
 	f.methods = append(f.methods, method)
 	f.mu.Unlock()
+	var params map[string]any
+	if method == "sendDocument" {
+		f.recordDoc(r)
+	} else {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &params)
+	}
 	result := any(true)
 	switch method {
+	case "getFile":
+		result = map[string]any{"file_path": "documents/file_1"}
 	case "getUpdates":
 		f.mu.Lock()
 		ups := f.updates
@@ -56,6 +73,33 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 	}
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
+}
+
+func (f *fakeAPI) recordDoc(r *http.Request) {
+	r.ParseMultipartForm(1 << 20)
+	part, head, err := r.FormFile("document")
+	if err != nil {
+		return
+	}
+	content, _ := io.ReadAll(part)
+	f.mu.Lock()
+	f.docs = append(f.docs, sentDoc{thread: r.FormValue("message_thread_id"), name: head.Filename, content: string(content)})
+	f.mu.Unlock()
+}
+
+func (f *fakeAPI) waitDoc(t *testing.T) sentDoc {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		f.mu.Lock()
+		if len(f.docs) > 0 {
+			d := f.docs[0]
+			f.mu.Unlock()
+			return d
+		}
+		f.mu.Unlock()
+	}
+	t.Fatal("the bot never sent a document")
+	return sentDoc{}
 }
 
 func (f *fakeAPI) push(u ...update) {
@@ -266,5 +310,67 @@ func TestBindButtonsWhenSeveralMatch(t *testing.T) {
 		Message: &message{ThreadID: 9, IsTopic: true, Chat: chat{ID: chatID}}, Data: second["callback_data"].(string)}})
 	if got := tg.state.Topics[9].Project; got != second["text"] {
 		t.Fatalf("bound %q, picked %q", got, second["text"])
+	}
+}
+
+// startBot runs a bot against a fake Bot API and a fake Germes.
+func startBot(t *testing.T) (*fakeAPI, *fakeService, *Telegram) {
+	fake := &fakeAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	svc := &fakeService{events: make(chan api.Event, 10)}
+	tg := New(svc, Options{Token: "SECRET", ChatID: chatID, UserID: kevin, APIBase: srv.URL,
+		StatePath: filepath.Join(t.TempDir(), "telegram.json"), FilesDir: t.TempDir()})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go tg.Run(ctx)
+	return fake, svc, tg
+}
+
+func TestFileSentToTheBotReachesTheSession(t *testing.T) {
+	fake, svc, _ := startBot(t)
+	u := msg(1, 0, kevin, "")
+	u.Message.Caption = "what is in this log?"
+	u.Message.Document = &file{ID: "f1", UniqueID: "u1", Name: "../app.log"}
+	fake.push(u)
+
+	got := svc.waitMessages(t, 1)[0].Text
+	caption, rest, ok := strings.Cut(got, "\n\n[file from Telegram: ")
+	if !ok || caption != "what is in this log?" {
+		t.Fatalf("message to the session: %q", got)
+	}
+	path := strings.TrimSuffix(rest, "]")
+	if filepath.Base(path) != "u1-app.log" {
+		t.Fatalf("saved as %s", path)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != fileBody {
+		t.Fatalf("saved file: %q, %v", b, err)
+	}
+}
+
+func TestSendFileUploadsToTheTopicThatAsked(t *testing.T) {
+	fake, svc, tg := startBot(t)
+	project := t.TempDir()
+	fake.push(msg(1, 7, kevin, "/bind "+project), msg(2, 7, kevin, "send me the report"))
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		tg.mu.Lock()
+		_, asked := tg.replyTo["s1"]
+		tg.mu.Unlock()
+		if asked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the topic never asked the session")
+		}
+	}
+	report := filepath.Join(t.TempDir(), "report.txt")
+	if err := os.WriteFile(report, []byte(fileBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "c1", Name: api.ToolSendFile}}
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "c1", Output: report}}
+
+	if d := fake.waitDoc(t); d.thread != "7" || d.name != "report.txt" || d.content != fileBody {
+		t.Fatalf("uploaded %+v", d)
 	}
 }

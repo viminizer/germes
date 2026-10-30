@@ -1,5 +1,6 @@
-// Package files has the file tools: Read, Write, Edit, Glob, Grep. Names
-// follow Claude Code, so one block list works for both engines.
+// Package files has the file tools: Read, Write, Edit, Glob, Grep, and
+// send_file. Names follow Claude Code, so one block list works for both
+// engines.
 package files
 
 import (
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/text"
 	"github.com/viminizer/germes/internal/tool"
 )
@@ -22,6 +24,7 @@ import (
 const (
 	maxReadLines = 2000
 	maxMatches   = 200
+	maxSendBytes = 50 << 20 // the Bot API's upload limit
 )
 
 // New returns the file tools. They share what each session has read, so
@@ -72,6 +75,9 @@ func New() []tool.Tool {
 		{Name: "Grep", Toolset: "files", MatchArg: "pattern", Run: tool.NewRun(grep),
 			Description: "Search file contents with a regular expression. Returns file:line: text.",
 			Schema:      schema(`"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string","description":"only files matching this, like *.go"}`, "pattern")},
+		{Name: api.ToolSendFile, Toolset: "files", MatchArg: "file_path", BlockedAs: "Read", Run: tool.NewRun(sendFile),
+			Description: "Send a file to the user. It reaches them when they talk from Telegram; in the terminal they see only the path. Up to 50 MB.",
+			Schema:      schema(`"file_path":{"type":"string","description":"path, absolute or relative to the project"}`, "file_path")},
 	}
 }
 
@@ -99,6 +105,26 @@ func resolve(dir, p string) string {
 type readArgs struct {
 	FilePath      string `json:"file_path"`
 	Offset, Limit int
+}
+
+type sendArgs struct {
+	FilePath string `json:"file_path"`
+}
+
+// sendFile checks the file can be sent and returns its full path. It does
+// not send it: Telegram watches for this tool's result and uploads the file.
+func sendFile(ctx context.Context, c tool.Call, a sendArgs) (string, error) {
+	p := resolve(c.Dir, a.FilePath)
+	fi, err := os.Stat(p)
+	switch {
+	case err != nil:
+		return "", err
+	case fi.IsDir():
+		return "", fmt.Errorf("%s is a folder; send a file", a.FilePath)
+	case fi.Size() > maxSendBytes:
+		return "", fmt.Errorf("%s is %d MB; Telegram takes up to 50 MB", a.FilePath, fi.Size()>>20)
+	}
+	return p, nil
 }
 
 func read(ctx context.Context, c tool.Call, a readArgs) (string, error) {

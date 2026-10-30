@@ -33,7 +33,7 @@ func parseRule(s string) (rule, error) {
 // isBlocked checks the call's MatchArg against the rules for its tool.
 func (r *Registry) isBlocked(t Tool, c Call) (string, bool) {
 	for _, rl := range r.blocked {
-		if rl.tool != t.Name {
+		if rl.tool != t.Name && rl.tool != t.BlockedAs {
 			continue
 		}
 		if rl.pattern == "" {

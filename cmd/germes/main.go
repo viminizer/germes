@@ -28,6 +28,7 @@ import (
 	"github.com/viminizer/germes/internal/engine/claude"
 	"github.com/viminizer/germes/internal/engine/loop"
 	"github.com/viminizer/germes/internal/env"
+	"github.com/viminizer/germes/internal/file"
 	"github.com/viminizer/germes/internal/job"
 	"github.com/viminizer/germes/internal/llm/codex"
 	"github.com/viminizer/germes/internal/mcp"
@@ -334,7 +335,11 @@ func runDaemon(p paths) error {
 			if err != nil {
 				slog.Warn("clean up snapshots", "err", err)
 			}
-			slog.Info("cleanup", "tool_outputs", outputs, "snapshot_repos", snapshots)
+			tgFiles, err := file.DeleteOld(telegramFiles(p), before)
+			if err != nil {
+				slog.Warn("clean up telegram files", "err", err)
+			}
+			slog.Info("cleanup", "tool_outputs", outputs, "snapshot_repos", snapshots, "telegram_files", tgFiles)
 		},
 		Insights: st.GetInsights,
 		Jobs:     []api.JobRequest{{Name: "curator", Dir: p.home, Prompt: strings.TrimSpace(prompt.Curator), NoWorktree: true, Repeat: true, Every: 7 * 24 * time.Hour}},
@@ -372,8 +377,12 @@ func newTelegram(p paths, cfg config.Config) daemon.Gateway {
 		codeDirs = []string{filepath.Join(home, "dev")}
 	}
 	return telegram.New(api.NewClient(p.socket), telegram.Options{Token: cfg.Telegram.Token, ChatID: cfg.Telegram.ChatID,
-		UserID: cfg.Telegram.UserID, CodeDirs: codeDirs, StatePath: filepath.Join(p.home, "telegram.json"), APIBase: cfg.Telegram.APIBase})
+		UserID: cfg.Telegram.UserID, CodeDirs: codeDirs, StatePath: filepath.Join(p.home, "telegram.json"),
+		FilesDir: telegramFiles(p), APIBase: cfg.Telegram.APIBase})
 }
+
+// telegramFiles is where files sent to the bot are saved, until cleanup.
+func telegramFiles(p paths) string { return filepath.Join(p.home, "telegram", "files") }
 
 // setupTelegram asks for the bot's token, the group chat and the user, and
 // saves them in the config. The daemon picks the change up on its own.
@@ -534,18 +543,18 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 	toolsets := map[string]tool.Toolset{
 		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
 		"learn":   {Tools: []string{"memory", "skill_view", "skill_save", "skill_patch"}},
-		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit", "todo_list"}, Includes: []string{"core", "learn"}},
+		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit", "todo_list", api.ToolSendFile}, Includes: []string{"core", "learn"}},
 		"review":  {Includes: []string{"learn"}},
 		// A plan turn reads and searches; it changes nothing.
 		"plan": {Tools: []string{"Read", "Glob", "Grep", "session_search"}},
 		// Subagents work on one task: files, shell and search; no memory.
 		"subagent": {Tools: []string{"session_search"}, Includes: []string{"core"}},
 		// The overseer controls Germes too; it has no worktree to leave.
-		"overseer": {Tools: append([]string{"session_search", "todo_list"}, control...), Includes: []string{"core", "learn"}},
+		"overseer": {Tools: append([]string{"session_search", "todo_list", api.ToolSendFile}, control...), Includes: []string{"core", "learn"}},
 		// Claude gets only what it lacks through MCP: it has its own files and
 		// shell, and edits memory and skills as files.
-		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_enter", "worktree_exit"}},
-		daemon.ToolsetMCPOverseer: {Tools: append([]string{"session_search"}, control...)},
+		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_enter", "worktree_exit", api.ToolSendFile}},
+		daemon.ToolsetMCPOverseer: {Tools: append([]string{"session_search", api.ToolSendFile}, control...)},
 	}
 	reg, err := tool.NewRegistry(tools, toolsets, cfg.Blocked, filepath.Join(p.home, "tool-output"))
 	if err != nil {

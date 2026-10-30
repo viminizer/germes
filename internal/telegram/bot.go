@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,8 +23,9 @@ const maxText = 4000
 
 // bot calls the Bot API. Errors never contain the token (R16).
 type bot struct {
-	base string // https://api.telegram.org/bot<token>
-	http *http.Client
+	base  string // https://api.telegram.org/bot<token>
+	files string // https://api.telegram.org/file/bot<token>
+	http  *http.Client
 }
 
 // apiError is an error reply from Telegram.
@@ -52,18 +58,19 @@ func (b *bot) post(ctx context.Context, method string, params, out any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", b.base+"/"+method, bytes.NewReader(body))
+	return b.do(ctx, method, "application/json", bytes.NewReader(body), out)
+}
+
+// do posts body to method and decodes Telegram's reply into out.
+func (b *bot) do(ctx context.Context, method, contentType string, body io.Reader, out any) error {
+	req, err := http.NewRequestWithContext(ctx, "POST", b.base+"/"+method, body)
 	if err != nil {
 		return errors.New("telegram: bad request")
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	resp, err := b.http.Do(req)
 	if err != nil {
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			err = ue.Err // the URL holds the token
-		}
-		return fmt.Errorf("telegram %s: %w", method, err)
+		return fmt.Errorf("telegram %s: %w", method, hideToken(err))
 	}
 	defer resp.Body.Close()
 	var r struct {
@@ -101,6 +108,14 @@ type (
 		From     *user  `json:"from"`
 		Chat     chat   `json:"chat"`
 		Text     string `json:"text"`
+		Caption  string `json:"caption"` // the text sent with a file
+		Document *file  `json:"document"`
+		Photo    []file `json:"photo"` // sizes, smallest first
+	}
+	file struct {
+		ID       string `json:"file_id"`
+		UniqueID string `json:"file_unique_id"`
+		Name     string `json:"file_name"` // documents only
 	}
 	callback struct {
 		ID      string   `json:"id"`
@@ -127,6 +142,103 @@ func (m *message) topic() int64 {
 		return 0
 	}
 	return m.ThreadID
+}
+
+// file is the file the message carries: its document, or its photo in the
+// largest size. nil = none.
+func (m *message) file() *file {
+	switch {
+	case m.Document != nil:
+		f := *m.Document
+		if f.Name == "" {
+			f.Name = "file"
+		}
+		return &f
+	case len(m.Photo) > 0:
+		f := m.Photo[len(m.Photo)-1]
+		f.Name = "photo.jpg"
+		return &f
+	}
+	return nil
+}
+
+// hideToken drops the URL from a request error: the URL holds the token.
+func hideToken(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
+}
+
+// download saves a file the user sent into dir and returns its path.
+// Telegram's servers refuse files over 20 MB ("file is too big").
+func (b *bot) download(ctx context.Context, f file, dir string) (string, error) {
+	var got struct {
+		Path string `json:"file_path"`
+	}
+	if err := b.call(ctx, "getFile", map[string]any{"file_id": f.ID}, &got); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", b.files+"/"+got.Path, nil)
+	if err != nil {
+		return "", errors.New("telegram: bad file path")
+	}
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("telegram download: %w", hideToken(err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("telegram download: %s", resp.Status)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	// The unique id keeps two files with one name apart; Base keeps a
+	// name like "../x" inside dir.
+	path := filepath.Join(dir, f.UniqueID+"-"+filepath.Base(f.Name))
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	_, err = io.Copy(out, resp.Body)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("save the file: %w", err)
+	}
+	return path, nil
+}
+
+// sendFile uploads the file at path to a topic (0 = General).
+func (b *bot) sendFile(ctx context.Context, chatID, thread int64, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	// ponytail: the upload is held in memory (send_file allows up to 50 MB);
+	// stream it through io.Pipe if that becomes a problem.
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	w.WriteField("chat_id", strconv.FormatInt(chatID, 10))
+	if thread != 0 {
+		w.WriteField("message_thread_id", strconv.FormatInt(thread, 10))
+	}
+	part, err := w.CreateFormFile("document", filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return b.do(ctx, "sendDocument", w.FormDataContentType(), &body, nil)
 }
 
 // send sends text to a topic (0 = General), split into Telegram-sized

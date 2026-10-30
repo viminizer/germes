@@ -55,7 +55,7 @@ Built-ins: `merge`, `cleanup` (remove the job's worktree), `notify "<text>"` (a 
 - In the TUI or Telegram, `/plan <task>` makes a plan first without changing anything; it is saved in `<project>/.germes/plans/`.
 - `/rollback` in the TUI or Telegram lists file snapshots taken before each turn; `/rollback n` puts the files back.
 - `germes overseer` (or `/overseer`): the overseer, one session in the home folder with tools to control sessions and jobs.
-- `germes setup telegram`: talk to Germes from a Telegram group (asks for the bot token, chat id and user id; saved under `telegram:` in the config). In a topic, `/bind <project>`; General talks to the overseer.
+- `germes setup telegram`: talk to Germes from a Telegram group (asks for the bot token, chat id and user id; saved under `telegram:` in the config). In a topic, `/bind <project>`; General talks to the overseer. A file the user sends arrives as `[file from Telegram: <path>]`; read it from that path. When the user asks for a file, send it with `send_file`.
 - `germes insights [--days 30]`: sessions, turns per engine, the most used tools, and which skills were loaded and when last.
 - `germes doctor`: check the config, engines, database and daemon, with fixes. `germes daemon kill`: stop a hung daemon.
 - `germes daemon restart`: restart the daemon, cutting running turns (rarely needed; it updates and reloads itself without cutting anything).

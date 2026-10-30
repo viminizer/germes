@@ -16,11 +16,12 @@ import (
 // scanDepth is how deep /bind looks for git repos under the code folders.
 const scanDepth = 3
 
-// watch follows every session: answers go back to the topic that asked,
-// job notices to the project's topic (or General). A dropped watch comes
-// back after a short wait.
+// watch follows every session: answers and files from send_file go back to
+// the topic that asked, job notices to the project's topic (or General). A
+// dropped watch comes back after a short wait.
 func (t *Telegram) watch(ctx context.Context) {
-	last := map[string]string{} // session -> its last text this turn
+	last := map[string]string{}  // session -> its last text this turn
+	sending := map[string]bool{} // send_file calls waiting for their result (session + call id)
 	for ctx.Err() == nil {
 		events, err := t.svc.Watch(ctx, api.WatchFilter{})
 		if err != nil {
@@ -38,6 +39,13 @@ func (t *Telegram) watch(ctx context.Context) {
 			case !asked:
 			case ev.Kind == api.KindText:
 				last[ev.SessionID] = ev.Text
+			case ev.Kind == api.KindToolCall && ev.Tool != nil && ev.Tool.Name == api.ToolSendFile:
+				sending[callKey(ev)] = true
+			case ev.Kind == api.KindToolResult && ev.Tool != nil && sending[callKey(ev)]:
+				delete(sending, callKey(ev))
+				if !ev.Tool.IsError {
+					t.upload(ctx, thread, ev.Tool.Output)
+				}
 			case ev.Kind == api.KindError || ev.Kind == api.KindLimitHit:
 				t.reply(ctx, thread, "⚠ "+ev.Text)
 			case ev.Kind == api.KindTurnDone:
@@ -54,6 +62,17 @@ func (t *Telegram) watch(ctx context.Context) {
 			}
 		}
 		wait(ctx, time.Second) // the stream ended: the daemon is going away
+	}
+}
+
+// callKey names a tool call across sessions: call ids are only unique in one.
+func callKey(ev api.Event) string { return ev.SessionID + " " + ev.Tool.ID }
+
+// upload sends a file to a topic, and tells the topic if it fails.
+func (t *Telegram) upload(ctx context.Context, thread int64, path string) {
+	if err := t.bot.sendFile(ctx, t.opts.ChatID, thread, path); err != nil {
+		slog.Warn("telegram send file", "err", err)
+		t.reply(ctx, thread, "Could not send the file "+filepath.Base(path)+": "+err.Error())
 	}
 }
 

@@ -17,6 +17,7 @@ func newTestRegistry(t *testing.T) *Registry {
 	echo := func(ctx context.Context, c Call) (string, error) { return "ran", nil }
 	r, err := NewRegistry(
 		[]Tool{{Name: "Bash", MatchArg: "command", Run: echo}, {Name: "Read", MatchArg: "file_path", Run: echo},
+			{Name: "send_file", MatchArg: "file_path", BlockedAs: "Read", Run: echo},
 			{Name: "Boom", Run: func(ctx context.Context, c Call) (string, error) { panic("boom") }}},
 		map[string]Toolset{"core": {Tools: []string{"Bash", "Read"}}, "all": {Tools: []string{"Boom"}, Includes: []string{"core"}}},
 		[]string{"Bash(sudo *)", "Bash(rm -rf /*)", "Read(.env)", "Read(**/.env*)"}, "",
@@ -42,6 +43,7 @@ func TestBlockList(t *testing.T) {
 		{"Read", `{"file_path":"/proj/.env"}`},
 		{"Read", `{"file_path":"config/.env.local"}`},
 		{"Read", `{"file_path":"/elsewhere/app/.env.prod"}`},
+		{"send_file", `{"file_path":"config/.env.local"}`}, // what cannot be read cannot be sent
 	}
 	for _, b := range blocked {
 		if res := run(r, b.tool, b.args); !res.IsError || !strings.Contains(res.Output, "blocked") {
@@ -53,6 +55,7 @@ func TestBlockList(t *testing.T) {
 		{"Bash", `{"command":"rm -rf ./build"}`},
 		{"Read", `{"file_path":"main.go"}`},
 		{"Read", `{"file_path":"docs/env.md"}`},
+		{"send_file", `{"file_path":"main.go"}`},
 	}
 	for _, a := range allowed {
 		if res := run(r, a.tool, a.args); res.IsError {

@@ -432,18 +432,20 @@ func (m *model) flush() string {
 }
 
 func (m *model) View() tea.View {
-	// Running tools, then the reply's unfinished line (blank when none: it
-	// also spaces the transcript from the status bar).
-	parts := []string{m.transcript.view(m.width, m.status.spinner())}
-	if q := m.queue.view(m.width); q != "" {
-		parts = append(parts, q)
+	// Running tools and the reply's unfinished line, then the queue.
+	var parts []string
+	for _, p := range []string{m.transcript.view(m.width, m.status.spinner()), m.queue.view(m.width)} {
+		if p != "" {
+			parts = append(parts, p)
+		}
 	}
-	// A thin rule with the title, the input, then the footer closes the app.
-	parts = append(parts, m.rule.view(m.width), m.composer.view())
+	// A blank line, the input between a rule with the title and a plain
+	// rule, then a blank line and the footer close the app.
+	parts = append(parts, "", m.rule.view(m.width), m.composer.view(), m.rule.bottom(m.width))
 	if sug := m.suggest.view(m.width); sug != "" {
 		parts = append(parts, sug)
 	}
-	parts = append(parts, m.status.view(m.width))
+	parts = append(parts, "", m.status.view(m.width))
 	return tea.NewView(strings.Join(parts, "\n"))
 }
 

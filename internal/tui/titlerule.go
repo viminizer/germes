@@ -7,7 +7,7 @@ import (
 )
 
 // titleRule is the thin rule above the input, with the session title (or
-// the project before there is one) on the right.
+// the project before there is one) on the right, and the plain one below.
 type titleRule struct {
 	Title   string
 	Project string
@@ -20,8 +20,13 @@ func (t titleRule) view(width int) string {
 		right = t.Title
 	}
 	if right == "" || width < 12 {
-		return styleBorder.Render(strings.Repeat("─", max(width, 1)))
+		return t.bottom(width)
 	}
 	r := styleLabel.Render(truncateLeft(right, width-4))
 	return styleBorder.Render(strings.Repeat("─", max(width-lipgloss.Width(r)-1, 1))+" ") + r
+}
+
+// bottom renders the plain rule under the input.
+func (titleRule) bottom(width int) string {
+	return styleBorder.Render(strings.Repeat("─", max(width, 1)))
 }

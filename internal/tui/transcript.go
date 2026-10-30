@@ -168,11 +168,10 @@ func (t *transcript) view(width int, spin string) string {
 	for _, call := range t.running {
 		parts = append(parts, styleAccent.Render(spin+" ")+styleText.Render(toolLabel(call, t.dir)))
 	}
-	line := ""
 	if s := t.streaming.String(); s != "" {
-		line = ansi.Truncate(replyMark(t.started)+styleText.Render(s)+"▍", max(width, 1), "…")
+		parts = append(parts, ansi.Truncate(replyMark(t.started)+styleText.Render(s)+"▍", max(width, 1), "…"))
 	}
-	return strings.Join(append(parts, line), "\n")
+	return strings.Join(parts, "\n")
 }
 
 // attachedNames lists the references in an attachment ("--- @file:x ---" headers).

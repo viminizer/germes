@@ -459,28 +459,35 @@ func (m *model) flush() string {
 }
 
 func (m *model) View() tea.View {
-	// The tool tree and the reply's unfinished line, then the queue.
+	// The bottom first: a blank line, then the status line (or the
+	// suggestions in its place) and the input close the app, like Hermes.
 	now := time.Now()
-	var parts []string
-	for _, p := range []string{m.transcript.view(m.width, m.status.spinner(), now), m.queue.view(m.width)} {
-		if p != "" {
-			parts = append(parts, p)
-		}
-	}
-	// A blank line, then the status line (or the suggestions in its place)
-	// and the input close the app, like Hermes.
-	parts = append(parts, "")
+	bottom := []string{""}
 	if sug := m.suggest.view(m.width); sug != "" && !m.picker.open {
-		parts = append(parts, sug)
+		bottom = append(bottom, sug)
 	} else {
-		parts = append(parts, m.status.view(m.width))
+		bottom = append(bottom, m.status.view(m.width))
 	}
 	if m.picker.open {
-		parts = append(parts, m.picker.view(m.width, now))
+		bottom = append(bottom, m.picker.view(m.width, now))
 	} else {
-		parts = append(parts, m.composer.view())
+		bottom = append(bottom, m.composer.view())
 	}
-	return tea.NewView(margin(strings.Join(parts, "\n")))
+	// Above it the queue, and the live part of the transcript in the rows
+	// that are left: the whole live area must fit on the screen.
+	var parts []string
+	queue := m.queue.view(m.width)
+	room := m.height - lipgloss.Height(strings.Join(bottom, "\n")) - 1 // one spare row
+	if queue != "" {
+		room -= lipgloss.Height(queue)
+	}
+	if live := m.transcript.view(m.width, room, m.status.spinner(), now); live != "" {
+		parts = append(parts, live)
+	}
+	if queue != "" {
+		parts = append(parts, queue)
+	}
+	return tea.NewView(margin(strings.Join(append(parts, bottom...), "\n")))
 }
 
 // marginWidth is what the app leaves free, like Hermes: one column on the

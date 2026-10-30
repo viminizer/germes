@@ -32,6 +32,7 @@ var (
 	styleBorder  = lipgloss.NewStyle().Foreground(colorBorder)
 	styleMuted   = lipgloss.NewStyle().Foreground(colorMuted)
 	styleDim     = lipgloss.NewStyle().Foreground(colorMuted).Faint(true)
+	styleTime    = lipgloss.NewStyle().Foreground(colorStatus).Faint(true) // a call's time, a count
 	styleStatus  = lipgloss.NewStyle().Foreground(colorStatus)
 	styleError   = lipgloss.NewStyle().Foreground(colorError)
 	styleOK      = lipgloss.NewStyle().Foreground(colorOK)

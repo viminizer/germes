@@ -169,32 +169,33 @@ func (t *transcript) reply(text string) []message {
 // lastSeqShown is the last stored event shown, for reconnecting.
 func (t *transcript) lastSeqShown() int64 { return t.lastSeq }
 
-// maxLiveTools is how many tree rows the live area shows; the printed
-// tree has them all.
-const maxLiveTools = 8
-
-// view renders the live part: the task list, the tool tree of the current
-// step, running calls with a spinner, then one row for the unfinished line
-// of the reply
-// (empty when none). The row is always there: a live area that changes
-// height on every line loses or repeats printed lines at the bottom of the
-// screen.
-func (t *transcript) view(width int, spin string, now time.Time) string {
-	var parts []string
-	// A blank line before a block, as it will be printed.
-	if len(t.todos) > 0 {
-		parts = append(parts, "", todoView(t.todos, width, false, false, maxLiveTodos))
-	}
-	if len(t.tools) > 0 {
-		parts = append(parts, "", treeView(t.tools, t.dir, width, spin, now, maxLiveTools))
-	}
+// view renders the live part in at most height rows: the task list, the
+// tool tree of the current step (running calls with a spinner), then the
+// unfinished line of the reply, when there is one. The list and the tree
+// get shorter to fit: a live area taller than the screen loses printed
+// lines (see printBanner); the printed list and tree have every row.
+func (t *transcript) view(width, height int, spin string, now time.Time) string {
+	var reply []string
 	if s := lastLine(t.held + t.streaming.String()); s != "" {
 		if !t.started {
-			parts = append(parts, "")
+			reply = append(reply, "") // a blank line before a block, as it will be printed
 		}
-		parts = append(parts, ansi.Truncate(replyMark(t.started)+styleText.Render(s)+"▍", max(width, 1), "…"))
+		reply = append(reply, ansi.Truncate(replyMark(t.started)+styleText.Render(s)+"▍", max(width, 1), "…"))
 	}
-	return strings.Join(parts, "\n")
+	room := height - len(reply)
+	var parts []string
+	rows := min(len(t.todos), maxLiveTodos) + 2 // a blank line and the header
+	if len(t.tools) > 0 {
+		rows = min(rows, room/2) // the tree gets the other half
+	}
+	if rows = min(rows, room); len(t.todos) > 0 && rows >= 5 { // the cap keeps 3 rows: an item and its "…" lines
+		parts = append(parts, "", todoView(t.todos, width, false, false, rows-2))
+		room -= rows
+	}
+	if len(t.tools) > 0 && room >= 3 {
+		parts = append(parts, "", treeView(t.tools, t.dir, width, spin, now, room-2))
+	}
+	return strings.Join(append(parts, reply...), "\n")
 }
 
 func lastLine(s string) string {

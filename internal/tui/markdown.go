@@ -30,16 +30,20 @@ func renderMarkdown(text string, width int) string {
 	var out []string
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		if m := reFence.FindStringSubmatch(line); m != nil {
-			if m[2] != "" {
-				out = append(out, styleMuted.Render("  ─ "+m[2]))
+		if fence, lang, ok := fenceOpen(line); ok {
+			if lang != "" {
+				out = append(out, styleMuted.Render("  ─ "+lang))
 			}
-			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), m[1]); i++ {
-				out = append(out, "  "+highlight(strings.ReplaceAll(lines[i], "\t", "    "), m[2]))
+			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), fence); i++ {
+				// Wrapped here, so a long line keeps the indent.
+				code := ansi.Hardwrap(strings.ReplaceAll(lines[i], "\t", "    "), max(width-2, 10), true)
+				for _, part := range strings.Split(code, "\n") {
+					out = append(out, "  "+highlight(part, lang))
+				}
 			}
 			continue
 		}
-		if isTableRow(line) {
+		if isTableStart(lines[i:]) {
 			start := i
 			for i+1 < len(lines) && isTableRow(lines[i+1]) {
 				i++
@@ -105,6 +109,25 @@ func inline(text string, base lipgloss.Style) string {
 
 func isTableRow(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "|") }
 
+// isTableStart says whether lines start a table: a `|` row, then a
+// `|---|` row. Prose that starts with `|` ("| grep foo") is not one.
+func isTableStart(lines []string) bool {
+	return len(lines) > 1 && isTableRow(lines[0]) && reTableSep.MatchString(lines[1])
+}
+
+// fenceOpen reads a line that opens a code block: its fence and language.
+// A fence closed on the same line ("```go x```") opens nothing.
+func fenceOpen(line string) (fence, lang string, ok bool) {
+	m := reFence.FindStringSubmatch(line)
+	if m == nil {
+		return "", "", false
+	}
+	if t := strings.TrimSpace(line); len(t) > len(m[1]) && strings.HasSuffix(t, m[1]) {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
 // tableCells splits `| a | b |` into its trimmed cells, markup removed.
 func tableCells(line string) []string {
 	line = strings.TrimSpace(line)
@@ -151,6 +174,9 @@ func renderTable(lines []string, width int) []string {
 	}
 	var out []string
 	if total > width {
+		if len(rows) == 1 { // a header alone
+			return []string{"  " + styleAccent.Bold(true).Render(ansi.Truncate(strings.Join(rows[0], "  "), max(width-2, 1), "…"))}
+		}
 		for i, r := range rows[1:] {
 			if i > 0 {
 				out = append(out, styleDim.Render("  "+strings.Repeat("─", max(min(width-3, 40), 1))))
@@ -190,13 +216,14 @@ func readyBlocks(text string) (ready, held string) {
 	hold := -1 // first line that must wait
 	fence := ""
 	for i, l := range lines {
-		switch m := reFence.FindStringSubmatch(l); {
+		open, _, opens := fenceOpen(l)
+		switch {
 		case fence != "":
 			if strings.HasPrefix(strings.TrimSpace(l), fence) {
 				fence, hold = "", -1
 			}
-		case m != nil:
-			fence, hold = m[1], i
+		case opens:
+			fence, hold = open, i
 		case isTableRow(l):
 			if hold < 0 {
 				hold = i

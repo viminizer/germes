@@ -5,49 +5,25 @@ import (
 	"github.com/viminizer/germes/internal/text"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"time"
 
+	"github.com/viminizer/germes/internal/engine"
 	"github.com/viminizer/germes/internal/llm"
+	"github.com/viminizer/germes/internal/prompt"
 	"github.com/viminizer/germes/internal/tool"
 )
 
 const (
-	reviewEvery   = 10 // tool steps without saving memory or a skill
-	reviewSteps   = 6  // model calls the review may make
+	reviewSteps   = 6 // model calls the review may make
 	reviewTimeout = 5 * time.Minute
 )
-
-const reviewPrompt = `You review a finished piece of work by a coding agent, to help it learn.
-Decide whether anything is worth keeping for future sessions:
-- memory (target agent): durable facts about the environment, tools or conventions;
-- memory (target user): how the user likes to work;
-- a skill: a reusable how-to for a kind of task that was hard or took several tries.
-Save only what will clearly help later. Do not save one-off details. Update an existing entry or skill
-instead of adding a near copy. If nothing is worth saving, reply "nothing to save" and stop.`
-
-// countSteps updates a session's counter of tool calls since the agent last
-// saved memory or a skill, and reports whether a review is due.
-func (l *Loop) countSteps(sessionID string, calls []llm.ToolCall) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, c := range calls {
-		if c.Name == "memory" || c.Name == "skill_save" {
-			l.steps[sessionID] = 0
-			continue
-		}
-		l.steps[sessionID]++
-	}
-	if l.steps[sessionID] >= reviewEvery {
-		l.steps[sessionID] = 0
-		return true
-	}
-	return false
-}
 
 // review runs in the background after a turn: a short, silent agent run with
 // only the memory and skill tools that reads the session and saves what is
 // worth keeping (Hermes' learning loop). The user does not wait for it.
-func (l *Loop) review(sessionID, dir string) {
+func (l *Loop) review(t engine.Turn) {
+	sessionID := t.SessionID
 	if len(l.opts.ReviewToolsets) == 0 {
 		return
 	}
@@ -62,6 +38,13 @@ func (l *Loop) review(sessionID, dir string) {
 		events, err := l.loadEvents(ctx, sessionID)
 		if err != nil {
 			slog.Warn("review: load history", "session", sessionID, "err", err)
+			return
+		}
+		// Today's memory and skills, so the review updates them instead of
+		// adding near copies.
+		p, err := l.prompts.Create(ctx, prompt.Where{Dir: t.Dir, Project: t.Project, Branch: t.Branch}, prompt.RoleProject)
+		if err != nil {
+			slog.Warn("review: build prompt", "session", sessionID, "err", err)
 			return
 		}
 		summary, kept := effective(events)
@@ -79,7 +62,7 @@ func (l *Loop) review(sessionID, dir string) {
 		msgs := []llm.Message{{Role: llm.RoleUser, Text: "The session:\n\n" + transcript}}
 		saved := 0
 		for step := 0; step < reviewSteps; step++ {
-			ch, err := l.client.Send(ctx, llm.Request{System: reviewPrompt, Messages: msgs, Tools: specs})
+			ch, err := l.client.Send(ctx, llm.Request{System: strings.TrimSpace(prompt.Review) + "\n\n" + p.Extra, Messages: msgs, Tools: specs})
 			if err != nil {
 				slog.Warn("review", "session", sessionID, "err", err)
 				return
@@ -101,7 +84,7 @@ func (l *Loop) review(sessionID, dir string) {
 			}
 			msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})
 			for _, c := range calls {
-				res := l.tools.Run(ctx, c.Name, tool.Call{SessionID: sessionID, Dir: dir, Args: c.Args})
+				res := l.tools.Run(ctx, c.Name, tool.Call{SessionID: sessionID, Dir: t.Dir, Args: c.Args})
 				if !res.IsError {
 					saved++
 				}

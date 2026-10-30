@@ -59,6 +59,6 @@ Built-ins: `merge`, `cleanup` (remove the job's worktree), `notify "<text>"` (a 
 - `germes daemon restart`: restart the daemon, cutting running turns (rarely needed; it updates and reloads itself without cutting anything).
 
 ## Other Germes files
-- Memory: `{{HOME}}/memories/MEMORY.md` (your notes) and `USER.md` (about the user). Entries are separated by a line with only `§`.
+- Memory: `{{HOME}}/memories/MEMORY.md` (your notes) and `USER.md` (about the user). Entries are separated by a line with only `§`. Keep MEMORY.md under 2200 characters and USER.md under 1375.
 - Skills: `{{HOME}}/skills/<name>/SKILL.md` (Germes writes here); `~/.claude/skills` is read-only.
 - Logs: `{{HOME}}/logs/daemon.log`. Database: `{{HOME}}/germes.db` (do not edit it).

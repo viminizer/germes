@@ -61,8 +61,8 @@ type Loop struct {
 	opts    Options
 
 	mu          sync.Mutex
-	frozen      map[string]string          // session id -> system prompt, frozen for the cache
-	steps       map[string]int             // session id -> tool calls since memory/skills were last saved
+	frozen      map[string]string // session id -> system prompt, frozen for the cache
+	steps       engine.Steps
 	seenFolders map[string]map[string]bool // session id -> subfolders whose instructions were given
 }
 
@@ -77,7 +77,7 @@ func New(client llm.Client, tools *tool.Registry, prompts *prompt.Builder, histo
 		opts.ContextWindow = 200_000
 	}
 	return &Loop{client: client, tools: tools, prompts: prompts, history: history, opts: opts,
-		frozen: map[string]string{}, seenFolders: map[string]map[string]bool{}, steps: map[string]int{}}
+		frozen: map[string]string{}, seenFolders: map[string]map[string]bool{}}
 }
 
 // Name returns the engine name.
@@ -178,10 +178,9 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
 	g := newGuard(t.Dir)
-	reviewDue := false
 	defer func() {
-		if reviewDue {
-			l.review(t.SessionID, t.Dir) // after the turn, in the background
+		if spec.review && l.steps.IsDue(t.SessionID) {
+			l.review(t) // after the turn, in the background
 		}
 	}()
 	for step := 0; step <= spec.maxSteps; step++ {
@@ -241,8 +240,10 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
 			return
 		}
-		if spec.review && l.countSteps(t.SessionID, calls) {
-			reviewDue = true
+		if spec.review {
+			for _, c := range calls {
+				l.steps.Update(t.SessionID, c.Name == "memory" || c.Name == "skill_save")
+			}
 		}
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})
 		asked := "" // the questions for the user, when the model called clarify

@@ -719,6 +719,7 @@ func (s *Store) DeleteEntry(ctx, target Target, old string) error
 ```
 
 - Over the size limit: error telling the model to merge or delete entries first.
+- The prompt and the tool's reply show how full each file is (`MEMORY.md: 1900/2200 characters`). Over 80% full: merge or shorten entries before adding one (prompt and review say so).
 - Safe writes: mutex + write to a temp file, then rename.
 - Frozen in the prompt: `Load` once at session start. Writes during the session go to disk only.
 - Memory is global. Project notes go in the project's `AGENTS.md`.
@@ -1240,6 +1241,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - The prompt has the Germes config knowledge, the skills index (descriptions cut to 200 characters) and memory. Claude gets the same parts through `--append-system-prompt`, so it edits memory and skills as plain files.
    - Compaction: at the start of a turn, when history is over half the context window (default 200k tokens), older events are summarized; a `compacted` event saves the summary and `keep_from`. Next turns load the summary plus the kept events. Inside a long turn, old tool outputs are trimmed instead.
    - Background review: after 10 tool calls without saving memory or a skill, a silent review with only memory and skill tools runs after the turn.
+   - Later, both engines: the counter is shared (`engine.Steps`) and so is the instruction (`prompt.Review`). The loop's review gets today's memory and skills. Claude's review resumes a fork of the conversation (`--resume <id> --fork-session`, so the session does not change) with only Read/Glob/Grep and edits inside `memories/` and `skills/`; no acceptEdits, so any other edit is refused, and no shell. Claude counts as saved when it edits a file there.
    - Checked live: memory saved, config edited by the agent, search found an old session, the right skill named, review ran, Claude knew the config path and memory.
 5. Worktrees. Done:
    - New sessions in a git project get a worktree in `~/.germes/worktrees/<project>-<hash>/<session id>` on branch `germes/<id>`, from the project's HEAD. The status bar shows `⎇ branch`; `germes ls` has a BRANCH column.

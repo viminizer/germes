@@ -43,7 +43,11 @@ func New(store *memory.Store) []tool.Tool {
 			if err != nil {
 				return "", err
 			}
-			return "saved (it shows in the prompt from the next session)", nil
+			snap, err := store.Load(ctx)
+			if err != nil {
+				return "", err
+			}
+			return "saved (it shows in the prompt from the next session); " + snap.GetUsage(t), nil
 		}),
 	}}
 }

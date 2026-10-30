@@ -35,6 +35,12 @@ var codingBrief string
 //go:embed execution.md
 var executionRules string
 
+// Review is the instruction for the background review that learns from a
+// session (both engines).
+//
+//go:embed review.md
+var Review string
+
 // PlanMode is the instruction for a plan turn (both engines).
 //
 //go:embed plan.md
@@ -186,11 +192,12 @@ func (b *Builder) memoryBlock(ctx context.Context) (string, error) {
 	}
 	var s strings.Builder
 	s.WriteString("# Memory (saved in earlier sessions; keep it up to date with the memory tool)\n")
+	s.WriteString("\nWhen a file is over 80% full, merge or shorten its entries before you add one.\n")
 	if m.Agent != "" {
-		fmt.Fprintf(&s, "\n## Your notes (MEMORY.md)\n\n%s\n", m.Agent)
+		fmt.Fprintf(&s, "\n## Your notes (%s)\n\n%s\n", m.GetUsage(memory.Agent), m.Agent)
 	}
 	if m.User != "" {
-		fmt.Fprintf(&s, "\n## About the user (USER.md)\n\n%s\n", m.User)
+		fmt.Fprintf(&s, "\n## About the user (%s)\n\n%s\n", m.GetUsage(memory.User), m.User)
 	}
 	return strings.TrimSpace(s.String()), nil
 }

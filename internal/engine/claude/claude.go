@@ -26,8 +26,10 @@ import (
 // Name is this engine's name in config and resume ids.
 const Name = "claude-cli"
 
-// idleTimeout kills a claude process that prints nothing for this long.
-const idleTimeout = 10 * time.Minute
+const (
+	idleTimeout   = 10 * time.Minute // kills a claude process that prints nothing for this long
+	reviewTimeout = 5 * time.Minute
+)
 
 // Prompts builds the Germes part of the prompt (config knowledge, project,
 // skills, memory) that goes into --append-system-prompt.
@@ -48,7 +50,8 @@ type Options struct {
 
 // Claude is the claude CLI engine.
 type Claude struct {
-	opts Options
+	opts  Options
+	steps engine.Steps
 }
 
 // New creates the engine.
@@ -74,7 +77,7 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 		t.Prompt = strings.TrimSpace(prompt.PlanMode) + "\n\n" + t.Prompt
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	pr, err := c.start(ctx, t, extra, nil)
+	pr, err := c.start(ctx, t, c.args(t, extra, nil))
 	if err != nil {
 		cancel()
 		return nil, err
@@ -85,12 +88,15 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 		defer cancel()
 		var granted []string
 		for {
-			done, denied := c.follow(ctx, cancel, pr, out)
+			done, denied := c.follow(ctx, cancel, t.SessionID, pr, out)
 			if done == nil {
 				return // an error was sent, or the turn was stopped
 			}
 			more := c.grantable(denied, t.Dir, granted)
 			if len(more) == 0 || granted != nil {
+				if c.steps.IsDue(t.SessionID) {
+					go c.review(t, done.ResumeID, extra) // after the turn, in the background
+				}
 				stream.Send(ctx, out, *done)
 				return
 			}
@@ -100,7 +106,7 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 			again.ResumeIDs = map[string]string{Name: done.ResumeID}
 			again.Prompt = "Germes gave you access to " + strings.Join(more, ", ") +
 				". Do what was refused before now, then finish the task."
-			if pr, err = c.start(ctx, again, extra, granted); err != nil {
+			if pr, err = c.start(ctx, again, c.args(again, extra, granted)); err != nil {
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
 				return
 			}
@@ -116,9 +122,9 @@ type proc struct {
 	stderr *bytes.Buffer
 }
 
-// start runs claude for t, with extra folders it may use.
-func (c *Claude) start(ctx context.Context, t engine.Turn, extra string, dirs []string) (*proc, error) {
-	cmd := exec.CommandContext(ctx, "claude", c.args(t, extra, dirs)...)
+// start runs claude with args for t.
+func (c *Claude) start(ctx context.Context, t engine.Turn, args []string) (*proc, error) {
+	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = t.Dir
 	cmd.Stdin = strings.NewReader(t.Prompt)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -140,8 +146,8 @@ func (c *Claude) start(ctx context.Context, t engine.Turn, extra string, dirs []
 // follow streams the process's events until it ends. It holds back the
 // Done event and returns it with the paths claude was refused; nil means
 // the turn already ended with an error, or was stopped.
-func (c *Claude) follow(ctx context.Context, cancel context.CancelFunc, pr *proc, out chan<- engine.Event) (*engine.Event, []string) {
-	done, denied, ended := c.stream(ctx, cancel, pr.stdout, out)
+func (c *Claude) follow(ctx context.Context, cancel context.CancelFunc, sessionID string, pr *proc, out chan<- engine.Event) (*engine.Event, []string) {
+	done, denied, ended := c.stream(ctx, cancel, sessionID, pr.stdout, out)
 	waitErr := pr.cmd.Wait()
 	if done != nil || ended || ctx.Err() != nil {
 		return done, denied
@@ -236,7 +242,7 @@ func (c *Claude) mcpConfig(sessionID string) string {
 
 // stream reads claude's JSON lines until EOF. It reports whether a Done or
 // Error event was sent.
-func (c *Claude) stream(ctx context.Context, cancel context.CancelFunc, r io.Reader, out chan<- engine.Event) (done *engine.Event, denied []string, ended bool) {
+func (c *Claude) stream(ctx context.Context, cancel context.CancelFunc, sessionID string, r io.Reader, out chan<- engine.Event) (done *engine.Event, denied []string, ended bool) {
 	idle := time.AfterFunc(idleTimeout, func() {
 		slog.Warn("claude idle timeout, killing it")
 		cancel()
@@ -255,6 +261,8 @@ func (c *Claude) stream(ctx context.Context, cancel context.CancelFunc, r io.Rea
 				continue // the caller sends it, or resumes first
 			case engine.KindError:
 				ended = true
+			case engine.KindToolCall:
+				c.steps.Update(sessionID, c.savesLearning(ev.Tool))
 			}
 			stream.Send(ctx, out, ev)
 		}
@@ -264,6 +272,63 @@ func (c *Claude) stream(ctx context.Context, cancel context.CancelFunc, r io.Rea
 		return nil, nil, true
 	}
 	return done, p.denied, ended
+}
+
+// savesLearning reports whether a tool call saved memory or a skill: claude
+// edits them as files.
+func (c *Claude) savesLearning(tc *engine.ToolCall) bool {
+	var a struct {
+		FilePath string `json:"file_path"`
+	}
+	if c.opts.GermesHome == "" || json.Unmarshal(tc.Args, &a) != nil || a.FilePath == "" {
+		return false
+	}
+	return isInside(a.FilePath, filepath.Join(c.opts.GermesHome, "memories")) ||
+		isInside(a.FilePath, filepath.Join(c.opts.GermesHome, "skills"))
+}
+
+// review learns from a session in the background (Hermes' learning loop):
+// claude resumes a fork of the conversation, so the session itself does not
+// change, and may only read files and edit memory and skills.
+func (c *Claude) review(t engine.Turn, resumeID, extra string) {
+	if c.opts.GermesHome == "" || resumeID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reviewTimeout)
+	defer cancel()
+	t.Prompt = strings.TrimSpace(prompt.Review)
+	pr, err := c.start(ctx, t, c.reviewArgs(resumeID, extra))
+	if err == nil {
+		_, err = io.Copy(io.Discard, pr.stdout)
+		if werr := pr.cmd.Wait(); werr != nil {
+			err = fmt.Errorf("%w: %s", werr, lastLine(pr.stderr.String()))
+		}
+	}
+	if err != nil {
+		slog.Warn("review", "session", t.SessionID, "err", err)
+		return
+	}
+	slog.Info("review done", "session", t.SessionID)
+}
+
+// reviewArgs runs the review: without acceptEdits, an edit outside the
+// allowed folders would ask, and is refused.
+func (c *Claude) reviewArgs(resumeID, extra string) []string {
+	home := "/" + c.opts.GermesHome // "//abs/path" is an absolute path in a rule
+	args := []string{"-p", "--output-format", "json",
+		"--resume", resumeID, "--fork-session",
+		"--allowedTools", "Read Glob Grep Edit(" + home + "/memories/**) Edit(" + home + "/skills/**)",
+		"--disallowedTools", strings.Join(append(slices.Clone(c.opts.Blocked), "Bash", "WebFetch", "WebSearch", "NotebookEdit"), " "),
+		"--permission-prompts", "none",
+		"--add-dir", c.opts.GermesHome,
+	}
+	if c.opts.Model != "" {
+		args = append(args, "--model", c.opts.Model)
+	}
+	if extra != "" {
+		args = append(args, "--append-system-prompt", extra)
+	}
+	return args
 }
 
 func lastLine(s string) string {

@@ -36,6 +36,15 @@ type Snapshot struct {
 	User  string
 }
 
+// GetUsage says how full a target's file is, like "MEMORY.md: 1900/2200 characters".
+func (m Snapshot) GetUsage(t Target) string {
+	text := m.Agent
+	if t == User {
+		text = m.User
+	}
+	return fmt.Sprintf("%s: %d/%d characters", files[t], len([]rune(text)), limits[t])
+}
+
 // Store reads and writes the memory files.
 type Store struct {
 	dir string

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/viminizer/germes/internal/engine"
 )
 
 func TestParserCollectsRefusedPaths(t *testing.T) {
@@ -33,5 +35,20 @@ func TestGrantableFolders(t *testing.T) {
 	}
 	if again := c.grantable([]string{filepath.Join(other, "a.txt")}, work, got); len(again) != 0 {
 		t.Fatalf("granted twice: %v", again)
+	}
+}
+
+func TestSavesLearning(t *testing.T) {
+	c := New(Options{GermesHome: "/h"})
+	for args, want := range map[string]bool{
+		`{"file_path":"/h/memories/MEMORY.md"}`: true,
+		`{"file_path":"/h/skills/x/SKILL.md"}`:  true,
+		`{"file_path":"/h/config.yaml"}`:        false,
+		`{"file_path":"/p/main.go"}`:            false,
+		`{"command":"ls"}`:                      false,
+	} {
+		if got := c.savesLearning(&engine.ToolCall{Args: []byte(args)}); got != want {
+			t.Errorf("%s: got %v", args, got)
+		}
 	}
 }

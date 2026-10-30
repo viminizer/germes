@@ -15,7 +15,7 @@ var logo = []string{
 	` ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝`,
 }
 
-// banner is the intro printed once at the top: logo, tagline, info box.
+// banner is the intro printed once at the top: logo, version, info box.
 type banner struct {
 	Version string
 	Project string
@@ -42,17 +42,20 @@ func (b banner) view(width int) string {
 	if session == "" {
 		session = "new"
 	}
-	// Border (2) + padding (4) + label (8) + one spare column (writing the last
-	// column makes some terminals wrap): the rest is for the value, so the
-	// box never gets wider than the terminal.
-	valueWidth := max(width-15, 8)
+	// Like the Hermes info box: the engine, the folder, the session, and
+	// where the commands are. One spare column: writing the last column
+	// makes some terminals wrap.
+	boxWidth := max(width-1, 20)
+	valueWidth := boxWidth - 2 - 6 // border, padding
 	info := []string{
-		styleLabel.Render("project ") + styleText.Render(truncateLeft(b.Project, valueWidth)),
-		styleLabel.Render("session ") + styleText.Render(session),
-		styleLabel.Render("engine  ") + styleAccent.Render(b.Engine),
+		stylePrimary.Render(b.Engine),
+		styleLabel.Render(truncateLeft(b.Project, valueWidth)),
+		styleLabel.Render("Session: ") + styleStatus.Render(session),
+		"",
+		styleText.Render("/help for commands"),
 	}
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 2)
-	out = append(out, box.Render(strings.Join(info, "\n")))
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(1, 3).Width(boxWidth)
+	out = append(out, "", box.Render(strings.Join(info, "\n")))
 	return strings.Join(out, "\n")
 }
 

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/viminizer/germes/internal/api"
@@ -65,21 +66,24 @@ func (s suggestBox) complete(input string) (string, bool) {
 	return done, done != input
 }
 
-// view renders up to maxSuggestRows rows around the selected one.
+// view renders up to maxSuggestRows rows around the selected one in a
+// double-line box, like Hermes.
 func (s suggestBox) view(width int) string {
 	if len(s.items) == 0 {
 		return ""
 	}
-	rows := listRows(s.items, s.selected, width)
+	inner := max(width-3, 10) // the box's two sides and one spare column
+	rows := listRows(s.items, s.selected, inner)
 	if len(s.items) > maxSuggestRows {
-		rows = append(rows, styleDim.Render("  ↑↓ more · Tab complete · Esc close"))
+		rows = append(rows, styleDim.Render(ansi.Truncate(" ↑↓ more · Tab complete · Esc close", inner, "…")))
 	}
-	return strings.Join(rows, "\n")
+	box := lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(colorPrimary).Width(inner + 2)
+	return box.Render(strings.Join(rows, "\n"))
 }
 
-// listRows renders up to maxSuggestRows items around the selected one, the
-// selected one marked, help in one column: the suggestion list and the
-// session picker look the same.
+// listRows renders up to maxSuggestRows items around the selected one,
+// help in one column, each row as wide as width and the selected one
+// highlighted: the suggestion list and the session picker look the same.
 func listRows(items []suggestion, selected, width int) []string {
 	start := max(0, min(selected-maxSuggestRows/2, len(items)-maxSuggestRows))
 	end := min(len(items), start+maxSuggestRows)
@@ -90,16 +94,19 @@ func listRows(items []suggestion, selected, width int) []string {
 	var rows []string
 	for i := start; i < end; i++ {
 		it := items[i]
-		padded := it.Label + strings.Repeat(" ", labelWidth-len([]rune(it.Label)))
-		mark, label := "  ", styleText.Render(padded)
-		if i == selected {
-			mark, label = styleAccent.Render("› "), styleAccent.Bold(true).Render(padded)
-		}
-		row := mark + label
+		head := ansi.Truncate(" "+it.Label+strings.Repeat(" ", labelWidth-len([]rune(it.Label))), max(width, 1), "…")
+		rest := ""
 		if it.Help != "" {
-			row += styleDim.Render("  " + it.Help)
+			rest = "  " + it.Help
 		}
-		rows = append(rows, ansi.Truncate(row, max(width, 10), "…"))
+		room := max(width-lipgloss.Width(head), 0)
+		rest = ansi.Truncate(rest, room, "…")
+		rest += strings.Repeat(" ", room-lipgloss.Width(rest))
+		label, help := styleLabel, styleText
+		if i == selected {
+			label, help = label.Background(colorSelect).Bold(true), help.Background(colorSelect)
+		}
+		rows = append(rows, label.Render(head)+help.Render(rest))
 	}
 	return rows
 }

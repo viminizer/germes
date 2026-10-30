@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -15,10 +16,10 @@ import (
 type message struct {
 	Kind  messageKind
 	Text  string
-	Tool  *api.ToolCall   // call with its result, for kindTool and kindDetail
-	Tools []*api.ToolCall // routine calls in a row, for kindTools
-	Dir   string          // project folder: paths under it are shown short
-	Cont  bool            // kindAssistant: more of a reply already partly printed
+	Tool  *api.ToolCall // call with its result, for kindDetail
+	Tools []toolRun     // the calls of one step, for kindTools
+	Dir   string        // project folder: paths under it are shown short
+	Cont  bool          // kindAssistant: more of a reply already partly printed
 }
 
 type messageKind int
@@ -26,37 +27,42 @@ type messageKind int
 const (
 	kindUser messageKind = iota
 	kindAssistant
-	kindTool
-	kindTools  // routine calls in a row, as one line
+	kindTools  // the tool calls of one step, as a tree
 	kindDetail // a tool call in full (/details)
 	kindError
 	kindNotice
-	kindSwitch // the router moved the session to another engine
-	kindRound  // an attached job moved on to its next round
-	kindAlert  // a job's message for the user
+	kindSwitch  // the router moved the session to another engine
+	kindRound   // an attached job moved on to its next round
+	kindAlert   // a job's message for the user
+	kindTurnEnd // the short rule under a finished turn
 )
 
-// view renders the message for the given width.
+// view renders the message for the given width. Each block starts with a
+// blank line, like Hermes; the rest of a reply printed in pieces does not.
 func (m message) view(width int) string {
 	switch m.Kind {
 	case kindUser:
-		return "\n" + gutter(styleLabel.Bold(true).Render("❯ "), styleLabel, m.Text, width) + "\n"
+		return "\n" + gutter(styleLabel.Bold(true).Render("❯ "), styleLabel, m.Text, width)
 	case kindAssistant:
-		return gutter(replyMark(m.Cont), styleText, m.Text, width)
-	case kindTool:
-		return toolView(m.Tool, m.Dir, width)
+		text := gutter(replyMark(m.Cont), lipgloss.NewStyle(), renderMarkdown(m.Text, width-3), width)
+		if m.Cont {
+			return text
+		}
+		return "\n" + text
 	case kindTools:
-		return groupView(m.Tools, m.Dir, width)
+		return "\n" + treeView(m.Tools, m.Dir, width, "", time.Time{}, 0)
 	case kindDetail:
 		return detailView(m.Tool, m.Dir, width)
 	case kindError:
-		return gutter(styleError.Render("✗ "), styleError, m.Text, width)
+		return "\n" + gutter(styleError.Render("✗ "), styleError, m.Text, width)
 	case kindSwitch:
 		return gutter(styleAccent.Render("⇄ "), styleAccent, m.Text, width)
 	case kindAlert:
 		return gutter(styleAccent.Render("◆ "), styleAccent, m.Text, width)
 	case kindRound:
 		return "\n" + styleAccent.Render("── "+m.Text+" ──")
+	case kindTurnEnd:
+		return "\n" + styleBorder.Render("───")
 	default:
 		return gutter(styleMuted.Render("· "), styleMuted, m.Text, width)
 	}
@@ -66,9 +72,9 @@ func (m message) view(width int) string {
 // indented.
 func replyMark(cont bool) string {
 	if cont {
-		return "  "
+		return "   "
 	}
-	return styleBorder.Render("┊ ")
+	return styleBorder.Render("┊  ")
 }
 
 // gutter wraps text to width and puts mark before the first line.
@@ -86,50 +92,57 @@ func gutter(mark string, style lipgloss.Style, text string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// toolView is `● Name("preview")` and, once done, one dim result line.
-func toolView(t *api.ToolCall, dir string, width int) string {
-	dot, label := toolMark(t)
-	head := dot + label.Render(ansi.Truncate(toolLabel(t, dir), max(width-2, 10), "…"))
-	if t.Output == "" {
-		return head
+// treeView draws a step's tool calls like Hermes: `└─ ▾ Tool calls (3)`,
+// then one `├─ ● Read("main.go") (0.2s)` row per call. A running call has
+// the spinner and its time so far. maxRows > 0 keeps only the last rows
+// (the live area); a task list or subagent reports show under their call.
+func treeView(runs []toolRun, dir string, width int, spin string, now time.Time, maxRows int) string {
+	head := styleBorder.Render("└─ ") + styleAccent.Render(fmt.Sprintf("▾ Tool calls (%d)", len(runs)))
+	lines := []string{head}
+	shown := runs
+	if maxRows > 0 && len(runs) > maxRows {
+		shown = runs[len(runs)-maxRows:]
+		lines = append(lines, styleDim.Render(fmt.Sprintf("   │ … %d earlier", len(runs)-maxRows)))
 	}
-	if t.Name == "todo_list" && !t.IsError {
-		return head + "\n" + taskList(t.Output, width)
+	for i, r := range shown {
+		branch, rail := "├─ ", "│  "
+		if i == len(shown)-1 {
+			branch, rail = "└─ ", "   "
+		}
+		dot, label := toolMark(r.Call)
+		took := r.Took
+		if !r.Done {
+			dot += styleAccent.Render(spin + " ")
+			took = now.Sub(r.Start)
+		}
+		row := "   " + styleBorder.Render(branch) + dot + label.Render(toolLabel(r.Call, dir))
+		if r.Done || !now.IsZero() {
+			row += styleStatus.Faint(true).Render(" (" + tookText(took) + ")")
+		}
+		lines = append(lines, ansi.Truncate(row, max(width, 10), "…"))
+		var sub string
+		switch {
+		case !r.Done || r.Call.IsError:
+		case r.Call.Name == "todo_list":
+			sub = taskList(r.Call.Output, width-6)
+		case r.Call.Name == "delegate_task":
+			sub = subagentList(r.Call.Output, width-6)
+		}
+		if sub != "" {
+			for _, l := range strings.Split(sub, "\n") {
+				lines = append(lines, "   "+styleBorder.Render(rail)+l)
+			}
+		}
 	}
-	if t.Name == "delegate_task" && !t.IsError {
-		return head + "\n" + subagentList(t.Output, width)
-	}
-	result := strings.Join(strings.Fields(firstLine(shortPaths(t.Output, dir))), " ") // tabs and runs of spaces
-	if n := strings.Count(strings.TrimSpace(t.Output), "\n"); n > 0 {
-		result += fmt.Sprintf(" (+%d lines)", n)
-	}
-	return head + "\n" + styleDim.Render(ansi.Truncate("  └─ "+result, max(width, 10), "…"))
+	return strings.Join(lines, "\n")
 }
 
-// groupView is one line for routine calls in a row (`● Inspected: Read ×3,
-// Grep`) and one dim line of what they looked at.
-func groupView(calls []*api.ToolCall, dir string, width int) string {
-	var names, previews []string
-	counts := map[string]int{}
-	for _, c := range calls {
-		if counts[c.Name] == 0 {
-			names = append(names, c.Name)
-		}
-		counts[c.Name]++
-		if p := toolPreview(c, dir); p != "" {
-			previews = append(previews, p)
-		}
+// tookText writes a call's time as 0.2s, 12.5s or 2m.
+func tookText(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", max(d.Seconds(), 0))
 	}
-	for i, n := range names {
-		if counts[n] > 1 {
-			names[i] = fmt.Sprintf("%s ×%d", n, counts[n])
-		}
-	}
-	head := styleAccent.Render("● ") + styleText.Render(ansi.Truncate("Inspected: "+strings.Join(names, ", "), max(width-2, 10), "…"))
-	if len(previews) == 0 {
-		return head
-	}
-	return head + "\n" + styleDim.Render(ansi.Truncate("  └─ "+strings.Join(previews, ", "), max(width, 10), "…"))
+	return shortDuration(d)
 }
 
 // toolMark is a call's dot and label style: a red cross for a failure.
@@ -145,15 +158,27 @@ func toolLabel(t *api.ToolCall, dir string) string {
 	var args map[string]any
 	json.Unmarshal(t.Args, &args)
 	if tasks, ok := args["tasks"].([]any); ok && t.Name == "delegate_task" {
-		return fmt.Sprintf("%s(%d tasks)", t.Name, len(tasks))
+		return fmt.Sprintf("%s(%d tasks)", toolName(t.Name), len(tasks))
 	}
 	if label := memoryLabel(t, args); label != "" {
 		return label
 	}
 	if p := toolPreview(t, dir); p != "" {
-		return fmt.Sprintf("%s(%q)", t.Name, p)
+		return fmt.Sprintf("%s(%q)", toolName(t.Name), p)
 	}
-	return t.Name
+	return toolName(t.Name)
+}
+
+// toolName writes a snake_case tool name in words, like Hermes:
+// skill_view is "Skill View"; Read stays Read.
+func toolName(name string) string {
+	words := strings.Split(name, "_")
+	for i, w := range words {
+		if w != "" {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // memoryLabel says what a memory call saves: Memory added (about you):
@@ -220,7 +245,7 @@ func subagentList(out string, width int) string {
 		head, body, _ := strings.Cut(p, "\n")
 		num, goal, _ := strings.Cut(head, ": ")
 		n := strings.Count(strings.TrimSpace(body), "\n") + 1
-		lines = append(lines, styleDim.Render(ansi.Truncate(fmt.Sprintf("  └─ %s. %d-line report: %s", num, n, goal), max(width, 10), "…")))
+		lines = append(lines, styleDim.Render(ansi.Truncate(fmt.Sprintf("%s. %d-line report: %s", num, n, goal), max(width, 10), "…")))
 	}
 	return strings.Join(lines, "\n")
 }

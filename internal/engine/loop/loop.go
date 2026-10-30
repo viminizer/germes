@@ -274,35 +274,34 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 				return
 			}
 		}
-		for _, call := range calls {
-			res := tool.Result{IsError: true, Output: g.refuse(call)}
-			switch {
-			case res.Output != "":
-			case spec.delegate && call.Name == delegateTool:
-				res = l.delegate(ctx, t, system, call.Args)
-			case spec.ask && call.Name == clarifyTool:
-				text, ok := clarify(call.Args)
-				res = tool.Result{IsError: !ok, Output: text}
-				if ok {
-					asked = text
-					res.Output = "asked the user; the answer comes in their next message"
-				}
-			default:
-				res = l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
-				res.Output += g.note(call, res)
-				if !res.IsError {
-					res.Output += l.folderRules(t.SessionID, t.Dir, call)
+		// Reads in a row run at once (issue #38); any other call runs alone,
+		// in order, and the calls after it wait for it.
+		for i := 0; i < len(calls); {
+			n := countReads(calls[i:])
+			var results []tool.Result
+			if n > 1 {
+				results = l.runReads(ctx, t, g, calls[i:i+n])
+			} else {
+				n = 1
+				res, question := l.runCall(ctx, t, system, spec, g, calls[i])
+				results = []tool.Result{res}
+				if question != "" {
+					asked = question
 				}
 			}
 			if ctx.Err() != nil {
 				return
 			}
-			// Saved before the next tool or model call; a tool that ran is
-			// never run again for it.
-			if !sendSaved(ctx, out, t, engine.Event{Kind: engine.KindToolResult, Tool: &engine.ToolCall{ID: call.ID, Output: res.Output, IsError: res.IsError}}) {
-				return
+			for k, res := range results {
+				call := calls[i+k]
+				// Saved, in the order of the calls, before the next tool or
+				// model call; a tool that ran is never run again for it.
+				if !sendSaved(ctx, out, t, engine.Event{Kind: engine.KindToolResult, Tool: &engine.ToolCall{ID: call.ID, Output: res.Output, IsError: res.IsError}}) {
+					return
+				}
+				msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Text: res.Output})
 			}
-			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Text: res.Output})
+			i += n
 		}
 		if asked != "" {
 			// The questions end the turn: the user's next message answers.
@@ -334,6 +333,80 @@ func isFinal(texts []llm.Message) bool {
 // sendSaved sends a tool event. When the session saves them (Turn.Saves),
 // it waits for the save: false means the save failed or the turn ended, and
 // the turn must stop.
+// readTools only read, and one never depends on another: a row of them in
+// one step runs at once, at most maxParallel at a time.
+var readTools = map[string]bool{"Read": true, "Glob": true, "Grep": true, "WebSearch": true, "WebFetch": true, "session_search": true}
+
+const maxParallel = 4
+
+// countReads counts the read tool calls at the start of calls.
+func countReads(calls []llm.ToolCall) int {
+	n := 0
+	for n < len(calls) && readTools[calls[n].Name] {
+		n++
+	}
+	return n
+}
+
+// runCall runs one call. A clarify call returns the questions it asked.
+func (l *Loop) runCall(ctx context.Context, t engine.Turn, system string, spec turnSpec, g *guard, call llm.ToolCall) (tool.Result, string) {
+	if why := g.refuse(call); why != "" {
+		return tool.Result{IsError: true, Output: why}, ""
+	}
+	switch {
+	case spec.delegate && call.Name == delegateTool:
+		return l.delegate(ctx, t, system, call.Args), ""
+	case spec.ask && call.Name == clarifyTool:
+		text, ok := clarify(call.Args)
+		if !ok {
+			return tool.Result{IsError: true, Output: text}, ""
+		}
+		return tool.Result{Output: "asked the user; the answer comes in their next message"}, text
+	}
+	res := l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
+	return l.finish(t, g, call, res), ""
+}
+
+// runReads runs read calls at once and returns their results in order.
+// Only the tools run concurrently: the guard and the folder rules see the
+// calls one by one, in order, so their notes do not depend on timing.
+func (l *Loop) runReads(ctx context.Context, t engine.Turn, g *guard, calls []llm.ToolCall) []tool.Result {
+	results := make([]tool.Result, len(calls))
+	refused := make([]bool, len(calls))
+	slots := make(chan struct{}, maxParallel)
+	var wg sync.WaitGroup
+	for i, call := range calls {
+		if why := g.refuse(call); why != "" {
+			results[i], refused[i] = tool.Result{IsError: true, Output: why}, true
+			continue
+		}
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			// Registry.Run never panics; a stop ends every call here.
+			results[i] = l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
+		}()
+	}
+	wg.Wait()
+	for i, call := range calls {
+		if !refused[i] {
+			results[i] = l.finish(t, g, call, results[i])
+		}
+	}
+	return results
+}
+
+// finish adds the guard's note and, after success, the rules of folders the
+// call touched for the first time.
+func (l *Loop) finish(t engine.Turn, g *guard, call llm.ToolCall, res tool.Result) tool.Result {
+	res.Output += g.note(call, res)
+	if !res.IsError {
+		res.Output += l.folderRules(t.SessionID, t.Dir, call)
+	}
+	return res
+}
+
 func sendSaved(ctx context.Context, out chan<- engine.Event, t engine.Turn, ev engine.Event) bool {
 	if !t.Saves {
 		return stream.Send(ctx, out, ev)

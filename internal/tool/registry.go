@@ -164,11 +164,19 @@ func (r *Registry) shorten(sessionID, name, out string) string {
 		return cut(out)
 	}
 	dir := filepath.Join(r.spillDir, sessionID)
-	path := filepath.Join(dir, fmt.Sprintf("%d-%s.txt", time.Now().UnixNano(), name))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return cut(out)
 	}
-	if err := os.WriteFile(path, []byte(out), 0o600); err != nil {
+	// A unique name: read tools of one step run at once and may finish in
+	// the same instant.
+	f, err := os.CreateTemp(dir, fmt.Sprintf("%d-%s-*.txt", time.Now().UnixNano(), name))
+	if err != nil {
+		return cut(out)
+	}
+	path := f.Name()
+	_, err = f.WriteString(out)
+	if err = errors.Join(err, f.Close()); err != nil {
+		os.Remove(path)
 		return cut(out)
 	}
 	part := maxOutput / 2

@@ -35,12 +35,12 @@ func New() []tool.Tool {
 	read := func(ctx context.Context, c tool.Call, a readArgs) (string, error) {
 		out, err := read(ctx, c, a)
 		if err == nil {
-			seen.mark(c.SessionID, resolve(c.Dir, a.FilePath))
+			seen.mark(c.SessionID, tool.ResolvePath(c.Dir, a.FilePath))
 		}
 		return out, err
 	}
 	write := func(ctx context.Context, c tool.Call, a writeArgs) (string, error) {
-		p := resolve(c.Dir, a.FilePath)
+		p := tool.ResolvePath(c.Dir, a.FilePath)
 		if !seen.isCurrent(c.SessionID, p) {
 			return "", fmt.Errorf("%s exists and changed since you last read it (or you never did). Read it first, then write; for a small change use Edit", a.FilePath)
 		}
@@ -54,7 +54,7 @@ func New() []tool.Tool {
 	edit := func(ctx context.Context, c tool.Call, a editArgs) (string, error) {
 		out, err := edit(ctx, c, a)
 		if err == nil {
-			p := resolve(c.Dir, a.FilePath)
+			p := tool.ResolvePath(c.Dir, a.FilePath)
 			seen.mark(c.SessionID, p)
 			out += lint(p)
 		}
@@ -87,22 +87,6 @@ func schema(props string, required ...string) json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + props + `},"required":` + string(req) + `,"additionalProperties":false}`)
 }
 
-// resolve makes a path absolute against the project folder.
-func resolve(dir, p string) string {
-	if p == "" {
-		return dir
-	}
-	if strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			p = filepath.Join(home, p[2:])
-		}
-	}
-	if filepath.IsAbs(p) {
-		return filepath.Clean(p)
-	}
-	return filepath.Join(dir, p)
-}
-
 type readArgs struct {
 	FilePath      string `json:"file_path"`
 	Offset, Limit int
@@ -115,7 +99,7 @@ type sendArgs struct {
 // sendFile checks the file can be sent and returns its full path. It does
 // not send it: Telegram watches for this tool's result and uploads the file.
 func sendFile(ctx context.Context, c tool.Call, a sendArgs) (string, error) {
-	p := resolve(c.Dir, a.FilePath)
+	p := tool.ResolvePath(c.Dir, a.FilePath)
 	fi, err := os.Stat(p)
 	switch {
 	case err != nil:
@@ -129,7 +113,7 @@ func sendFile(ctx context.Context, c tool.Call, a sendArgs) (string, error) {
 }
 
 func read(ctx context.Context, c tool.Call, a readArgs) (string, error) {
-	f, err := os.Open(resolve(c.Dir, a.FilePath))
+	f, err := os.Open(tool.ResolvePath(c.Dir, a.FilePath))
 	if err != nil {
 		return "", err
 	}
@@ -171,7 +155,7 @@ type writeArgs struct {
 }
 
 func write(ctx context.Context, c tool.Call, a writeArgs) (string, error) {
-	p := resolve(c.Dir, a.FilePath)
+	p := tool.ResolvePath(c.Dir, a.FilePath)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return "", err
 	}
@@ -189,7 +173,7 @@ type editArgs struct {
 }
 
 func edit(ctx context.Context, c tool.Call, a editArgs) (string, error) {
-	p := resolve(c.Dir, a.FilePath)
+	p := tool.ResolvePath(c.Dir, a.FilePath)
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return "", err
@@ -214,7 +198,7 @@ var skipDirs = []string{".git", "node_modules", ".claude"}
 type globArgs struct{ Pattern, Path string }
 
 func glob(ctx context.Context, c tool.Call, a globArgs) (string, error) {
-	root := resolve(c.Dir, a.Path)
+	root := tool.ResolvePath(c.Dir, a.Path)
 	re, err := globRegexp(a.Pattern)
 	if err != nil {
 		return "", err
@@ -279,7 +263,7 @@ func grep(ctx context.Context, c tool.Call, a grepArgs) (string, error) {
 			return "", err
 		}
 	}
-	root := resolve(c.Dir, a.Path)
+	root := tool.ResolvePath(c.Dir, a.Path)
 	var out []string
 	total := 0
 	rg := rgPath()

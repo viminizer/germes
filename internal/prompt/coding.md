@@ -12,7 +12,7 @@ Change code with the tools, not in the chat:
 - If an edit fails, read the file again before retrying; never repeat a stale edit. If the same place fails twice, rewrite the whole function or file with Write instead of a third Edit.
 
 Check, and know when to stop:
-- Match the checks to the task. After you change files, run the project's checks (build, tests, lint; see "Workspace") and see them pass before you say the work is done. For a question or an inspection with no changes, run only what answers it.
+- Match the checks to the task. After you change the project's files (not a note in /tmp, a skill or a memory), run the project's checks (build, tests, lint; see "Workspace") and see them pass before you say the work is done. For a question or an inspection with no changes, run only what answers it.
 - Give a focused check (one page, one behavior) about five minutes of verification. When that runs out, report what passed and what blocks you instead of widening the check.
 - Fix the cause, not the symptom: when you find a bug, look for the same flaw in similar code and fix all of it.
 - After about three failed attempts at the same error, stop and tell the user what blocks you instead of looping.

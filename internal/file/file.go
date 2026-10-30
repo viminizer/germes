@@ -1,4 +1,5 @@
-// Package file saves files safely and deletes old ones.
+// Package file saves files safely, deletes old ones, and tells whether a
+// path is inside a folder.
 package file
 
 import (
@@ -6,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -42,4 +44,11 @@ func DeleteOld(dir string, before time.Time) (int, error) {
 		removed++
 	}
 	return removed, nil
+}
+
+// IsInside reports whether path is dir or under it. Both must be absolute
+// or both relative to the same folder; symlinks are not followed.
+func IsInside(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

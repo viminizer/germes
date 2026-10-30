@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/viminizer/germes/internal/file"
 	"github.com/viminizer/germes/internal/llm"
 	"github.com/viminizer/germes/internal/prompt"
 	"github.com/viminizer/germes/internal/tool"
@@ -22,6 +23,7 @@ var checkRE = regexp.MustCompile(`\b(make|go (build|vet|test)|npm|pnpm|yarn|bun|
 // from looping, and when the model wants to stop with changed files and no
 // passing check since, it sends the model back once to run the checks.
 type guard struct {
+	dir    string         // the project folder: only edits in it need a check
 	checks []string       // the project's check commands
 	fails  map[string]int // call -> failures this turn
 	reads  map[string]int // read-only call -> runs this turn
@@ -30,7 +32,7 @@ type guard struct {
 }
 
 func newGuard(dir string) *guard {
-	return &guard{checks: prompt.ListChecks(dir), fails: map[string]int{}, reads: map[string]int{}}
+	return &guard{dir: dir, checks: prompt.ListChecks(dir), fails: map[string]int{}, reads: map[string]int{}}
 }
 
 // refuse returns why the call must not run again, or "".
@@ -55,8 +57,10 @@ func (g *guard) note(c llm.ToolCall, res tool.Result) string {
 	}
 	switch c.Name {
 	case "Write", "Edit":
-		// Changed files: a call that failed before may pass now.
-		g.edited = true
+		// Changed files: a call that failed before may pass now. Only the
+		// project's own files need a check (not an issue body in /tmp, or a
+		// skill or memory in ~/.germes).
+		g.edited = g.edited || g.isInProject(c.Args)
 		clear(g.fails)
 	case "Bash":
 		if isCheck(c.Args) {
@@ -69,6 +73,18 @@ func (g *guard) note(c llm.ToolCall, res tool.Result) string {
 		}
 	}
 	return ""
+}
+
+// isInProject reports whether a file tool's file_path, resolved like the
+// file tools do, is in the project folder.
+func (g *guard) isInProject(args json.RawMessage) bool {
+	var a struct {
+		FilePath string `json:"file_path"`
+	}
+	if json.Unmarshal(args, &a) != nil || a.FilePath == "" {
+		return false
+	}
+	return file.IsInside(tool.ResolvePath(g.dir, a.FilePath), g.dir)
 }
 
 // finishNudge sends the model back to check its changes, once a turn, when

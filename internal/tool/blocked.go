@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -154,14 +153,10 @@ func candidates(arg, value, dir string) []string {
 		return []string{value}
 	}
 	out := []string{value, filepath.Base(value)}
-	// Mirror tools/files.resolve here: tool is a leaf and cannot import its
-	// callers. Only file_path has home expansion; search patterns are literals.
-	if arg == "file_path" && strings.HasPrefix(value, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			value = filepath.Join(home, value[2:])
-		}
-	}
-	if !filepath.IsAbs(value) {
+	// Only file_path has home expansion; search patterns are literals.
+	if arg == "file_path" {
+		value = ResolvePath(dir, value)
+	} else if !filepath.IsAbs(value) {
 		value = filepath.Join(dir, value)
 	}
 	if abs, err := filepath.Abs(value); err == nil {

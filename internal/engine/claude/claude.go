@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/viminizer/germes/internal/engine"
+	"github.com/viminizer/germes/internal/file"
 	"github.com/viminizer/germes/internal/prompt"
 )
 
@@ -178,17 +179,12 @@ func (c *Claude) grantable(paths []string, dir string, granted []string) []strin
 		if c.opts.GermesHome != "" {
 			allowed = append(allowed, c.opts.GermesHome)
 		}
-		if slices.ContainsFunc(append(allowed, dirs...), func(a string) bool { return isInside(d, a) }) {
+		if slices.ContainsFunc(append(allowed, dirs...), func(a string) bool { return file.IsInside(d, a) }) {
 			continue
 		}
 		dirs = append(dirs, d)
 	}
 	return dirs
-}
-
-func isInside(path, dir string) bool {
-	rel, err := filepath.Rel(dir, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 func (c *Claude) args(t engine.Turn, extra string, dirs []string) []string {
@@ -316,8 +312,8 @@ func (c *Claude) savesLearning(tc *engine.ToolCall) bool {
 	if c.opts.GermesHome == "" || json.Unmarshal(tc.Args, &a) != nil || a.FilePath == "" {
 		return false
 	}
-	return isInside(a.FilePath, filepath.Join(c.opts.GermesHome, "memories")) ||
-		isInside(a.FilePath, filepath.Join(c.opts.GermesHome, "skills"))
+	return file.IsInside(a.FilePath, filepath.Join(c.opts.GermesHome, "memories")) ||
+		file.IsInside(a.FilePath, filepath.Join(c.opts.GermesHome, "skills"))
 }
 
 // review learns from a session in the background (Hermes' learning loop):

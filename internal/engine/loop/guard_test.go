@@ -41,18 +41,18 @@ func TestGuardSendsBackUncheckedChanges(t *testing.T) {
 	if g.finishNudge() != "" {
 		t.Fatal("nudged without changes")
 	}
-	g.note(llm.ToolCall{Name: "Edit"}, tool.Result{})
+	g.note(write("main.go"), tool.Result{})
 	g.note(bash("go test ./... | tail -5"), tool.Result{}) // piped: its exit code is hidden
 	if g.finishNudge() == "" {
 		t.Fatal("a piped check counted")
 	}
 	g = newGuard(dir)
-	g.note(llm.ToolCall{Name: "Write"}, tool.Result{})
+	g.note(write("main.go"), tool.Result{})
 	g.note(bash("go build ./... && go test ./..."), tool.Result{})
 	if g.finishNudge() != "" {
 		t.Fatal("nudged after a passing check")
 	}
-	g.note(llm.ToolCall{Name: "Edit"}, tool.Result{})
+	g.note(write("main.go"), tool.Result{})
 	if n := g.finishNudge(); !strings.Contains(n, "go build ./... && go vet ./... && go test ./...") {
 		t.Fatalf("nudge: %q", n)
 	}
@@ -66,8 +66,37 @@ func TestGuardRunsAFailedCallAgainAfterAnEdit(t *testing.T) {
 	test := bash("go test ./...")
 	g.note(test, tool.Result{IsError: true})
 	g.note(test, tool.Result{IsError: true})
-	g.note(llm.ToolCall{Name: "Edit"}, tool.Result{})
+	g.note(write("main.go"), tool.Result{})
 	if g.refuse(test) != "" {
 		t.Fatal("refused a check after the code changed")
+	}
+}
+
+func write(path string) llm.ToolCall {
+	args, _ := json.Marshal(map[string]string{"file_path": path, "content": "x"})
+	return llm.ToolCall{Name: "Write", Args: args}
+}
+
+func TestGuardCountsOnlyProjectEdits(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o600)
+	for _, p := range []string{"/tmp/issue.md", filepath.Join(os.TempDir(), "issue.md"), "../outside.md", "~/.germes/skills/x/SKILL.md"} {
+		g := newGuard(dir)
+		g.note(write(p), tool.Result{})
+		if n := g.finishNudge(); n != "" {
+			t.Fatalf("a write to %s nudged: %q", p, n)
+		}
+	}
+	for _, p := range []string{"main.go", filepath.Join(dir, "go.mod")} {
+		g := newGuard(dir)
+		g.note(write(p), tool.Result{})
+		if g.finishNudge() == "" {
+			t.Fatalf("a write to %s did not nudge", p)
+		}
+	}
+	g := newGuard(dir)
+	g.note(write("main.go"), tool.Result{IsError: true})
+	if g.finishNudge() != "" {
+		t.Fatal("a failed write nudged")
 	}
 }

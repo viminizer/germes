@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/viminizer/germes/internal/file"
 	"github.com/viminizer/germes/internal/llm"
 	"github.com/viminizer/germes/internal/prompt"
 )
@@ -37,8 +38,7 @@ func (l *Loop) folderRules(sessionID, dir string, c llm.ToolCall) string {
 	if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
 		p = filepath.Dir(p)
 	}
-	rel, err := filepath.Rel(dir, p)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+	if !file.IsInside(p, dir) || filepath.Clean(p) == filepath.Clean(dir) {
 		return "" // the session folder itself, or outside it
 	}
 	var folders []string // from the touched folder up to just below dir

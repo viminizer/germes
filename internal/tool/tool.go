@@ -6,6 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -55,4 +58,21 @@ func NewRun[A any](fn func(ctx context.Context, c Call, args A) (string, error))
 		}
 		return fn(ctx, c, args)
 	}
+}
+
+// ResolvePath makes a tool's path absolute against the project folder: ~/
+// is the home folder, a relative path is under dir, "" is dir.
+func ResolvePath(dir, p string) string {
+	if p == "" {
+		return dir
+	}
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(dir, p)
 }

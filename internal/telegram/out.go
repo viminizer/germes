@@ -22,6 +22,7 @@ const scanDepth = 3
 func (t *Telegram) watch(ctx context.Context) {
 	last := map[string]string{}  // session -> its last text this turn
 	sending := map[string]bool{} // send_file calls waiting for their result (session + call id)
+	limited := map[string]bool{} // sessions told this turn about a limit or outage
 	for ctx.Err() == nil {
 		events, err := t.svc.Watch(ctx, api.WatchFilter{})
 		if err != nil {
@@ -48,13 +49,17 @@ func (t *Telegram) watch(ctx context.Context) {
 				if !ev.Tool.IsError {
 					t.upload(ctx, thread, ev.Tool.Output)
 				}
+			case ev.Kind == api.KindLimitHit && limited[ev.SessionID]:
+				// Once per turn: a long outage repeats it every cooldown.
 			case ev.Kind == api.KindError || ev.Kind == api.KindLimitHit:
+				limited[ev.SessionID] = limited[ev.SessionID] || ev.Kind == api.KindLimitHit
 				t.reply(ctx, thread, "⚠ "+ev.Text)
 			case ev.Kind == api.KindTurnDone:
 				if text := last[ev.SessionID]; text != "" {
 					t.reply(ctx, thread, text)
 				}
 				delete(last, ev.SessionID)
+				delete(limited, ev.SessionID)
 				// Messages queued during the turn run next: keep listening.
 				if s, err := t.svc.GetSession(ctx, ev.SessionID); err != nil || (s.Status == api.StatusIdle && len(s.Queued) == 0) {
 					t.mu.Lock()

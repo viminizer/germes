@@ -95,6 +95,7 @@ func (r *Router) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 func (r *Router) run(ctx context.Context, t engine.Turn, eng engine.Engine, why string, out chan<- engine.Event) {
 	tried := map[string]bool{}
 	last := t.LastEngine
+	cut := false // an engine stopped in the middle of this turn
 	for {
 		tried[eng.Name()] = true
 		if last != "" && last != eng.Name() {
@@ -109,13 +110,13 @@ func (r *Router) run(ctx context.Context, t engine.Turn, eng engine.Engine, why 
 		}
 		turn := t
 		if last != "" && last != eng.Name() {
-			turn.Extra = r.handoff(ctx, t, last)
+			turn.Extra = r.handoff(ctx, t, last, cut)
 		}
 		blocked, ok := r.runOne(ctx, eng, turn, out)
 		if ok || blocked == "" {
 			return // done, stopped, or another error the session reports
 		}
-		last = eng.Name()
+		last, cut = eng.Name(), true
 		next, nextWhy, err := r.pick(tried)
 		if err != nil {
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
@@ -146,6 +147,14 @@ func (r *Router) runOne(ctx context.Context, eng engine.Engine, t engine.Turn, o
 		case engine.KindUsage:
 			r.saveUsage(ev.Usage)
 			continue // the router's business, not the session's
+		case engine.KindError:
+			if blocked != "" {
+				// The engine's failure after its limit or outage (Claude's
+				// "stopped without a result"): the turn moves on, so the
+				// session must not see an error, nor a job count one.
+				slog.Info("engine error after its block", "engine", eng.Name(), "err", ev.Err)
+				continue
+			}
 		case engine.KindLimitHit:
 			if ev.Outage {
 				ev.ResetAt = r.outageUntil(eng.Name(), ev.ResetAt) // the session shows when it is tried again

@@ -36,6 +36,8 @@ func (f *fakeEngine) Run(ctx context.Context, t engine.Turn) (<-chan engine.Even
 		out <- engine.Event{Kind: engine.KindLimitHit, ResetAt: now.Add(2 * time.Hour)}
 	case f.down:
 		out <- engine.Event{Kind: engine.KindLimitHit, Outage: true, Err: errors.New("codex: server_is_overloaded")}
+		// Then fails, like Claude's "stopped without a result".
+		out <- engine.Event{Kind: engine.KindError, Err: errors.New("stopped without a result")}
 	default:
 		out <- engine.Event{Kind: engine.KindText, Text: "hi from " + f.name}
 		out <- engine.Event{Kind: engine.KindDone, Engine: f.name}
@@ -179,8 +181,16 @@ func TestOutageMovesTurnOnAndCoolsDown(t *testing.T) {
 		!strings.Contains(evs[1].Text, "codex-api is unavailable (codex: server_is_overloaded)") {
 		t.Fatalf("events %+v", evs)
 	}
-	if !strings.Contains(claude.turns[0].Extra, "Handoff from codex-api") {
-		t.Fatal("no handoff for claude")
+	// codex stopped in the middle of the turn: claude is told not to repeat
+	// what it did, and codex's own failure after its outage never reaches
+	// the session (a job would count it as a failed round).
+	if extra := claude.turns[0].Extra; !strings.Contains(extra, "Handoff from codex-api") || !strings.Contains(extra, "This turn was cut") {
+		t.Fatalf("handoff for claude: %q", extra)
+	}
+	for _, ev := range evs {
+		if ev.Kind == engine.KindError {
+			t.Fatalf("the session got codex's error after its outage: %v", ev.Err)
+		}
 	}
 	if got := st.limits["codex-api"]; !got.Equal(now.Add(time.Minute)) {
 		t.Fatalf("first cooldown until %v, want 1 minute", got)

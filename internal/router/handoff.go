@@ -20,8 +20,9 @@ const (
 
 // handoff tells the next engine what happened before it took over: recent
 // conversation, PROGRESS.md and uncommitted changes. Germes owns the
-// context, not the provider.
-func (r *Router) handoff(ctx context.Context, t engine.Turn, from string) string {
+// context, not the provider. cut: from stopped in the middle of this turn
+// (a limit or an outage), after doing part of it.
+func (r *Router) handoff(ctx context.Context, t engine.Turn, from string, cut bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Handoff from %s\n\nYou are taking over this session from another agent (%s). Germes keeps the shared history; here is what you need.\n", from, from)
 	if recent := r.recent(ctx, t.SessionID); recent != "" {
@@ -32,6 +33,9 @@ func (r *Router) handoff(ctx context.Context, t engine.Turn, from string) string
 	}
 	if changes := gitChanges(ctx, t.Dir); changes != "" {
 		fmt.Fprintf(&b, "\n## Uncommitted changes\n\n%s\n", changes)
+	}
+	if cut {
+		fmt.Fprintf(&b, "\n## This turn was cut\n\n%s stopped in the middle of this turn. The recent conversation shows what it already did, tool calls included. Do not repeat steps that are done (a commit, a push, a message sent, a file written): check the state first, then go on with what is left.\n", from)
 	}
 	b.WriteString("\nContinue from where it stopped. The user's latest message is your task.")
 	return b.String()

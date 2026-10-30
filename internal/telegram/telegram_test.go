@@ -463,3 +463,26 @@ func TestAnswerLostWhileNoBotWatchedIsTold(t *testing.T) {
 		}
 	}
 }
+
+// A long outage repeats its limit line every cooldown: the topic hears it
+// once per turn.
+func TestLimitLinesOncePerTurn(t *testing.T) {
+	svc := &fakeService{events: make(chan api.Event, 10), working: map[string]bool{"s1": true}}
+	fake, _ := startBotFrom(t, svc, savedState(t, "s1", 7))
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindLimitHit, Text: "codex: overloaded; tried again after 12:01"}
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindLimitHit, Text: "every engine is limited or unavailable; paused until 12:03"}
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindText, Text: "Done after the outage."}
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindTurnDone}
+	fake.waitSent(t, "Done after the outage.")
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	n := 0
+	for _, p := range fake.sent {
+		if strings.HasPrefix(p["text"].(string), "⚠") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d limit lines; want 1 per turn", n)
+	}
+}

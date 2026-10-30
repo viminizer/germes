@@ -78,7 +78,7 @@ func (b banner) box(width int) string {
 	artWidth := lipgloss.Width(caduceus[0])
 	leftWidth := min(artWidth+4, width*2/5)
 	wide := width >= 90 && leftWidth+40 < width
-	infoWidth, projectWidth := max(20, width-12), max(20, width-12)
+	infoWidth, projectWidth := max(width-7, 4), max(width-7, 4) // the box fits a narrow screen
 	if wide {
 		infoWidth, projectWidth = max(20, width-leftWidth-14), leftWidth
 	}

@@ -72,7 +72,7 @@ func (s suggestBox) view(width int) string {
 	if len(s.items) == 0 {
 		return ""
 	}
-	inner := max(width-3, 10) // the box's two sides and one spare column
+	inner := max(width-3, 1) // the box's two sides and one spare column
 	rows := listRows(s.items, s.selected, inner)
 	if len(s.items) > maxSuggestRows {
 		rows = append(rows, styleDim.Render(ansi.Truncate(" ↑↓ more · Tab complete · Esc close", inner, "…")))

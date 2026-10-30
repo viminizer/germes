@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/viminizer/germes/internal/api"
 )
@@ -66,6 +69,7 @@ func TestOpenBlocksWaitUntilTheyEnd(t *testing.T) {
 	for in, want := range map[string][2]string{
 		"text\n```go\nx := 1\n":          {"text\n", "```go\nx := 1\n"},
 		"```go\nx := 1\n```\nafter\n":    {"```go\nx := 1\n```\nafter\n", ""},
+		"```js x := 1```\nafter\n":       {"```js x := 1```\nafter\n", ""},
 		"a\n| h |\n|---|\n| 1 |\n":       {"a\n", "| h |\n|---|\n| 1 |\n"},
 		"| h |\n|---|\n| 1 |\n\nafter\n": {"| h |\n|---|\n| 1 |\n\nafter\n", ""},
 	} {
@@ -92,8 +96,8 @@ func TestMemoryCallsSayWhatTheySave(t *testing.T) {
 // items are open, as one line once all are done.
 func TestTaskListPrintsWhenTheTurnEnds(t *testing.T) {
 	for out, wantLines := range map[string]int{
-		"- [x] 1. Read main.go\n- [>] 2. Add sub\n  - [ ] 2a. Test it": 4,
-		"- [x] 1. Read main.go\n- [-] 2. Add sub":                      1,
+		"- [x] 1. Read main.go\n- [>] 2. Add sub\n  - [ ] 2.1. Test it\n  - [ ] step two. Ship": 5,
+		"- [x] 1. Read main.go\n- [-] 2. Add sub":                                               1,
 	} {
 		var tr transcript
 		tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "1", Name: "todo_list"}})
@@ -104,6 +108,29 @@ func TestTaskListPrintsWhenTheTurnEnds(t *testing.T) {
 		}
 		if n := strings.Count(strings.TrimPrefix(got[1].view(80), "\n"), "\n") + 1; n != wantLines {
 			t.Errorf("%q: list is %d lines, want %d:\n%s", out, n, wantLines, got[1].view(80))
+		}
+	}
+}
+
+// The live area never gets taller than the screen: a taller one loses
+// printed lines. A long task list and many failed calls shrink to fit.
+func TestLiveAreaFitsTheScreen(t *testing.T) {
+	var tr transcript
+	list := ""
+	for i := range 15 {
+		list += fmt.Sprintf("- [ ] %d. Step %d\n", i, i)
+	}
+	tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "t", Name: "todo_list"}})
+	tr.apply(api.Event{Seq: 2, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "t", Output: list}})
+	for i := range 12 {
+		id := fmt.Sprint(i)
+		tr.apply(api.Event{Seq: int64(3 + 2*i), Kind: api.KindToolCall, Tool: &api.ToolCall{ID: id, Name: "Bash"}})
+		tr.apply(api.Event{Seq: int64(4 + 2*i), Kind: api.KindToolResult, Tool: &api.ToolCall{ID: id, Output: "boom", IsError: true}})
+	}
+	tr.apply(api.Event{Kind: api.KindTextDelta, Text: "working on it"})
+	for _, height := range []int{5, 12, 30} {
+		if got := lipgloss.Height(tr.view(80, height, "⠋", time.Now())); got > height {
+			t.Errorf("height %d: live area is %d rows", height, got)
 		}
 	}
 }

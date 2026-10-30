@@ -85,3 +85,24 @@ func TestReplayedTurnKeepsItsLength(t *testing.T) {
 		t.Fatalf("after replay: %+v", m.status)
 	}
 }
+
+// Every view fits a narrow screen (R43).
+func TestViewsFitNarrowScreens(t *testing.T) {
+	runs := []toolRun{{Call: &api.ToolCall{Name: "mcp__claude-in-chrome__navigate", Output: "failed badly", IsError: true}, Done: true}}
+	todos := parseTodos("- [>] 1. A rather long task that will not fit")
+	sug := suggestBox{items: []suggestion{{Label: "/resume", Help: "pick a session of this project from a list"}}}
+	for _, width := range []int{10, 20, 30} {
+		for name, view := range map[string]string{
+			"banner":      banner{Version: "1.0.0", Project: "/a/long/project/path", Engine: "codex-api"}.view(width),
+			"tree":        treeView(runs, "", width, "", time.Time{}, 0),
+			"todo":        todoView(todos, width, false, true, 0),
+			"suggestions": sug.view(width),
+		} {
+			for _, line := range strings.Split(view, "\n") {
+				if w := lipgloss.Width(line); w > width {
+					t.Errorf("%s at %d: a line is %d wide: %q", name, width, w, ansi.Strip(line))
+				}
+			}
+		}
+	}
+}

@@ -15,8 +15,9 @@ type todoItem struct {
 	Text  string
 }
 
-// reTodoLine reads a line of the todo_list tool's output: `  - [>] 2. Text`.
-var reTodoLine = regexp.MustCompile(`^(\s*)- (\[.\]) [^.\s]+\. (.*)$`)
+// reTodoLine reads a line of the todo_list tool's output: `  - [>] 2. Text`;
+// an id may have dots or spaces (`1.1`).
+var reTodoLine = regexp.MustCompile(`^(\s*)- (\[.\]) .+?\. (.*)$`)
 
 // parseTodos reads the task list from the todo_list tool's output.
 func parseTodos(out string) []todoItem {
@@ -31,15 +32,16 @@ func parseTodos(out string) []todoItem {
 
 func (it todoItem) open() bool { return it.Mark == "[ ]" || it.Mark == "[>]" }
 
-// maxLiveTodos is how many items the live area shows, from just before the
-// first open one; the printed list has them all.
+// maxLiveTodos is the most items the live area shows, from just before
+// the first open one; the printed list has them all.
 const maxLiveTodos = 10
 
 // todoView draws the task list like the Hermes todo panel (hermes/ui-tui/
 // src/components/todoPanel.tsx): `▾ Todo (2/5)`, then the items, the one
 // in progress bright, pending ones grey, finished ones dim. Closed, only
 // the header shows. A list left open at the end of a turn says so.
-// maxRows > 0 keeps that many items (the live area).
+// maxRows > 0 keeps the list to that many rows under the header (the
+// live area).
 func todoView(items []todoItem, width int, closed, incomplete bool, maxRows int) string {
 	done, pending := 0, 0
 	for _, it := range items {
@@ -55,7 +57,7 @@ func todoView(items []todoItem, width int, closed, incomplete bool, maxRows int)
 		arrow = "▸ "
 	}
 	head := styleAccent.Render(arrow) + styleText.Bold(true).Render("Todo") + " " +
-		styleStatus.Faint(true).Render(fmt.Sprintf("(%d/%d)", done, len(items)))
+		styleTime.Render(fmt.Sprintf("(%d/%d)", done, len(items)))
 	if incomplete && pending > 0 {
 		state := "pending/in_progress"
 		if pending == 1 {
@@ -73,8 +75,9 @@ func todoView(items []todoItem, width int, closed, incomplete bool, maxRows int)
 		for first < len(items) && !items[first].open() {
 			first++
 		}
-		start := max(0, min(first-1, len(items)-maxRows))
-		shown, more = items[start:start+maxRows], len(items)-start-maxRows
+		n := max(maxRows-2, 1) // room for "… N done" and "… N more"
+		start := max(0, min(first-1, len(items)-n))
+		shown, more = items[start:start+n], len(items)-start-n
 		if start > 0 {
 			lines = append(lines, styleDim.Render(fmt.Sprintf("  … %d done", start)))
 		}

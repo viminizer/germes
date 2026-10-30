@@ -98,70 +98,6 @@ func gutter(mark string, style lipgloss.Style, text string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// treeView draws a step's tool calls like Hermes (hermes/ui-tui/src/
-// components/thinking.tsx): `└─ ▾ Tool calls (3)`, then one
-// `├─ ● Read("main.go") (0.2s)` row per call. A running call has the
-// spinner and its time so far; a failed one is red with its error under
-// it. maxRows > 0 keeps only the last rows (the live area); a task list or
-// subagent reports show under their call.
-func treeView(runs []toolRun, dir string, width int, spin string, now time.Time, maxRows int) string {
-	stem := styleMuted.Faint(true)
-	head := stem.Render("└─ ") + styleAccent.Faint(true).Render("▾ ") + stem.Render(fmt.Sprintf("Tool calls (%d)", len(runs)))
-	lines := []string{head}
-	shown := runs
-	if maxRows > 0 && len(runs) > maxRows {
-		shown = runs[len(runs)-maxRows:]
-		lines = append(lines, stem.Render(fmt.Sprintf("  │ … %d earlier", len(runs)-maxRows)))
-	}
-	for i, r := range shown {
-		branch, rail := "  ├─ ", "  │  "
-		if i == len(shown)-1 {
-			branch, rail = "  └─ ", "     "
-		}
-		dot, label := styleAccent.Render("● "), toolStyle(r.Call)
-		took := r.Took
-		if !r.Done {
-			dot += styleAccent.Render(spin + " ")
-			took = now.Sub(r.Start)
-		}
-		row := stem.Render(branch) + dot + label.Render(toolLabel(r.Call, dir))
-		if r.Done || !now.IsZero() {
-			row += styleStatus.Faint(true).Render(" (" + tookText(took) + ")")
-		}
-		lines = append(lines, ansi.Truncate(row, max(width, 10), "…"))
-		var sub string
-		switch {
-		case !r.Done:
-		case r.Call.IsError:
-			sub = styleError.Render(ansi.Truncate("└─ "+firstLine(shortPaths(r.Call.Output, dir)), max(width-5, 10), "…"))
-		case r.Call.Name == "delegate_task":
-			sub = subagentList(r.Call.Output, width-5)
-		}
-		if sub != "" {
-			for _, l := range strings.Split(sub, "\n") {
-				lines = append(lines, stem.Render(rail)+l)
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-// tookText writes a call's time as 0.2s, 12.5s or 2m.
-func tookText(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%.1fs", max(d.Seconds(), 0))
-	}
-	return shortDuration(d)
-}
-
-// toolStyle is a call's label style, like Hermes: red for a failure.
-func toolStyle(t *api.ToolCall) lipgloss.Style {
-	if t.IsError {
-		return styleError
-	}
-	return styleText
-}
-
 // toolLabel is Name("preview"), with the most telling argument as preview.
 func toolLabel(t *api.ToolCall, dir string) string {
 	var args map[string]any
@@ -176,18 +112,6 @@ func toolLabel(t *api.ToolCall, dir string) string {
 		return fmt.Sprintf("%s(%q)", toolName(t.Name), p)
 	}
 	return toolName(t.Name)
-}
-
-// toolName writes a snake_case tool name in words, like Hermes:
-// skill_view is "Skill View"; Read stays Read.
-func toolName(name string) string {
-	words := strings.Split(name, "_")
-	for i, w := range words {
-		if w != "" {
-			words[i] = strings.ToUpper(w[:1]) + w[1:]
-		}
-	}
-	return strings.Join(words, " ")
 }
 
 // memoryLabel says what a memory call saves: Memory added (about you):

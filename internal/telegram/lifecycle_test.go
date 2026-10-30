@@ -1760,3 +1760,50 @@ func TestRunLateCopiesAfterNewRequest(t *testing.T) {
 		}
 	})
 }
+
+// A gap replay whose history read fails leaves its event unhandled; the
+// next event replays the gap again and the answer still goes out once.
+func TestRunFailedGapReplayIsRetried(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"reply_to":{"s1":7},"answered":{"s1":0}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{failures: 1, registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 2)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "the answer"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+		}
+		var finished atomic.Bool
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			if finished.Load() {
+				return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+			}
+			return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		svc.events <- svc.history[1] // after a gap; its history read fails
+		synctest.Wait()
+		finished.Store(true)
+		svc.events <- svc.history[2]
+		synctest.Wait()
+		if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" || tr.sent[0]["message_thread_id"] != float64(7) {
+			t.Errorf("sent = %v, want the answer once in topic 7", tr.sent)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Error("the finished turn is still waiting")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

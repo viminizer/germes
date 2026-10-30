@@ -128,15 +128,6 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 	if asked && stored && ev.Seq <= handled {
 		return // already seen: a late copy of an older turn
 	}
-	if stored && (asked || known) {
-		// Also while nobody waits here (a TUI turn). Recorded after the
-		// event is handled, so the gap replay below is not skipped.
-		defer func() {
-			t.mu.Lock()
-			t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
-			t.mu.Unlock()
-		}()
-	}
 	if !asked {
 		delete(t.output.seq, ev.SessionID)
 		delete(t.output.noticeSeq, ev.SessionID)
@@ -149,6 +140,13 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 		if (known && ev.Seq > after+1 || !known && ev.Kind == api.KindTurnDone) && !t.replayMissed(ctx, ev) {
 			return // unknown: the topic keeps waiting, and the next start settles it
 		}
+	}
+	if stored && (asked || known) {
+		// Also while nobody waits here (a TUI turn). Only once the event
+		// is handled: after a failed gap replay it must stay replayable.
+		t.mu.Lock()
+		t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
+		t.mu.Unlock()
 	}
 	seq := t.output.seq
 	if ev.Kind == api.KindNotice {

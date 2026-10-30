@@ -317,6 +317,30 @@
 - PLAN: boundary sources, limit (d) widened (a request whose user message the bot never sees, with two turns finishing first, recovers only the last answer), and the dedup floor.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix12-path` -> `/tmp/germes-r6-fix12.*`. Both review gates must run again on the new commit.
 
+### Round 6 thirteenth check
+
+- HEAD `c732c085a6621d85ee8e3f44a3c9cab3c47587d6`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check13.log`), focused tests (`/tmp/germes-r6-focused13.log`), race tests (`/tmp/germes-r6-race13.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 thirteenth independent Codex review (HEAD `c732c08`)
+
+- Evidence `/tmp/germes-r6-review13.lh2EEZ/` (transcript.log, verdict.txt, exit 0, session `01a18ee2-cde7-7ba1-b3de-39a6a81b729d`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections; peers, wiring, file.Save callers, check logs. R1-R48 unique. VERDICT: Actionable findings: 2.
+- Open findings for the fix step:
+  1. P2 regression from the twelfth fix, `out.go:134`: the deferred `handled` update also runs when `replayMissed` fails and the event is left unhandled. Example: `answered=0`, text 2 arrives, history read fails, `handled` becomes 2; `turn_done` 3 then replays 1-2, which the floor rejects, and cleanup clears the topic without sending the answer. Suggested: advance `handled` only after successful handling; regression: failed replay then successful recovery. PLAN's "the event is not handled" contradicts the code.
+  2. P2 `telegram.go:462`, `out.go:123`: registration makes every event consumed afterwards eligible. A TUI turn on the same session (4-6) still buffered in the stream (watcher busy sending another answer) passes the floor (`handled=3`) after a new Telegram request registers, so the TUI answer and any `send_file` go to Telegram. Suggested: decide eligibility from a boundary or correlation supplied at message acceptance; regression with a buffered TUI turn before registration. PLAN's "never replayed" is too strong.
+
+### Round 6 thirteenth consistency audit (read-only, HEAD `c732c08`)
+
+- Finding 1 CONFIRMED, regression of the twelfth fix: in `sendReplyEvent` (`out.go:131-150`) the `defer` that advances `handled` is registered before the gap check, so it also runs when `replayMissed` fails and the function returns at line 150 without handling the event. The next successful replay is then rejected by the floor and the answer is lost while the topic is cleaned up. Fix: advance `handled` only once the event is actually handled (set it after the gap check and the reply-cursor check pass, or let the defer check a flag set there); unasked known sessions keep advancing (nothing to replay for them). Regression: text after a gap whose history read fails, then `turn_done` with history available: the answer is sent once. Keep PLAN's "the event is not handled" true.
+- Finding 2 VERIFIED as behavior, NOT fixed in this round, with evidence: main (`90e12a7` telegram.go:194-203) registers `ReplyTo` after `SendMessage` returns, so events of the session consumed later, including a TUI turn still buffered in the stream, are routed to the topic; the same holds now. Telling buffered other-client events from the new request needs a boundary or correlation returned at acceptance (`api.MessageResult` has none; the request's `user_message` is only stored when the worker claims it), i.e. an API change across api/session/daemon with old-daemon compatibility (R46), not Telegram bookkeeping. Required instead: correct PLAN (other clients' turns are not replayed from history, but a turn still buffered in the live stream when Telegram registers the session can be sent to the topic) and record it as a known limit needing a separate API task; tell the user.
+- Scope note: 13 review cycles this round. Result: FINDINGS.
+
+### Round 6 thirteenth fix (handled only after handling; buffered-turn limit documented)
+
+- `internal/telegram/out.go` `sendReplyEvent`: the `defer` is replaced by an explicit `handled` update placed after the gap check, so an event left unhandled by a failed `replayMissed` does not raise the floor and the next event replays it.
+- Finding 2 documented, not fixed, as the audit decided: PLAN now says other clients' turns are not replayed from the history, and records the known limit that a turn still buffered in the live stream when Telegram registers the session is routed to the topic (pre-existing on main; needs an acceptance boundary or request id, an API change for a separate task). Needs the user's decision.
+- New regression `TestRunFailedGapReplayIsRetried` (text after a gap with a failing history read, then `turn_done` with history). BEFORE (HEAD `out.go` via `-overlay`): failed, exit 1 (no answer sent). AFTER: pass. No existing test changed.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix13-path` -> `/tmp/germes-r6-fix13.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

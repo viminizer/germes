@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strconv"
@@ -138,7 +139,10 @@ func (r *wfRound) isStalled(ctx context.Context, step string, times int) bool {
 	if times == 0 {
 		return false
 	}
-	state, _ := r.bash(ctx, stateCommand)
+	state, ok := r.bash(ctx, stateCommand)
+	if !ok {
+		slog.Warn("workflow state check failed: file changes are not seen", "job", r.j.ID, "session", r.session(), "output", state)
+	}
 	sum := sha256.Sum256([]byte(state + "\x00" + strings.Join(r.results(), "\x00")))
 	fp := hex.EncodeToString(sum[:8])
 	if r.j.Stall.Steps == nil {

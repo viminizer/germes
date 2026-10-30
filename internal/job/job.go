@@ -380,6 +380,12 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 			if wait := idleWait(j.Idle); time.Until(j.NextRunAt) < wait {
 				j.NextRunAt = time.Now().Add(wait)
 			}
+			// A blocker rarely clears by itself: a job without --repeat
+			// stops after a few blocked rounds instead of paying for one
+			// an hour. (Its Idle only grows on blocked rounds.)
+			if res.blocked != "" && !j.Repeat && j.Idle >= maxFailures {
+				j.Status = api.JobFailed
+			}
 		case res.done:
 			j.Status, j.Failures, j.Error = api.JobDone, 0, ""
 		case res.failure != "":
@@ -397,7 +403,7 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 		slog.Error("job round", "job", id, "err", err)
 		return false
 	}
-	if res.blocked != "" {
+	if res.blocked != "" && j.Status == api.JobRunning { // a stopped job says so itself
 		s.notify(j.SessionID, fmt.Sprintf("job %s is blocked: %s (it tries again at %s)", j.Name, res.blocked, j.NextRunAt.Format("15:04")))
 	}
 	return j.Status == api.JobRunning

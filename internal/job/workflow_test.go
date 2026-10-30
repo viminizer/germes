@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/viminizer/germes/internal/api"
 )
@@ -207,7 +208,7 @@ steps:
 var sameFinding = []string{"ok", "RESULT: FINDING x", "ok", "RESULT: FINDING x", "ok", "RESULT: FINDING x"}
 
 func TestStalledWorkflowWaitsWhenBlocked(t *testing.T) {
-	s, r := newTestSchedulerWith(t, Options{Tools: &fakeTools{}}, append(sameFinding, "RESULT: BLOCKED the user must choose an API")...)
+	s, _ := newTestSchedulerWith(t, Options{Tools: &fakeTools{}}, append(sameFinding, "RESULT: BLOCKED the user must choose an API")...)
 	dir := t.TempDir()
 	writeWorkflow(t, dir, "review-loop", reviewLoop)
 	j, _ := s.CreateJob(context.Background(), api.JobRequest{Dir: dir, Workflow: "review-loop"})
@@ -215,6 +216,14 @@ func TestStalledWorkflowWaitsWhenBlocked(t *testing.T) {
 	if j.Status != api.JobRunning || j.Error != "blocked: the user must choose an API" {
 		t.Fatalf("got %s (%q); want running and blocked", j.Status, j.Error)
 	}
+}
+
+func TestRecoveryPromptListsTheRepeatedSteps(t *testing.T) {
+	s, r := newTestSchedulerWith(t, Options{Tools: &fakeTools{}}, append(sameFinding, "RESULT: BLOCKED the user must choose an API")...)
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "review-loop", reviewLoop)
+	j, _ := s.CreateJob(context.Background(), api.JobRequest{Dir: dir, Workflow: "review-loop"})
+	waitJob(t, s, j.ID, func(j api.Job) bool { return j.Idle > 0 })
 	if last := r.turns[len(r.turns)-1].Prompt; !strings.Contains(last, "No progress") || !strings.Contains(last, "fix (3 times)") {
 		t.Fatalf("recovery prompt:\n%s", last)
 	}
@@ -228,5 +237,25 @@ func TestStalledWorkflowGoesOnWithANewApproach(t *testing.T) {
 	j = waitStatus(t, s, j.ID)
 	if j.Status != api.JobDone || j.Failures != 0 {
 		t.Fatalf("got %s, %d failures (%s); want done", j.Status, j.Failures, j.Error)
+	}
+}
+
+func TestJobFailsAfterThreeBlockedRounds(t *testing.T) {
+	s, _ := newTestSchedulerWith(t, Options{Tools: &fakeTools{}}, append(sameFinding, "RESULT: BLOCKED the user must choose an API")...)
+	ctx := context.Background()
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "review-loop", reviewLoop)
+	// Two blocked rounds already; the daemon restarts and runs the third.
+	j := api.Job{ID: "stuck", Name: "stuck", Dir: dir, Workflow: "review-loop", Status: api.JobRunning, Idle: 2, NextRunAt: time.Now()}
+	if err := s.store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	s.Stop(ctx)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobFailed || j.Error != "blocked: the user must choose an API" {
+		t.Fatalf("got %s (%q); want failed and blocked", j.Status, j.Error)
 	}
 }

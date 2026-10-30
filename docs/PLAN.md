@@ -1233,6 +1233,9 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Job folder is gone, or the last round's session or worktree is gone: status `failed` with an error.
 - A running round's session is deleted: the round fails (counts toward the three).
 - A job goroutine panics: logged with its stack, the job is `failed` with "internal error"; the daemon keeps running.
+- A workflow stops making progress (a step starts again `stall_after` times with nothing changed): a recovery turn must change the approach or name the blocker (see "Workflows").
+- A round ends blocked: the job waits with the idle backoff, ERROR shows `blocked: <what>`, and the session gets an alert. A job without `--repeat` is `failed` after 3 blocked rounds in a row (a blocker rarely clears by itself; `germes job start` once it is fixed); a `--repeat` job keeps waiting until stopped.
+- The workflow state check fails (a block-list rule, a timeout): logged with the job; only the reply values count for that step. A folder without git is not an error: its file changes are simply not seen (see "Workflows").
 
 ### Telegram
 - Network down: polling retries with backoff.

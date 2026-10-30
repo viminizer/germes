@@ -120,6 +120,45 @@ func (r *Registry) Run(ctx context.Context, name string, c Call) (res Result) {
 	return Result{Output: r.shorten(c.SessionID, name, out)}
 }
 
+// PruneOutputs deletes saved outputs older than before, and session
+// folders left empty. It returns how many files it deleted.
+func (r *Registry) PruneOutputs(before time.Time) (int, error) {
+	if r.spillDir == "" {
+		return 0, nil
+	}
+	sessions, err := os.ReadDir(r.spillDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, s := range sessions {
+		dir := filepath.Join(r.spillDir, s.Name())
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		left := len(files)
+		for _, f := range files {
+			info, err := f.Info()
+			if err != nil || !info.ModTime().Before(before) {
+				continue
+			}
+			if err := os.Remove(filepath.Join(dir, f.Name())); err != nil {
+				return removed, err
+			}
+			removed++
+			left--
+		}
+		if left == 0 {
+			os.Remove(dir) // empty now
+		}
+	}
+	return removed, nil
+}
+
 // shorten keeps an output within maxOutput characters. The full output is
 // saved to a file the model can read in parts, so nothing is lost; without
 // a spill folder (or when saving fails) the middle is cut.
@@ -128,7 +167,6 @@ func (r *Registry) shorten(sessionID, name, out string) string {
 	if len(runes) <= maxOutput || r.spillDir == "" {
 		return cut(out)
 	}
-	// ponytail: spill files are never deleted; add cleanup when the folder grows.
 	dir := filepath.Join(r.spillDir, sessionID)
 	path := filepath.Join(dir, fmt.Sprintf("%d-%s.txt", time.Now().UnixNano(), name))
 	if err := os.MkdirAll(dir, 0o700); err != nil {

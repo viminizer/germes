@@ -16,6 +16,7 @@ engines:                 # in order of preference; the router uses the first one
       seven_day: 20
     reserve_off: false   # true = let this engine run to its limit
   - name: claude-cli     # the official claude CLI (same fields: model, reserve, reserve_off)
+cleanup_days: 30         # optional: keep unused file snapshots and saved tool outputs this long
 blocked:                 # commands and files no agent may touch, Claude Code syntax
   - Bash(sudo *)
   - Read(**/.env*)

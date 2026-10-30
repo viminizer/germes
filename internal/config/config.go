@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,7 +20,10 @@ type Config struct {
 	Engines  []Engine `yaml:"engines"`
 	Blocked  []string `yaml:"blocked"`
 	CodeDirs []string `yaml:"code_dirs,omitempty"` // where projects live (Telegram /bind looks here); "" = ~/dev
-	Telegram Telegram `yaml:"telegram,omitempty"`  // empty = off
+	// CleanupDays is how long file snapshots and saved tool outputs are
+	// kept unused; 0 = 30.
+	CleanupDays int      `yaml:"cleanup_days,omitempty"`
+	Telegram    Telegram `yaml:"telegram,omitempty"` // empty = off
 }
 
 // Telegram is the bot for a group chat with topics. Only UserID in ChatID is
@@ -30,6 +34,15 @@ type Telegram struct {
 	UserID int64  `yaml:"user_id,omitempty"`
 	// APIBase is a self-hosted Bot API server; "" = https://api.telegram.org.
 	APIBase string `yaml:"api_base,omitempty"`
+}
+
+// GetCleanupAge is how long unused snapshots and tool outputs are kept.
+func (c Config) GetCleanupAge() time.Duration {
+	days := c.CleanupDays
+	if days == 0 {
+		days = 30
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // IsOn reports whether the bot is set up.
@@ -118,6 +131,9 @@ func (c Config) check() error {
 		if strings.TrimSpace(b) == "" {
 			return errors.New("config: empty entry in blocked")
 		}
+	}
+	if c.CleanupDays < 0 {
+		return errors.New("config: cleanup_days must not be negative")
 	}
 	if t := c.Telegram; t.IsOn() && (t.ChatID == 0 || t.UserID == 0) {
 		return errors.New("config: telegram needs token, chat_id and user_id (run `germes setup telegram`)")

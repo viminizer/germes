@@ -6,6 +6,7 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -79,6 +80,37 @@ func Restore(ctx context.Context, store, dir, id string) error {
 	}
 	_, err := git(ctx, gitDir, dir, "commit", "-q", "--allow-empty", "--no-verify", "-m", "rollback to "+short(id))
 	return err
+}
+
+// Prune deletes the snapshot repos of folders that are gone, and of
+// folders not snapshot since before. It returns how many it deleted.
+func Prune(store string, before time.Time) (int, error) {
+	entries, err := os.ReadDir(store)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, e := range entries {
+		gitDir := filepath.Join(store, e.Name())
+		folder, err := os.ReadFile(filepath.Join(gitDir, "folder"))
+		if err != nil {
+			continue // not a snapshot repo: leave it
+		}
+		_, gone := os.Stat(strings.TrimSpace(string(folder)))
+		// The index changes with every snapshot.
+		used, err := os.Stat(filepath.Join(gitDir, "index"))
+		if gone == nil && err == nil && used.ModTime().After(before) {
+			continue
+		}
+		if err := os.RemoveAll(gitDir); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 // open returns dir's snapshot repo, making it on first use.

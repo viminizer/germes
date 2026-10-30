@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, text string) {
@@ -82,5 +83,33 @@ func TestRollbackRestoresFiles(t *testing.T) {
 	}
 	if read(filepath.Join(dir, "a.txt")) != "two" || read(filepath.Join(dir, "new.txt")) != "new" {
 		t.Error("undoing the rollback did not bring the turn's work back")
+	}
+}
+
+func TestPruneDropsUnusedAndOrphaned(t *testing.T) {
+	ctx, store := context.Background(), t.TempDir()
+	fresh, old, gone := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{fresh, old, gone} {
+		write(t, filepath.Join(dir, "a.txt"), "x")
+		if _, err := Create(ctx, store, dir, "turn"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	long := time.Now().Add(-60 * 24 * time.Hour)
+	os.Chtimes(filepath.Join(repoPath(store, old), "index"), long, long)
+	os.RemoveAll(gone)
+	os.MkdirAll(filepath.Join(store, "not-a-repo"), 0o700)
+
+	n, err := Prune(store, time.Now().Add(-30*24*time.Hour))
+	if err != nil || n != 2 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	for dir, want := range map[string]bool{fresh: true, old: false, gone: false} {
+		if _, err := os.Stat(repoPath(store, dir)); (err == nil) != want {
+			t.Errorf("repo of %s kept=%v, want %v", dir, err == nil, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(store, "not-a-repo")); err != nil {
+		t.Error("removed a folder that is not a snapshot repo")
 	}
 }

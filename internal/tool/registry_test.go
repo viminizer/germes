@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestRegistry(t *testing.T) *Registry {
@@ -88,5 +90,28 @@ func TestLongOutputIsSaved(t *testing.T) {
 	}
 	if b, err := os.ReadFile(path[1]); err != nil || string(b) != long {
 		t.Fatalf("saved file: %v", err)
+	}
+}
+
+func TestPruneOutputs(t *testing.T) {
+	dir := t.TempDir()
+	r, _ := NewRegistry(nil, nil, nil, dir)
+	os.MkdirAll(filepath.Join(dir, "s1"), 0o700)
+	os.MkdirAll(filepath.Join(dir, "s2"), 0o700)
+	os.WriteFile(filepath.Join(dir, "s1", "old.txt"), []byte("x"), 0o600)
+	os.WriteFile(filepath.Join(dir, "s2", "old.txt"), []byte("x"), 0o600)
+	os.WriteFile(filepath.Join(dir, "s2", "new.txt"), []byte("x"), 0o600)
+	long := time.Now().Add(-60 * 24 * time.Hour)
+	os.Chtimes(filepath.Join(dir, "s1", "old.txt"), long, long)
+	os.Chtimes(filepath.Join(dir, "s2", "old.txt"), long, long)
+	n, err := r.PruneOutputs(time.Now().Add(-30 * 24 * time.Hour))
+	if err != nil || n != 2 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "s1")); err == nil {
+		t.Error("kept an empty session folder")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "s2", "new.txt")); err != nil {
+		t.Error("deleted a fresh output")
 	}
 }

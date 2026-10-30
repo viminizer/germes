@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/viminizer/germes/internal/api"
+	"github.com/viminizer/germes/internal/checkpoint"
 	"github.com/viminizer/germes/internal/cli"
 	"github.com/viminizer/germes/internal/config"
 	"github.com/viminizer/germes/internal/daemon"
@@ -313,6 +314,18 @@ func runDaemon(p paths) error {
 	return daemon.New(sessions, jobs, old, daemon.Options{
 		Version: version, ConfigPath: p.config, SocketPath: p.socket, LockPath: p.lock, OldDir: filepath.Join(p.home, "old"),
 		StartNew: func() error { return startDaemon(p) }, Tools: tools, Gateway: newTelegram(p, cfg),
+		Cleanup: func(ctx context.Context) {
+			before := time.Now().Add(-cfg.GetCleanupAge())
+			outputs, err := reg.PruneOutputs(before)
+			if err != nil {
+				slog.Warn("clean up tool outputs", "err", err)
+			}
+			snapshots, err := checkpoint.Prune(filepath.Join(p.home, "checkpoints"), before)
+			if err != nil {
+				slog.Warn("clean up snapshots", "err", err)
+			}
+			slog.Info("cleanup", "tool_outputs", outputs, "snapshot_repos", snapshots)
+		},
 	}).Run(context.Background())
 }
 

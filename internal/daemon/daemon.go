@@ -35,6 +35,7 @@ const (
 	updateCheck  = 3 * time.Second        // how often the daemon looks for a new binary or config
 	handOverTime = 15 * time.Second       // how long the new daemon may take to come up
 	finishCheck  = 200 * time.Millisecond // how often an old daemon checks whether its turns are done
+	cleanupEvery = 24 * time.Hour
 )
 
 // Options configure the daemon.
@@ -47,6 +48,9 @@ type Options struct {
 	StartNew   func() error // starts a new daemon process (detached)
 	Tools      Tools
 	Gateway    Gateway // nil = none; only one daemon at a time runs it
+	// Cleanup deletes old files (snapshots, saved tool outputs). It runs at
+	// start and once a day; nil = never.
+	Cleanup func(ctx context.Context)
 }
 
 // Gateway is a long-running client inside the daemon (the Telegram bot). It
@@ -139,6 +143,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sig)
 	go d.watchFiles(serveCtx)
+	go d.runCleanup(serveCtx)
 	d.startGateway()
 	defer d.endGateway()
 	for {
@@ -343,6 +348,30 @@ func shutdown(srv *http.Server) {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Warn("http shutdown", "err", err)
+	}
+}
+
+// runCleanup runs the cleanup now and then once a day, until ctx ends.
+func (d *Daemon) runCleanup(ctx context.Context) {
+	if d.opts.Cleanup == nil {
+		return
+	}
+	t := time.NewTicker(cleanupEvery)
+	defer t.Stop()
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("cleanup panicked", "panic", r, "stack", string(debug.Stack()))
+				}
+			}()
+			d.opts.Cleanup(ctx)
+		}()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
 }
 

@@ -22,6 +22,7 @@ type transcript struct {
 	printed   string          // the part of the current reply already printed
 	started   bool            // a message of the current reply is printed
 	tools     []toolRun       // calls since the last text, printed as one tree
+	todos     []todoItem      // the model's task list this turn, printed when it ends
 	lastSeq   int64
 }
 
@@ -88,7 +89,12 @@ func (t *transcript) applyEvent(ev api.Event) []message {
 	case api.KindCompacted:
 		return []message{{Kind: kindNotice, Text: "older history was summarized to keep the context small"}}
 	case api.KindTurnDone:
-		return append(t.flushText(), message{Kind: kindTurnEnd})
+		out := t.flushText()
+		if len(t.todos) > 0 {
+			out = append(out, message{Kind: kindTodo, Todos: t.todos})
+			t.todos = nil
+		}
+		return append(out, message{Kind: kindTurnEnd})
 	}
 	return nil
 }
@@ -104,6 +110,9 @@ func (t *transcript) finishTool(ev api.Event) {
 			done := *run.Call
 			done.Output, done.IsError = ev.Tool.Output, ev.Tool.IsError
 			run.Call, run.Took, run.Done = &done, eventTime(ev).Sub(run.Start), true
+			if done.Name == "todo_list" && !done.IsError {
+				t.todos = parseTodos(done.Output)
+			}
 			return
 		}
 	}
@@ -164,14 +173,18 @@ func (t *transcript) lastSeqShown() int64 { return t.lastSeq }
 // tree has them all.
 const maxLiveTools = 8
 
-// view renders the live part: the tool tree of the current step, running
-// calls with a spinner, then one row for the unfinished line of the reply
+// view renders the live part: the task list, the tool tree of the current
+// step, running calls with a spinner, then one row for the unfinished line
+// of the reply
 // (empty when none). The row is always there: a live area that changes
 // height on every line loses or repeats printed lines at the bottom of the
 // screen.
 func (t *transcript) view(width int, spin string, now time.Time) string {
 	var parts []string
 	// A blank line before a block, as it will be printed.
+	if len(t.todos) > 0 {
+		parts = append(parts, "", todoView(t.todos, width, false, false, maxLiveTodos))
+	}
 	if len(t.tools) > 0 {
 		parts = append(parts, "", treeView(t.tools, t.dir, width, spin, now, maxLiveTools))
 	}

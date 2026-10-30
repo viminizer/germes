@@ -66,6 +66,12 @@ type Telegram struct {
 	mu      sync.Mutex
 	state   state
 	choices map[string][]string // /bind buttons: token -> project folders
+	// Kept across cleanup to distinguish successive requests to the same topic.
+	replyGeneration map[string]uint64
+	replySending    map[string]int
+
+	outputMu sync.Mutex // serializes stored creation replay with the live watcher
+	output   replyOutput
 }
 
 // state is saved in telegram.json. ReplyTo is saved too, so a new bot after
@@ -90,7 +96,9 @@ func New(svc api.Service, opts Options) *Telegram {
 		base = "https://api.telegram.org"
 	}
 	b := &bot{base: base + "/bot" + opts.Token, files: base + "/file/bot" + opts.Token, http: &http.Client{}}
-	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}}}
+	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}},
+		replyGeneration: map[string]uint64{}, replySending: map[string]int{},
+		output: replyOutput{last: map[string]string{}, sending: map[string]bool{}, limited: map[string]bool{}, seq: map[string]int64{}, noticeSeq: map[string]int64{}, replaying: map[string]bool{}}}
 	if b, err := os.ReadFile(opts.StatePath); err == nil {
 		if err := json.Unmarshal(b, &t.state); err != nil {
 			slog.Warn("telegram: state file is broken; starting without bindings", "path", opts.StatePath, "err", err)
@@ -207,21 +215,15 @@ func (t *Telegram) markSeen(ctx context.Context, m *message) {
 // ask sends text to the topic's session and waits for its answer there.
 // plan: a plan turn.
 func (t *Telegram) ask(ctx context.Context, thread int64, text string, plan bool) {
-	id, err := t.send(ctx, thread, text, plan)
-	if err != nil {
+	if _, err := t.send(ctx, thread, text, plan); err != nil {
 		t.reply(ctx, thread, "Could not send it: "+err.Error())
-		return
 	}
-	t.mu.Lock()
-	t.state.ReplyTo[id] = thread
-	t.mu.Unlock()
-	t.save()
 }
 
-// tellLostAnswers runs at start. A saved session that is no longer working
-// ended its turn while no bot watched (the daemon crashed or restarted, or
-// the turn ended during a hand-over), so its answer is lost: its topic is
-// told, and it is forgotten. Sessions still working are answered as usual.
+// tellLostAnswers runs at start. A saved session with no working, paused
+// or queued turn ended while no bot watched (the daemon crashed or restarted,
+// or the turn ended during a hand-over), so its answer is lost: its topic is
+// told, and it is forgotten. Pending turns keep their saved destination.
 func (t *Telegram) tellLostAnswers(ctx context.Context) {
 	t.mu.Lock()
 	waiting := maps.Clone(t.state.ReplyTo)
@@ -233,7 +235,7 @@ func (t *Telegram) tellLostAnswers(ctx context.Context) {
 			slog.Warn("telegram: check a waiting session", "session", id, "err", err)
 			continue // kept: the next start checks again
 		}
-		if err == nil && s.Status == api.StatusWorking {
+		if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
 			continue
 		}
 		t.mu.Lock()
@@ -266,17 +268,17 @@ func (t *Telegram) send(ctx context.Context, thread int64, text string, plan boo
 	tp, bound := t.state.Topics[thread]
 	t.mu.Unlock()
 	if !bound {
-		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: api.OverseerID, Text: text, Plan: plan})
+		res, err := t.sendMessage(ctx, thread, api.MessageRequest{SessionID: api.OverseerID, Text: text, Plan: plan})
 		return res.SessionID, err
 	}
 	if tp.SessionID != "" {
-		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: tp.SessionID, Text: text, Plan: plan})
+		res, err := t.sendMessage(ctx, thread, api.MessageRequest{SessionID: tp.SessionID, Text: text, Plan: plan})
 		if !api.IsNotFound(err) {
 			return res.SessionID, err
 		}
 		// The session was deleted: start a new one below.
 	}
-	res, err := t.svc.SendMessage(ctx, api.MessageRequest{Dir: tp.Project, Text: text, Plan: plan})
+	res, err := t.sendMessage(ctx, thread, api.MessageRequest{Dir: tp.Project, Text: text, Plan: plan})
 	if err != nil {
 		return "", err
 	}
@@ -289,6 +291,47 @@ func (t *Telegram) send(ctx context.Context, thread int64, text string, plan boo
 		t.reply(ctx, thread, res.Warning)
 	}
 	return res.SessionID, nil
+}
+
+// sendMessage reserves a known session before sending: completion lookups
+// must not remove its destination while the request is still in flight.
+func (t *Telegram) sendMessage(ctx context.Context, thread int64, r api.MessageRequest) (api.MessageResult, error) {
+	id := r.SessionID
+	t.mu.Lock()
+	previous, waiting := t.state.ReplyTo[id]
+	if id != "" {
+		t.replyGeneration[id]++
+		t.replySending[id]++
+		t.state.ReplyTo[id] = thread
+	}
+	t.mu.Unlock()
+
+	res, err := t.svc.SendMessage(ctx, r)
+	t.mu.Lock()
+	if id != "" {
+		t.replySending[id]--
+		t.replyGeneration[id]++
+		if err != nil {
+			// The poller sends serially; a failed request must not erase an
+			// earlier turn's destination, including one in another topic.
+			if waiting {
+				t.state.ReplyTo[id] = previous
+			} else {
+				delete(t.state.ReplyTo, id)
+			}
+		}
+	}
+	if err == nil && id != "" {
+		// Known sessions were reserved before sending.
+		t.replyGeneration[res.SessionID]++
+		t.state.ReplyTo[res.SessionID] = thread
+	}
+	t.mu.Unlock()
+	if err == nil && id == "" {
+		t.registerCreated(ctx, res.SessionID, thread)
+	}
+	t.save()
+	return res, err
 }
 
 // command runs a slash command. "/bind@MyBot x" works too.

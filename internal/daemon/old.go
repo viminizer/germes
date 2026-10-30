@@ -35,15 +35,18 @@ func NewOldDaemons(dir string) *OldDaemons {
 }
 
 // IsBusy reports whether an old daemon still runs a session. An old daemon
-// that does not answer is gone and leaves the list.
+// that cannot be reached may still own it: only proven exit releases it.
 func (o *OldDaemons) IsBusy(ctx context.Context, sessionID string) bool {
 	for file, c := range o.clients() {
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
 		d, err := c.GetDaemon(ctx)
 		cancel()
 		if err != nil {
-			o.drop(file)
-			continue
+			if isExited(file) {
+				o.drop(file)
+				continue
+			}
+			return true
 		}
 		if slices.Contains(d.Busy, sessionID) {
 			return true
@@ -52,8 +55,40 @@ func (o *OldDaemons) IsBusy(ctx context.Context, sessionID string) bool {
 	return false
 }
 
-// load reads the registry. A daemon that does not answer is not followed;
-// its file is removed only once it surely exited (isExited).
+// GetSession reads the actual old owner's coherent status and queue. Failure
+// to resolve a live owner is unavailable, never a successful idle snapshot.
+func (o *OldDaemons) GetSession(ctx context.Context, id string) (api.Session, bool, error) {
+	for file, c := range o.clients() {
+		if isExited(file) {
+			o.drop(file)
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(ctx, time.Second)
+		d, err := c.GetDaemon(callCtx)
+		if err != nil {
+			cancel()
+			if isExited(file) {
+				o.drop(file)
+				continue
+			}
+			return api.Session{}, false, api.NewError(api.CodeUnavailable, "cannot resolve previous owner of session %s: %v", id, err)
+		}
+		if !slices.Contains(d.Busy, id) {
+			cancel()
+			continue
+		}
+		s, err := c.GetSession(callCtx, id)
+		cancel()
+		if err != nil {
+			return api.Session{}, false, api.NewError(api.CodeUnavailable, "cannot read previous owner of session %s: %v", id, err)
+		}
+		return s, true, nil
+	}
+	return api.Session{}, false, nil
+}
+
+// load retains every registered daemon that has not surely exited, including
+// a temporarily unreachable owner. Only proven exit removes its registry file.
 func (o *OldDaemons) load(ctx context.Context) {
 	files, _ := filepath.Glob(filepath.Join(o.dir, "*"))
 	for _, file := range files {
@@ -65,8 +100,8 @@ func (o *OldDaemons) load(ctx context.Context) {
 		pingCtx, cancel := context.WithTimeout(ctx, time.Second)
 		_, err = c.GetDaemon(pingCtx)
 		cancel()
-		if err != nil {
-			removeIfExited(file) // a crashed old daemon
+		if err != nil && isExited(file) {
+			removeIfExited(file)
 			continue
 		}
 		o.mu.Lock()
@@ -77,8 +112,7 @@ func (o *OldDaemons) load(ctx context.Context) {
 }
 
 // allExited reports whether every registered old daemon surely exited. It
-// reads the registry itself: the in-memory list is empty before load and
-// drops a daemon that only stopped answering.
+// reads the registry itself: the in-memory list is empty before load.
 func (o *OldDaemons) allExited() bool {
 	files, err := filepath.Glob(filepath.Join(o.dir, "*"))
 	if err != nil {
@@ -100,7 +134,9 @@ func (o *OldDaemons) relay(ctx context.Context, sessions *session.Manager, exite
 	for file, c := range o.clients() {
 		go func() {
 			defer func() {
-				o.drop(file)
+				if isExited(file) {
+					o.drop(file)
+				}
 				if ctx.Err() == nil {
 					removeIfExited(file) // a crashed one could not remove it
 					if err := sessions.Start(ctx); err != nil {
@@ -111,11 +147,20 @@ func (o *OldDaemons) relay(ctx context.Context, sessions *session.Manager, exite
 			}()
 			for ctx.Err() == nil {
 				events, err := c.Watch(ctx, api.WatchFilter{})
-				if err != nil {
-					return // gone
+				if err == nil {
+					for ev := range events {
+						sessions.SendEvent(ev)
+					}
 				}
-				for ev := range events {
-					sessions.SendEvent(ev)
+				if isExited(file) {
+					return
+				}
+				// An unreachable socket is not an exited owner. Keep its
+				// ownership and retry the relay without a busy loop.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
 				}
 			}
 		}()

@@ -141,7 +141,8 @@ type fakeService struct {
 	mu          sync.Mutex
 	messages    []api.MessageRequest
 	events      chan api.Event
-	working     map[string]bool // sessions GetSession reports working; others are idle
+	working     map[string]bool       // sessions GetSession reports working; others are idle
+	statuses    map[string]api.Status // explicit statuses override working
 }
 
 func (s *fakeService) SendMessage(ctx context.Context, r api.MessageRequest) (api.MessageResult, error) {
@@ -178,9 +179,16 @@ func (s *fakeService) Watch(ctx context.Context, f api.WatchFilter) (<-chan api.
 	return out, nil
 }
 
+func (s *fakeService) ListEvents(ctx context.Context, f api.EventFilter) (api.Page[api.Event], error) {
+	return api.Page[api.Event]{}, nil
+}
+
 func (s *fakeService) GetSession(ctx context.Context, id string) (api.Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if status, ok := s.statuses[id]; ok {
+		return api.Session{ID: id, Status: status}, nil
+	}
 	if s.working[id] {
 		return api.Session{ID: id, Status: api.StatusWorking}, nil
 	}

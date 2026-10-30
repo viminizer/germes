@@ -258,7 +258,7 @@ Fix the root cause in the shared place, not in one caller.
 - Check: a fix in a caller does not leave other callers of the same function broken.
 - Example: none yet
 
-## R46. Publish whole files from exclusive temporary files
+## R47. Publish whole files from exclusive temporary files
 
 Whole-file replacement uses a unique, exclusively created temporary file in the destination directory, private until its requested final permissions are applied. Check write, permission, close and rename failures; on failure remove only that save's temporary file and report cleanup errors. Never reuse a predictable `.tmp` path. Use `file.Save` where module boundaries permit; boundary-required copies document why they cannot share it. Atomic publication does not promise power-loss durability or serialize caller read-modify-write operations.
 

@@ -67,6 +67,7 @@ type Expander interface {
 // daemon finishing its turns after an update.
 type Elsewhere interface {
 	IsBusy(ctx context.Context, sessionID string) bool
+	GetSession(ctx context.Context, sessionID string) (api.Session, bool, error)
 }
 
 // Options configure the manager.
@@ -212,7 +213,17 @@ func (m *Manager) StopSession(ctx context.Context, r api.StopRequest) error {
 
 // ListSessions lists sessions.
 func (m *Manager) ListSessions(ctx context.Context, f api.SessionFilter) (api.Page[api.Session], error) {
-	return m.store.ListSessions(ctx, f)
+	page, err := m.store.ListSessions(ctx, f)
+	if err != nil {
+		return page, err
+	}
+	for i, s := range page.Items {
+		page.Items[i], err = m.getSnapshot(ctx, s)
+		if err != nil {
+			return api.Page[api.Session]{}, err
+		}
+	}
+	return page, nil
 }
 
 // GetSession reads one session, with the messages waiting in its queue.
@@ -221,13 +232,31 @@ func (m *Manager) GetSession(ctx context.Context, id string) (api.Session, error
 	if err != nil {
 		return s, err
 	}
-	m.mu.Lock()
-	w, ok := m.workers[id]
-	m.mu.Unlock()
-	if ok {
-		s.Queued = w.queued()
+	return m.getSnapshot(ctx, s)
+}
+
+// The previous owner supplies status and its queue until it releases the
+// session. A local worker then overlays its own coherent claim or waiting queue.
+func (m *Manager) getSnapshot(ctx context.Context, s api.Session) (api.Session, error) {
+	if m.opts.Elsewhere != nil {
+		remote, owned, err := m.opts.Elsewhere.GetSession(ctx, s.ID)
+		if err != nil {
+			return api.Session{}, err
+		}
+		if owned {
+			s = remote
+		}
 	}
-	return s, nil
+	return m.snapshot(s), nil
+}
+
+func (m *Manager) snapshot(s api.Session) api.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if w := m.workers[s.ID]; w != nil {
+		return w.snapshotSession(s)
+	}
+	return s
 }
 
 // UpdateSession renames a session, or moves it into or out of its own git

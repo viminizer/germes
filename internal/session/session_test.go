@@ -403,6 +403,9 @@ func waitIdle(t *testing.T, m *Manager, id string) {
 type busyElsewhere map[string]bool
 
 func (b busyElsewhere) IsBusy(_ context.Context, id string) bool { return b[id] }
+func (b busyElsewhere) GetSession(context.Context, string) (api.Session, bool, error) {
+	return api.Session{}, false, nil
+}
 
 // A daemon that stopped or crashed left turns behind: working ones, and
 // paused ones waiting for an engine limit (their timer was only in memory).

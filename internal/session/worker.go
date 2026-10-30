@@ -34,8 +34,9 @@ type worker struct {
 	plan    bool               // a queued message asks for a plan turn
 	skills  []string           // skills queued messages load first (/<skill> in the TUI)
 	cancel  context.CancelFunc // cancels the running turn
-	running bool               // turns are running
+	running bool               // a turn has claimed its messages
 	lost    bool               // a save failed in this turn: it stopped, and the user was told
+	status  api.Status         // live status; empty until this worker owns a turn
 }
 
 func (w *worker) run() {
@@ -48,12 +49,10 @@ func (w *worker) run() {
 			if !w.waitElsewhere() {
 				return
 			}
-			w.setRunning(true)
 			// Everything queued while a turn ran becomes one turn.
 			for texts, plan, skills := w.take(); len(texts) > 0; texts, plan, skills = w.take() {
 				w.runTurn(strings.Join(texts, "\n\n"), plan, skills)
 			}
-			w.setRunning(false)
 			idle.Reset(idleTime)
 		case <-idle.C:
 			if w.exit() {
@@ -100,10 +99,17 @@ func (w *worker) waitElsewhere() bool {
 	return true
 }
 
-func (w *worker) setRunning(running bool) {
+// snapshotSession overlays the fields owned in memory together, rather than
+// pairing a possibly older stored status with an already consumed queue.
+func (w *worker) snapshotSession(s api.Session) api.Session {
 	w.mu.Lock()
-	w.running = running
-	w.mu.Unlock()
+	defer w.mu.Unlock()
+	if w.status != "" {
+		s.Status = w.status
+		s.Queued = nil // local ownership supersedes the previous owner's snapshot
+	}
+	s.Queued = append(s.Queued, w.queuedLocked()...)
+	return s
 }
 
 // isBusy reports whether turns run or messages wait.
@@ -141,6 +147,9 @@ func (w *worker) take() ([]string, bool, []string) {
 	w.mu.Lock()
 	texts, plan, skills := w.queue, w.plan, w.skills
 	w.queue, w.plan, w.skills = nil, false, nil
+	if len(texts) > 0 {
+		w.running, w.status = true, api.StatusWorking
+	}
 	w.mu.Unlock()
 	if len(texts) > 0 {
 		w.publishQueue(nil)
@@ -213,9 +222,14 @@ func (w *worker) runTurn(text string, plan bool, skills []string) {
 		} else if plan && w.reply != "" {
 			w.savePlan(text, w.reply)
 		}
-		// Status first: a client that sees turn_done must read idle.
+		// Finish before turn_done; a queued successor may already be working
+		// when a client reads the session in response to that event.
 		w.setStatus(api.StatusIdle)
 		w.emit(api.Event{Kind: api.KindTurnDone, Engine: w.sess.Engine, Context: w.used})
+		// ListBusy is the cross-daemon ownership signal, not the live status.
+		w.mu.Lock()
+		w.running = false
+		w.mu.Unlock()
 	}()
 
 	w.emit(api.Event{Kind: api.KindUserMessage, Text: text})
@@ -408,6 +422,9 @@ func (w *worker) lose(ev api.Event, err error) {
 // setStatus saves the status and the fields the worker owns. It reads the
 // row first, so a rename done meanwhile is kept.
 func (w *worker) setStatus(st api.Status) {
+	w.mu.Lock()
+	w.status = st
+	w.mu.Unlock()
 	w.sess.Status = st
 	w.m.saveMu.Lock()
 	defer w.m.saveMu.Unlock()

@@ -179,11 +179,12 @@ func (t *Telegram) handleMessage(ctx context.Context, m *message) {
 }
 
 // markSeen puts 👀 on my message. A failure only loses the hint, so it is
-// logged, not told.
+// logged, not told. post, not call: on a rate limit call waits, and the
+// message would wait with it.
 func (t *Telegram) markSeen(ctx context.Context, m *message) {
 	params := map[string]any{"chat_id": t.opts.ChatID, "message_id": m.ID,
 		"reaction": []map[string]string{{"type": "emoji", "emoji": "👀"}}}
-	if err := t.bot.call(ctx, "setMessageReaction", params, nil); err != nil {
+	if err := t.bot.post(ctx, "setMessageReaction", params, nil); err != nil {
 		slog.Warn("telegram react", "err", err)
 	}
 }
@@ -512,7 +513,13 @@ func (t *Telegram) save() {
 	defer t.mu.Unlock()
 	b, err := json.MarshalIndent(t.state, "", "  ")
 	if err == nil {
-		err = os.WriteFile(t.opts.StatePath, b, 0o600)
+		// A temp file and a rename, so a crash never leaves a half-written
+		// file. This is file.Save, which R5 does not let this package import.
+		tmp := t.opts.StatePath + ".tmp"
+		err = os.WriteFile(tmp, b, 0o600)
+		if err == nil {
+			err = os.Rename(tmp, t.opts.StatePath)
+		}
 	}
 	if err != nil {
 		slog.Warn("telegram: save state", "err", err)

@@ -1021,7 +1021,7 @@ Not its own module. The overseer is a normal session with:
 - A bound topic has its own session for that project: folder = project, project toolset, loads `AGENTS.md`.
 - `/new` in a topic: fresh session for the same project. `/unbind`: remove the binding.
 - Rule: project topic → that project's session. General or unbound topic → the overseer (any subject, any project).
-- Bindings are saved in `~/.germes/telegram.json` (owned by this module, no new `Service` methods), with the sessions waiting for an answer and their topics (`reply_to`), so a new bot after a daemon hand-over still sends them.
+- Bindings are saved in `~/.germes/telegram.json` (owned by this module, no new `Service` methods), with the sessions waiting for an answer and their topics (`reply_to`), so a new bot after a daemon hand-over still sends them. It is written through a temp file and a rename, so a crash never leaves it half-written.
 
 ### Messages
 

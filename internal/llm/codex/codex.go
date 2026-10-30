@@ -39,9 +39,10 @@ type Options struct {
 
 // Client is the Codex client.
 type Client struct {
-	opts Options
-	auth *auth
-	http *http.Client
+	opts      Options
+	auth      *auth
+	http      *http.Client
+	retryWait time.Duration // before sending a failed stream again; times the attempt
 }
 
 var _ llm.Client = (*Client)(nil)
@@ -55,7 +56,7 @@ func New(opts Options) *Client {
 		opts.Effort = "medium"
 	}
 	hc := &http.Client{Timeout: 0} // streams can be long; ctx ends them
-	return &Client{opts: opts, http: hc, auth: &auth{
+	return &Client{opts: opts, http: hc, retryWait: 2 * time.Second, auth: &auth{
 		germesFile: filepath.Join(opts.GermesDir, "auth", "codex.json"),
 		codexFile:  filepath.Join(opts.CodexDir, "auth.json"),
 		http:       &http.Client{Timeout: 30 * time.Second},
@@ -91,7 +92,7 @@ func (c *Client) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, err
 	if err != nil {
 		var limit *limitError
 		if errors.As(err, &limit) {
-			out <- llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: err}
+			out <- errorChunk(err)
 			close(out)
 			return out, nil
 		}
@@ -99,8 +100,15 @@ func (c *Client) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, err
 	}
 	go func() {
 		defer close(out)
-		defer resp.Body.Close()
-		if !c.stream(ctx, resp.Body, out) {
+		resend := func() (io.ReadCloser, error) {
+			var err error
+			resp, tok, err = c.post(ctx, body, r.CacheKey)
+			if err != nil {
+				return nil, err
+			}
+			return resp.Body, nil
+		}
+		if !c.run(ctx, resp.Body, resend, out) {
 			return
 		}
 		for _, u := range c.usage(ctx, tok) {
@@ -109,6 +117,53 @@ func (c *Client) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, err
 		stream.Send(ctx, out, llm.Chunk{Kind: llm.KindDone})
 	}()
 	return out, nil
+}
+
+// streamRetries is how many times a stream that failed with a temporary
+// error is sent again.
+// ponytail: 2 quick retries (2 s, 4 s); Hermes then waits up to 5 more
+// times (15-60 s, turn_recovery_autorecover.py). Add that if outages last.
+const streamRetries = 2
+
+// run streams body to out. A stream that fails with a temporary error
+// (server error, overload, a cut connection) before any output went out is
+// sent again with resend: nothing was shown or saved yet, so nothing
+// repeats. It reports whether the response completed.
+func (c *Client) run(ctx context.Context, body io.ReadCloser, resend func() (io.ReadCloser, error), out chan<- llm.Chunk) bool {
+	for attempt := 1; ; attempt++ {
+		end, sent := c.stream(ctx, body, out)
+		body.Close()
+		if end == nil {
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		if !end.retry || sent || attempt > streamRetries {
+			stream.Send(ctx, out, end.chunk)
+			return false
+		}
+		slog.Warn("codex stream failed; sending the request again", "attempt", attempt, "err", end.chunk.Err)
+		select {
+		case <-time.After(time.Duration(attempt) * c.retryWait):
+		case <-ctx.Done():
+			return false
+		}
+		var err error
+		if body, err = resend(); err != nil {
+			stream.Send(ctx, out, errorChunk(err))
+			return false
+		}
+	}
+}
+
+// errorChunk is the chunk for a failed request: a limit hit or an error.
+func errorChunk(err error) llm.Chunk {
+	var limit *limitError
+	if errors.As(err, &limit) {
+		return llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: err}
+	}
+	return llm.Chunk{Kind: llm.KindError, Err: err}
 }
 
 // limitError is a usage limit (HTTP 429 usage_limit_reached).
@@ -277,13 +332,35 @@ func shortID(prefix, id string) string {
 }
 
 type event struct {
-	Type     string                          `json:"type"`
-	Delta    string                          `json:"delta"`
-	Item     json.RawMessage                 `json:"item"`
-	Response json.RawMessage                 `json:"response"` // response.failed: its "error" is read like a 429 body
-	Code     string                          `json:"code"`
-	Message  string                          `json:"message"`
-	Error    *struct{ Code, Message string } `json:"error"` // some backends nest the error here
+	Type     string          `json:"type"`
+	Delta    string          `json:"delta"`
+	Item     json.RawMessage `json:"item"`
+	Response json.RawMessage `json:"response"` // response.failed: its "error" is read like a 429 body
+	Code     string          `json:"code"`
+	Message  string          `json:"message"`
+	Error    json.RawMessage `json:"error"` // some backends nest the error here, as an object or a text
+}
+
+// nestedError reads a nested "error": an object with a code and message, or
+// just a text. Anything else gives two empty strings.
+func nestedError(raw json.RawMessage) (code, message string) {
+	var e struct{ Code, Message string }
+	if json.Unmarshal(raw, &e) == nil {
+		return e.Code, e.Message
+	}
+	json.Unmarshal(raw, &message)
+	return "", message
+}
+
+// transientCodes are error codes worth sending the request again for: the
+// backend is expected back soon. Hermes retries the same kinds
+// (hermes/agent/error_classifier.py: overloaded, server_error, timeout).
+var transientCodes = map[string]bool{"server_error": true, "overloaded": true, "service_unavailable": true, "timeout": true}
+
+// streamEnd is how a stream ended without completing.
+type streamEnd struct {
+	chunk llm.Chunk // the error or limit hit to send
+	retry bool      // a temporary error: the request may be sent again
 }
 
 // errorText describes an error from its code and message, never as "".
@@ -309,8 +386,12 @@ type item struct {
 	} `json:"content"`
 }
 
-// stream reads the SSE body. It reports whether the response completed.
-func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chunk) bool {
+// stream reads the SSE body. It returns nil when the response completed,
+// else how it ended, and whether any chunk went out.
+func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chunk) (end *streamEnd, sent bool) {
+	fail := func(code, message string) *streamEnd {
+		return &streamEnd{chunk: llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + errorText(code, message))}, retry: transientCodes[code]}
+	}
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 64*1024), 32*1024*1024)
 	for sc.Scan() {
@@ -329,56 +410,52 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 		}
 		switch ev.Type {
 		case "response.output_text.delta":
-			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindTextDelta, Text: ev.Delta})
+			sent = stream.Send(ctx, out, llm.Chunk{Kind: llm.KindTextDelta, Text: ev.Delta}) || sent
 		case "response.output_item.done":
 			if ch, ok := itemChunk(ev.Item); ok {
-				stream.Send(ctx, out, ch)
+				sent = stream.Send(ctx, out, ch) || sent
 			}
 		case "response.completed", "response.incomplete":
-			return true
+			return nil, sent
 		case "response.failed":
-			slog.Warn("codex response failed", "event", text.Shorten(data, 2000))
 			if limit := parseLimit(ev.Response, nil); limit != nil {
-				stream.Send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: limit})
-				return false
+				return &streamEnd{chunk: llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: limit}}, sent
 			}
 			var failed struct {
-				Error *struct{ Code, Message string } `json:"error"`
+				Error json.RawMessage `json:"error"`
 			}
 			json.Unmarshal(ev.Response, &failed)
-			msg := "the response failed"
-			if e := failed.Error; e != nil {
-				msg = errorText(e.Code, e.Message)
+			code, message := nestedError(failed.Error)
+			// The parsed fields first: the raw event can be long (the whole
+			// response) and is cut.
+			slog.Warn("codex response failed", "code", code, "message", message, "event", text.Shorten(data, 500))
+			if code+message == "" {
+				message = "the response failed"
 			}
-			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + msg)})
-			return false
+			return fail(code, message), sent
 		case "error":
-			// The fields are at the top level, or nested under "error" (Hermes
-			// reads both too: hermes/agent/codex_runtime.py _raise_stream_error).
-			slog.Warn("codex error event", "event", text.Shorten(data, 2000))
 			// A usage limit can come this way too: the session then waits
 			// for the reset instead of failing.
 			if limit := parseLimit([]byte(data), nil); limit != nil {
-				stream.Send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: limit})
-				return false
+				return &streamEnd{chunk: llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: limit}}, sent
 			}
-			code, message := ev.Code, ev.Message
-			if ev.Error != nil {
-				code, message = cmp.Or(code, ev.Error.Code), cmp.Or(message, ev.Error.Message)
-			}
-			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + errorText(code, message))})
-			return false
+			// The fields are at the top level, or nested under "error" (Hermes
+			// reads both too: hermes/agent/codex_runtime.py _raise_stream_error).
+			code, message := nestedError(ev.Error)
+			code, message = cmp.Or(ev.Code, code), cmp.Or(ev.Message, message)
+			slog.Warn("codex error event", "code", code, "message", message, "event", text.Shorten(data, 500))
+			return fail(code, message), sent
 		}
 	}
 	if ctx.Err() != nil {
-		return false
+		return &streamEnd{}, sent
 	}
 	err := sc.Err()
 	if err == nil {
 		err = errors.New("stream ended early")
 	}
-	stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex stream: %w", err)})
-	return false
+	// A cut connection is temporary, like a timeout.
+	return &streamEnd{chunk: llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex stream: %w", err)}, retry: true}, sent
 }
 
 // itemChunk turns a finished output item into a chunk.

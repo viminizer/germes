@@ -18,8 +18,8 @@ const runTimeout = 600
 const failureKey = "FAILURE"
 
 // runWorkflow runs one round of a workflow job: from the saved step (after
-// a restart) or the first one, until a step leads to done (the job is done)
-// or back to the first step (the round is over). The step, values and runs
+// a restart) or the first one, until a step leads to done (the job is done;
+// a repeating job only waits) or back to the first step (the round is over). The step, values and runs
 // are saved before each step, so a restart runs that step again.
 func (s *Scheduler) runWorkflow(ctx context.Context, j api.Job) round {
 	w, err := LoadWorkflow(ListWorkflowDirs(s.opts.Workflows, j.Dir), j.Workflow)

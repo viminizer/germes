@@ -108,13 +108,17 @@ func UpdateJob(ctx context.Context, svc api.Service, action, id string, out io.W
 
 // schedule says how often a job runs.
 func schedule(j api.Job) string {
+	s := "every " + j.Every.String()
 	if j.Every == 0 {
-		return "back to back"
+		s = "back to back"
 	}
 	if j.Repeat {
-		return "repeat every " + j.Every.String()
+		s = "repeat, " + s
 	}
-	return "every " + j.Every.String()
+	if j.Idle > 0 && j.Status == api.JobRunning {
+		s += ", idle until " + j.NextRunAt.Format("15:04")
+	}
+	return s
 }
 
 func orDash(s string) string {

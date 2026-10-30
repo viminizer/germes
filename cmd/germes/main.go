@@ -68,7 +68,7 @@ const usage = `usage:
   germes insights [--days 30]  how Germes was used: sessions, turns, tools, skills
   germes stop <id>      stop a session's current step
   germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] [--repeat] "<prompt>"
-                        run a prompt again and again in this folder, a new session each round (--repeat: a chore, never done by itself)
+                        run a prompt again and again in this folder, a new session each round (--repeat: until you stop it)
   germes job add --workflow <name> [--every ...] ["<goal>"]
                         run a workflow round after round (steps in ~/.germes/workflows/<name>.yaml)
   germes job ls|start|stop|rm <id>  list, start, stop or delete jobs
@@ -609,7 +609,7 @@ func jobCommand(ctx context.Context, client *api.Client, args []string) error {
 		name := fs.String("name", "", "a name to attach to it by")
 		workflow := fs.String("workflow", "", "follow this workflow each round")
 		noWorktree := fs.Bool("no-worktree", false, "work in this folder, not in the job's own git worktree")
-		repeat := fs.Bool("repeat", false, "the same task every round, never done by itself (needs --every)")
+		repeat := fs.Bool("repeat", false, "run until stopped: [DONE] or workflow done only means nothing to do now (waits, then tries again)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}

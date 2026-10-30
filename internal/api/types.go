@@ -172,7 +172,8 @@ type Job struct {
 	Dir        string            `json:"dir"`
 	Prompt     string            `json:"prompt"`
 	NoWorktree bool              `json:"no_worktree,omitempty"`
-	Repeat     bool              `json:"repeat,omitempty"` // the same task every round, never done by itself (no PROGRESS.md, no [DONE])
+	Repeat     bool              `json:"repeat,omitempty"` // runs until stopped: [DONE] or workflow done only means "nothing to do now"
+	Idle       int               `json:"idle,omitempty"`   // repeat: rounds in a row with nothing to do; the wait grows with it
 	Every      time.Duration     `json:"every"`            // time between round starts; 0 = next round right away
 	MaxRuns    int               `json:"max_runs"`         // 0 = no limit
 	Runs       int               `json:"runs"`
@@ -197,7 +198,7 @@ type JobRequest struct {
 	Dir        string        `json:"dir"`
 	Prompt     string        `json:"prompt"`
 	NoWorktree bool          `json:"no_worktree,omitempty"`
-	Repeat     bool          `json:"repeat,omitempty"` // needs Every
+	Repeat     bool          `json:"repeat,omitempty"`
 	Every      time.Duration `json:"every,omitempty"`
 	MaxRuns    int           `json:"max_runs,omitempty"`
 }

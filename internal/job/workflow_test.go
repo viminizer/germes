@@ -169,3 +169,17 @@ func TestWorkflowResumesSavedStep(t *testing.T) {
 		t.Fatalf("commands %q, %d turns", got, len(r.turns))
 	}
 }
+
+func TestRepeatingWorkflowWaitsAtDone(t *testing.T) {
+	s, _ := newTestSchedulerWith(t, Options{Tools: &fakeTools{}}, "Nothing left.\nRESULT: NONE")
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "fix-issues", fixIssues)
+	j, err := s.CreateJob(context.Background(), api.JobRequest{Dir: dir, Workflow: "fix-issues", Repeat: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j = waitJob(t, s, j.ID, func(j api.Job) bool { return j.Idle > 0 })
+	if j.Status != api.JobRunning || j.Step != "" {
+		t.Fatalf("got %s at step %q; want running between rounds", j.Status, j.Step)
+	}
+}

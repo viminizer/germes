@@ -67,18 +67,24 @@ func newTestSchedulerWith(t *testing.T, opts Options, replies ...string) (*Sched
 // waitStatus waits until the job is no longer running.
 func waitStatus(t *testing.T, s *Scheduler, id string) api.Job {
 	t.Helper()
+	return waitJob(t, s, id, func(j api.Job) bool { return j.Status != api.JobRunning })
+}
+
+// waitJob waits until ok says yes about the job.
+func waitJob(t *testing.T, s *Scheduler, id string, ok func(api.Job) bool) api.Job {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		j, err := s.GetJob(context.Background(), id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if j.Status != api.JobRunning {
+		if ok(j) {
 			return j
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("job still running")
+	t.Fatal("job did not get there")
 	return api.Job{}
 }
 
@@ -119,24 +125,31 @@ func TestJobStopsAtMaxRuns(t *testing.T) {
 	}
 }
 
-func TestRepeatingJobIgnoresDone(t *testing.T) {
-	s, r := newTestScheduler(t, "all finished [DONE]", "all finished [DONE]")
-	j, err := s.CreateJob(context.Background(), api.JobRequest{Dir: t.TempDir(), Prompt: "tidy up", Repeat: true, Every: time.Millisecond, MaxRuns: 2})
+func TestRepeatingJobWaitsWhenIdle(t *testing.T) {
+	s, r := newTestScheduler(t, "nothing to do [DONE]")
+	j, err := s.CreateJob(context.Background(), api.JobRequest{Dir: t.TempDir(), Prompt: "tidy up", Repeat: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	j = waitStatus(t, s, j.ID)
-	if j.Status != api.JobDone || j.Runs != 2 {
-		t.Fatalf("got %s after %d runs, want done after 2 (max runs)", j.Status, j.Runs)
+	j = waitJob(t, s, j.ID, func(j api.Job) bool { return j.Idle > 0 })
+	if j.Status != api.JobRunning || j.Idle != 1 || time.Until(j.NextRunAt) < 50*time.Second {
+		t.Fatalf("got %s, idle %d, next round in %s; want running, idle 1, about a minute", j.Status, j.Idle, time.Until(j.NextRunAt))
 	}
 	if strings.Contains(r.turns[0].Prompt, "PROGRESS.md") {
 		t.Fatalf("a repeating round got the goal instructions: %q", r.turns[0].Prompt)
 	}
 }
 
-func TestRepeatingJobNeedsEvery(t *testing.T) {
-	s, _ := newTestScheduler(t, "ok")
-	if _, err := s.CreateJob(context.Background(), api.JobRequest{Dir: t.TempDir(), Prompt: "x", Repeat: true}); err == nil {
-		t.Fatal("created a repeating job with no every")
+func TestStartingAnIdleJobRunsNow(t *testing.T) {
+	s, _ := newTestScheduler(t, "nothing to do [DONE]", "nothing to do [DONE]")
+	ctx := context.Background()
+	j, _ := s.CreateJob(ctx, api.JobRequest{Dir: t.TempDir(), Prompt: "tidy up", Repeat: true})
+	waitJob(t, s, j.ID, func(j api.Job) bool { return j.Idle > 0 })
+	if err := s.StopJob(ctx, j.ID); err != nil {
+		t.Fatal(err)
 	}
+	if err := s.StartJob(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitJob(t, s, j.ID, func(j api.Job) bool { return j.Runs == 2 && j.Idle == 1 })
 }

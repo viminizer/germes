@@ -75,7 +75,7 @@ type runner struct{ cancel context.CancelFunc }
 
 // round is how one round ended.
 type round struct {
-	done    bool   // the agent replied [DONE], or the workflow reached done
+	done    bool   // the agent replied [DONE], or the workflow reached done (a repeating job: nothing to do now)
 	failure string // why it failed; "" = it worked
 	fatal   bool   // the job cannot run any more (its folder or workflow is gone)
 }
@@ -130,8 +130,6 @@ func (s *Scheduler) CreateJob(ctx context.Context, r api.JobRequest) (api.Job, e
 		return api.Job{}, api.NewError(api.CodeInvalid, "empty prompt")
 	case r.Every < 0 || r.MaxRuns < 0:
 		return api.Job{}, api.NewError(api.CodeInvalid, "every and max runs must not be negative")
-	case r.Repeat && (r.Every == 0 || r.Workflow != ""):
-		return api.Job{}, api.NewError(api.CodeInvalid, "a repeating job needs every, and no workflow")
 	}
 	if fi, err := os.Stat(r.Dir); err != nil || !fi.IsDir() {
 		return api.Job{}, api.NewError(api.CodeInvalid, "folder %q does not exist", r.Dir)
@@ -165,13 +163,16 @@ func (s *Scheduler) GetJob(ctx context.Context, idOrName string) (api.Job, error
 }
 
 // StartJob runs a stopped, done or failed job again. A missed round runs
-// right away.
+// right away, and so does the next round of a job waiting for work.
 func (s *Scheduler) StartJob(ctx context.Context, id string) error {
 	j, err := s.update(ctx, id, func(j *api.Job) error {
 		if j.MaxRuns > 0 && j.Runs >= j.MaxRuns {
 			return api.NewError(api.CodeInvalid, "job %s already ran all %d rounds", j.Name, j.MaxRuns)
 		}
 		j.Status, j.Failures, j.Error = api.JobRunning, 0, ""
+		if j.Idle > 0 {
+			j.Idle, j.NextRunAt = 0, time.Now()
+		}
 		return nil
 	})
 	if err != nil {
@@ -367,6 +368,13 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 			return nil
 		}
 		switch {
+		case res.done && j.Repeat:
+			// Nothing to do right now: wait longer each time, then look again.
+			j.Idle++
+			j.Failures, j.Error = 0, ""
+			if wait := idleWait(j.Idle); time.Until(j.NextRunAt) < wait {
+				j.NextRunAt = time.Now().Add(wait)
+			}
 		case res.done:
 			j.Status, j.Failures, j.Error = api.JobDone, 0, ""
 		case res.failure != "":
@@ -376,7 +384,7 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 				j.Status = api.JobFailed
 			}
 		default:
-			j.Failures, j.Error = 0, ""
+			j.Failures, j.Error, j.Idle = 0, "", 0
 		}
 		return nil
 	})
@@ -385,6 +393,12 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 		return false
 	}
 	return j.Status == api.JobRunning
+}
+
+// idleWait is how long a repeating job waits after n rounds in a row with
+// nothing to do: 1, 2, 4 ... minutes, at most an hour.
+func idleWait(n int) time.Duration {
+	return min(time.Minute<<min(n-1, 6), time.Hour)
 }
 
 // notify tells whoever watches the session (the TUI, later Telegram).
@@ -403,11 +417,7 @@ func (s *Scheduler) runRound(ctx context.Context, j api.Job) round {
 	if err != nil {
 		return failed(err)
 	}
-	reply, failure := s.waitIdle(ctx, id, 0)
-	if j.Repeat {
-		return round{failure: failure}
-	}
-	return s.plainRound(reply, failure)
+	return s.plainRound(s.waitIdle(ctx, id, 0))
 }
 
 // plainRound reads a prompt round's reply.
@@ -483,7 +493,8 @@ func (s *Scheduler) checkRound(ctx context.Context, sessionID string) (gone, idl
 // round session's title.
 func roundPrompt(j api.Job) string {
 	if j.Repeat {
-		return fmt.Sprintf("Job %s, round %d.\n\n%s", j.Name, j.Runs, j.Prompt)
+		return fmt.Sprintf("Job %s, round %d. It repeats until the user stops it. Only when you found nothing to do in this round, end your reply with %s: Germes then waits a while before the next round. After doing work, do not write it.\n\n%s",
+			j.Name, j.Runs, doneMark, j.Prompt)
 	}
 	return fmt.Sprintf(`Job %s, round %d.
 

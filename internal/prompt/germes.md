@@ -44,7 +44,7 @@ steps:
     agent: "Fix issue {ISSUE} properly, with a test."   # {ISSUE} = the value from RESULT: ISSUE 42
     next: check
   - id: check
-    run: "go build ./... && go test ./..."   # a shell command in the job's folder (values are shell-quoted)
+    run: "go build ./... && go test ./..."   # a shell command in the job's folder (values arrive as data, quoted or not)
     on_fail: fix             # the output goes to the next agent step; no on_fail = the round fails
     max_retries: 3           # runs of a step per round beyond the first (default 3)
     next: merge

@@ -233,7 +233,7 @@ func (r *wfRound) runStep(ctx context.Context, st Step) (next string, res round,
 // runAgent sends the step's prompt to the round's session and reads where
 // the reply leads.
 func (r *wfRound) runAgent(ctx context.Context, st Step) (string, round, bool) {
-	text := fmt.Sprintf("Job %s, round %d, step %s.\n\n%s", r.j.Name, r.j.Runs, st.ID, fill(st.Agent, r.j.Values, false))
+	text := fmt.Sprintf("Job %s, round %d, step %s.\n\n%s", r.j.Name, r.j.Runs, st.ID, fill(st.Agent, r.j.Values))
 	if f := r.j.Values[failureKey]; f != "" {
 		text += "\n\n" + f
 		delete(r.j.Values, failureKey)
@@ -326,14 +326,14 @@ func (r *wfRound) runCommand(ctx context.Context, st Step) (string, bool) {
 		}
 		return "worktree removed", true
 	case name == builtinNotify:
-		text := fill(strings.TrimSpace(rest), r.j.Values, false)
+		text := fill(strings.TrimSpace(rest), r.j.Values)
 		if u, err := strconv.Unquote(text); err == nil {
 			text = u
 		}
 		r.s.notify(r.session(), "job "+r.j.Name+": "+text)
 		return "sent", true
 	}
-	return r.bash(ctx, fill(run, r.j.Values, true))
+	return r.bash(ctx, fillCommand(run, r.j.Values))
 }
 
 // merge rebases the round's worktree branch onto the project's current

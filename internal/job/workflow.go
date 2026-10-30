@@ -223,19 +223,78 @@ func parseResult(reply string) (token, value string, ok bool) {
 
 var valueRE = regexp.MustCompile(`\{([A-Z][A-Z0-9_]*)\}`)
 
-// fill puts the values into text: {ISSUE} becomes the ISSUE value. quote
-// wraps each value for the shell, so a reply can never inject a command.
-func fill(text string, values map[string]string, quote bool) string {
+// fill puts the values into text: {ISSUE} becomes the ISSUE value.
+func fill(text string, values map[string]string) string {
 	return valueRE.ReplaceAllStringFunc(text, func(m string) string {
-		v, ok := values[m[1:len(m)-1]]
-		if !ok {
-			return m
+		if v, ok := values[m[1:len(m)-1]]; ok {
+			return v
 		}
-		if quote {
-			return shellQuote(v)
-		}
-		return v
+		return m
 	})
+}
+
+// fillCommand puts the values into a shell command as variables set above
+// it: {ISSUE} becomes a reference to GERMES_VALUE_ISSUE, quoted for where it
+// stands (bare, in "..." or in '...'). The shell never reads a value as
+// code, so a reply cannot run a command wherever its placeholder is (#24).
+// ponytail: the quote tracking knows quotes and backslashes, not heredocs; a
+// bare placeholder in one prints with its quotes, but still runs nothing.
+func fillCommand(cmd string, values map[string]string) string {
+	var head, body strings.Builder
+	set := map[string]bool{}
+	last := 0
+	for _, m := range valueRE.FindAllStringSubmatchIndex(cmd, -1) {
+		body.WriteString(cmd[last:m[0]])
+		last = m[1]
+		name := cmd[m[2]:m[3]]
+		v, ok := values[name]
+		if !ok {
+			body.WriteString(cmd[m[0]:m[1]])
+			continue
+		}
+		if !set[name] {
+			set[name] = true
+			fmt.Fprintf(&head, "GERMES_VALUE_%s=%s\n", name, shellQuote(v))
+		}
+		ref := "${GERMES_VALUE_" + name + "}"
+		switch quoteAfter(cmd[:m[0]]) {
+		case 0:
+			ref = `"` + ref + `"`
+		case '\'':
+			ref = `'"` + ref + `"'`
+		}
+		body.WriteString(ref)
+	}
+	body.WriteString(cmd[last:])
+	return head.String() + body.String()
+}
+
+// quoteAfter returns the quote (', " or 0 for none) the shell is inside
+// after reading the command s.
+func quoteAfter(s string) byte {
+	quote := byte(0)
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote == '\'':
+			if c == '\'' {
+				quote = 0
+			}
+		case c == '\\':
+			i++ // an escaped character is not a quote
+		case quote == 0 && c == '#' && (i == 0 || strings.ContainsRune(" \t\n;", rune(s[i-1]))):
+			// A comment, where "don't" opens no quote.
+			if n := strings.IndexByte(s[i:], '\n'); n >= 0 {
+				i += n
+			} else {
+				i = len(s)
+			}
+		case c == quote:
+			quote = 0
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+		}
+	}
+	return quote
 }
 
 func shellQuote(s string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -48,10 +49,36 @@ func TestParseResult(t *testing.T) {
 	}
 }
 
-func TestFillQuotesForTheShell(t *testing.T) {
-	got := fill("gh issue view {ISSUE}", map[string]string{"ISSUE": "1; rm -rf ~ '"}, true)
-	if got != `gh issue view '1; rm -rf ~ '\'''` {
-		t.Fatalf("got %s", got)
+func TestFillCommandKeepsValuesData(t *testing.T) {
+	value := `a  b $(touch ran) ` + "`touch ran`" + ` '"; touch ran \`
+	for cmd, want := range map[string]string{
+		`printf '%s' {V}`:                          value,
+		`printf '%s' "{V}"`:                        value,
+		`printf '%s' "x{V}y"`:                      "x" + value + "y",
+		`printf '%s' 'x{V}y'`:                      "x" + value + "y",
+		`printf '%s' "it's {V}"`:                   "it's " + value,
+		`printf '%s' "say \"{V}\""`:                `say "` + value + `"`,
+		"cat <<EOF\n{V}\nEOF":                      `"` + value + "\"\n", // the ponytail ceiling: quotes show
+		`printf '%s' {V} {V}`:                      value + value,
+		"# don't stop\nprintf '%s' {V} # it's {V}": value,
+		`printf '%s' a#'{V}'`:                      "a#" + value,
+	} {
+		dir := t.TempDir()
+		c := exec.Command("bash", "-c", fillCommand(cmd, map[string]string{"V": value}))
+		c.Dir = dir
+		out, err := c.Output()
+		if err != nil {
+			t.Errorf("%s: %v", cmd, err)
+		}
+		if string(out) != want {
+			t.Errorf("%s printed %q, want %q", cmd, out, want)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "ran")); err == nil {
+			t.Errorf("%s ran a command from the value", cmd)
+		}
+	}
+	if got := fillCommand("echo {OTHER}", nil); got != "echo {OTHER}" {
+		t.Errorf("unknown placeholder: %q", got)
 	}
 }
 
@@ -105,7 +132,8 @@ func writeWorkflow(t *testing.T, dir, name, body string) {
 }
 
 func TestWorkflowFollowsSteps(t *testing.T) {
-	tools := &fakeTools{fail: map[string]bool{"test '42'": true}}
+	test42 := "GERMES_VALUE_ISSUE='42'\ntest \"${GERMES_VALUE_ISSUE}\""
+	tools := &fakeTools{fail: map[string]bool{test42: true}}
 	s, r := newTestSchedulerWith(t, Options{Tools: tools},
 		"Found it.\nRESULT: ISSUE 42", // round 1: find
 		"fixed",                       // fix
@@ -122,7 +150,7 @@ func TestWorkflowFollowsSteps(t *testing.T) {
 	if j.Status != api.JobDone || j.Runs != 2 || j.Failures != 0 {
 		t.Fatalf("job: %s, %d runs, %d failures (%s)", j.Status, j.Runs, j.Failures, j.Error)
 	}
-	if got := strings.Join(tools.commands, " | "); got != "test '42' | test '42'" {
+	if got := strings.Join(tools.commands, " | "); got != test42+" | "+test42 {
 		t.Fatalf("commands: %s", got)
 	}
 	// One session per round; the steps of a round share it.
@@ -170,7 +198,7 @@ func TestWorkflowResumesSavedStep(t *testing.T) {
 	if j.Status != api.JobDone || j.Runs != 2 {
 		t.Fatalf("job: %s after %d runs (%s)", j.Status, j.Runs, j.Error)
 	}
-	if got := strings.Join(tools.commands, " | "); got != "test '7'" || len(r.turns) != 1 {
+	if got := strings.Join(tools.commands, " | "); got != "GERMES_VALUE_ISSUE='7'\ntest \"${GERMES_VALUE_ISSUE}\"" || len(r.turns) != 1 {
 		t.Fatalf("commands %q, %d turns", got, len(r.turns))
 	}
 }

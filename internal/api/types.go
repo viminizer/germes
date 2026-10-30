@@ -41,13 +41,13 @@ type Session struct {
 // EventKind says what happened in a session.
 type EventKind string
 
-// Event kinds. TextDelta, Queue and Notice are live only: they have Seq 0
-// and are never saved.
+// Event kinds. TextDelta and Queue are live only: they have Seq 0 and are
+// never saved. A job's Notice is live only too.
 const (
 	KindUserMessage    EventKind = "user_message"
 	KindTextDelta      EventKind = "text_delta"
 	KindQueue          EventKind = "queue"
-	KindNotice         EventKind = "notice" // Text: a job's message for the user (workflow notify, job done or failed)
+	KindNotice         EventKind = "notice" // Text: a message for the user (a job's are live only; "plan saved" is saved)
 	KindText           EventKind = "text"
 	KindToolCall       EventKind = "tool_call"
 	KindToolResult     EventKind = "tool_result"
@@ -119,6 +119,7 @@ type MessageRequest struct {
 	Text      string `json:"text"`
 	Worktree  bool   `json:"worktree,omitempty"`    // a new session gets its own git worktree; false = works in Dir
 	SameDirAs string `json:"same_dir_as,omitempty"` // new session works where this session works (a job's rounds share a worktree)
+	Plan      bool   `json:"plan,omitempty"`        // a plan turn: change nothing; the reply is saved as a plan file
 }
 
 // MessageResult says which session got the message.

@@ -70,6 +70,9 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 		}
 		extra = strings.TrimSpace(p.Extra + "\n\n" + t.Extra)
 	}
+	if t.Plan {
+		t.Prompt = strings.TrimSpace(prompt.PlanMode) + "\n\n" + t.Prompt
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	pr, err := c.start(ctx, t, extra, nil)
 	if err != nil {
@@ -200,8 +203,13 @@ func (c *Claude) args(t engine.Turn, extra string, dirs []string) []string {
 	for _, d := range dirs {
 		args = append(args, "--add-dir", d)
 	}
-	if len(c.opts.Blocked) > 0 {
-		args = append(args, "--disallowedTools", strings.Join(c.opts.Blocked, " "))
+	blocked := c.opts.Blocked
+	if t.Plan {
+		// A plan turn changes nothing.
+		blocked = append(slices.Clone(blocked), "Write", "Edit", "MultiEdit", "NotebookEdit")
+	}
+	if len(blocked) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(blocked, " "))
 	}
 	if c.opts.Model != "" {
 		args = append(args, "--model", c.opts.Model)

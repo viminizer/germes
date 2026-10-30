@@ -38,11 +38,7 @@ func (h fakeHistory) ListEvents(ctx context.Context, f api.EventFilter) (api.Pag
 }
 
 func TestLoopRunsToolsThenAnswers(t *testing.T) {
-	reg, err := tool.NewRegistry([]tool.Tool{{Name: "echo", Run: func(ctx context.Context, c tool.Call) (string, error) { return "pong", nil }}},
-		map[string]tool.Toolset{"core": {Tools: []string{"echo"}}}, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	reg := newEchoRegistry(t)
 	model := &fakeModel{}
 	history := fakeHistory{{Seq: 1, Kind: api.KindUserMessage, Text: "hi"}}
 	l := New(model, reg, prompt.NewBuilder(t.TempDir(), noMemory{}, noSkills{}), history, Options{Name: "fake", Toolsets: []string{"core"}})
@@ -152,11 +148,7 @@ type planOf string
 func (p planOf) GetActive(sessionID string) string { return string(p) }
 
 func TestOpenTasksFollowTheSummary(t *testing.T) {
-	reg, err := tool.NewRegistry([]tool.Tool{{Name: "echo", Run: func(ctx context.Context, c tool.Call) (string, error) { return "pong", nil }}},
-		map[string]tool.Toolset{"core": {Tools: []string{"echo"}}}, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	reg := newEchoRegistry(t)
 	model := &fakeModel{}
 	history := fakeHistory{
 		{Seq: 1, Kind: api.KindUserMessage, Text: "old"},
@@ -171,5 +163,36 @@ func TestOpenTasksFollowTheSummary(t *testing.T) {
 	first := model.requests[0].Messages[0].Text
 	if !strings.Contains(first, "we fixed the parser") || !strings.HasSuffix(first, "- [ ] 2. Write the docs") {
 		t.Fatalf("first message:\n%s", first)
+	}
+}
+
+// newEchoRegistry has one tool, echo, which answers pong, in toolset core,
+// and a read-only toolset plan with no tools.
+func newEchoRegistry(t *testing.T) *tool.Registry {
+	t.Helper()
+	reg, err := tool.NewRegistry([]tool.Tool{{Name: "echo", Run: func(ctx context.Context, c tool.Call) (string, error) { return "pong", nil }}},
+		map[string]tool.Toolset{"core": {Tools: []string{"echo"}}, "plan": {}}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+func TestPlanTurnReadsOnly(t *testing.T) {
+	model := &fakeModel{}
+	l := New(model, newEchoRegistry(t), prompt.NewBuilder(t.TempDir(), noMemory{}, noSkills{}),
+		fakeHistory{{Seq: 1, Kind: api.KindUserMessage, Text: "add dark mode"}},
+		Options{Name: "fake", Toolsets: []string{"core"}, PlanToolsets: []string{"plan"}, SubagentToolsets: []string{"core"}})
+	events, _ := l.Run(context.Background(), engine.Turn{SessionID: "s", Dir: t.TempDir(), Plan: true})
+	for range events {
+	}
+	r := model.requests[0]
+	for _, s := range r.Tools {
+		if s.Name == "echo" || s.Name == delegateTool {
+			t.Fatalf("a plan turn got %s", s.Name)
+		}
+	}
+	if last := r.Messages[len(r.Messages)-1].Text; !strings.Contains(last, "Plan mode") {
+		t.Fatalf("no plan instruction: %q", last)
 	}
 }

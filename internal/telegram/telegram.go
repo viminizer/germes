@@ -32,6 +32,7 @@ const (
 var commands = []struct{ Name, Help string }{
 	{"bind", "Tie this topic to a project: /bind <name or path>"},
 	{"status", "This topic's project, session and running jobs"},
+	{"plan", "Plan a task first: changes nothing, saves the plan"},
 	{"new", "A fresh session in this topic's project"},
 	{"stop", "Stop the running turn"},
 	{"sessions", "Recent sessions"},
@@ -157,35 +158,41 @@ func (t *Telegram) handleMessage(ctx context.Context, m *message) {
 		t.command(ctx, m.topic(), text)
 		return
 	}
-	id, err := t.send(ctx, m.topic(), text)
+	t.ask(ctx, m.topic(), text, false)
+}
+
+// ask sends text to the topic's session and waits for its answer there.
+// plan: a plan turn.
+func (t *Telegram) ask(ctx context.Context, thread int64, text string, plan bool) {
+	id, err := t.send(ctx, thread, text, plan)
 	if err != nil {
-		t.reply(ctx, m.topic(), "Could not send it: "+err.Error())
+		t.reply(ctx, thread, "Could not send it: "+err.Error())
 		return
 	}
 	t.mu.Lock()
-	t.replyTo[id] = m.topic()
+	t.replyTo[id] = thread
 	t.mu.Unlock()
 }
 
 // send sends text to the topic's session: its project's session (started
 // on the first message), or the overseer.
-func (t *Telegram) send(ctx context.Context, thread int64, text string) (string, error) {
+func (t *Telegram) send(ctx context.Context, thread int64, text string, plan bool) (string, error) {
 	t.mu.Lock()
 	tp, bound := t.state.Topics[thread]
 	t.mu.Unlock()
 	if !bound {
-		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: api.OverseerID, Text: text})
+		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: api.OverseerID, Text: text, Plan: plan})
 		return res.SessionID, err
 	}
 	if tp.SessionID != "" {
-		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: tp.SessionID, Text: text})
+		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: tp.SessionID, Text: text, Plan: plan})
 		var e *api.Error
 		if !errors.As(err, &e) || e.Code != api.CodeNotFound {
 			return res.SessionID, err
 		}
 		// The session was deleted: start a new one below.
 	}
-	res, err := t.svc.SendMessage(ctx, api.MessageRequest{Dir: tp.Project, Text: text})
+	res, err := t.svc.SendMessage(ctx, api.MessageRequest{Dir: tp.Project, Text: text, Plan: plan})
 	if err != nil {
 		return "", err
 	}
@@ -213,6 +220,12 @@ func (t *Telegram) command(ctx context.Context, thread int64, text string) {
 		t.bind(ctx, thread, arg)
 	case "status":
 		t.status(ctx, thread)
+	case "plan":
+		if arg == "" {
+			t.reply(ctx, thread, "Usage: /plan <task>. The session plans without changing anything and saves the plan.")
+			return
+		}
+		t.ask(ctx, thread, arg, true)
 	case "unbind":
 		t.mu.Lock()
 		delete(t.state.Topics, thread)

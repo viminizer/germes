@@ -27,6 +27,7 @@ type Turn struct {
 	LastEngine string
 	Extra      string // added to the system prompt (handoff, memory, skills)
 	Overseer   bool   // the overseer's turn: its role and its tools
+	Plan       bool   // a plan turn: change nothing, reply with a plan
 }
 
 // Kind says what an Event is.

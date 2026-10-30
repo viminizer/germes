@@ -510,6 +510,8 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 		"learn":   {Tools: []string{"memory", "skill_view", "skill_save"}},
 		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit", "todo_list"}, Includes: []string{"core", "learn"}},
 		"review":  {Includes: []string{"learn"}},
+		// A plan turn reads and searches; it changes nothing.
+		"plan": {Tools: []string{"Read", "Glob", "Grep", "session_search"}},
 		// Subagents work on one task: files, shell and search; no memory.
 		"subagent": {Tools: []string{"session_search"}, Includes: []string{"core"}},
 		// The overseer controls Germes too; it has no worktree to leave.
@@ -538,7 +540,7 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 		}
 		client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
 		engines = append(engines, loop.New(client, reg, prompts, st, loop.Options{
-			Name: name, Toolsets: []string{"project"}, OverseerToolsets: []string{"overseer"}, ReviewToolsets: []string{"review"}, SubagentToolsets: []string{"subagent"}, Todos: todos}))
+			Name: name, Toolsets: []string{"project"}, OverseerToolsets: []string{"overseer"}, ReviewToolsets: []string{"review"}, SubagentToolsets: []string{"subagent"}, PlanToolsets: []string{"plan"}, Todos: todos}))
 	}
 	rt, err := router.New(engines, cfg.Engines, st, time.Now)
 	return rt, reg, err

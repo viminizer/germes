@@ -97,7 +97,7 @@ func (m *model) Init() tea.Cmd {
 		cmds = append(cmds, m.watch(), m.checkJob())
 	}
 	if m.opts.First != "" {
-		cmds = append(cmds, m.send(m.opts.First))
+		cmds = append(cmds, m.send(m.opts.First, false))
 	}
 	return tea.Batch(cmds...)
 }
@@ -259,7 +259,7 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(text, "/") {
 			return m, m.command(text)
 		}
-		return m, m.send(text)
+		return m, m.send(text, false)
 	}
 	var cmd tea.Cmd
 	m.composer, cmd = m.composer.update(msg)
@@ -305,8 +305,10 @@ func (m *model) stop(sendQueue bool) tea.Cmd {
 	}
 }
 
-func (m *model) send(text string) tea.Cmd {
-	req := api.MessageRequest{SessionID: m.sessionID, Dir: m.opts.Dir, Text: text, Worktree: m.opts.Worktree}
+// send sends text to the session (a new one in Dir if none). plan: a plan
+// turn, which changes nothing and saves its reply as a plan.
+func (m *model) send(text string, plan bool) tea.Cmd {
+	req := api.MessageRequest{SessionID: m.sessionID, Dir: m.opts.Dir, Text: text, Worktree: m.opts.Worktree, Plan: plan}
 	return func() tea.Msg {
 		res, err := m.svc.SendMessage(m.ctx, req)
 		return sentMsg{sessionID: res.SessionID, warning: res.Warning, err: err}

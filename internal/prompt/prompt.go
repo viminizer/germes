@@ -35,6 +35,11 @@ var codingBrief string
 //go:embed execution.md
 var executionRules string
 
+// PlanMode is the instruction for a plan turn (both engines).
+//
+//go:embed plan.md
+var PlanMode string
+
 const (
 	maxProjectFile = 20_000 // characters of AGENTS.md / CLAUDE.md in the prompt
 	maxSkillDesc   = 200    // characters of each skill description in the index

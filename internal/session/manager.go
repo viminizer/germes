@@ -181,7 +181,7 @@ func (m *Manager) SendMessage(ctx context.Context, r api.MessageRequest) (api.Me
 		m.wg.Add(1)
 		go w.run()
 	}
-	if err := w.enqueue(text); err != nil {
+	if err := w.enqueue(text, r.Plan); err != nil {
 		return api.MessageResult{}, err
 	}
 	return api.MessageResult{SessionID: id, Warning: warning}, nil

@@ -12,6 +12,7 @@ import (
 // commands are the slash commands, for /help and the suggestion list.
 var commands = []struct{ Name, Args, Help string }{
 	{"new", "", "start a new session"},
+	{"plan", "<task>", "plan first: change nothing, save the plan"},
 	{"clear", "", "keep this session saved and start a new one"},
 	{"sessions", "", "list sessions in this project"},
 	{"switch", "<id>", "open another session"},
@@ -62,6 +63,11 @@ func (m *model) command(text string) tea.Cmd {
 		// /clear also wipes the screen, so it shows one session only.
 		m.restart = true
 		return tea.Quit
+	case "plan":
+		if arg == "" {
+			return notice("usage: /plan <task>")
+		}
+		return m.send(arg, true)
 	case "overseer":
 		return func() tea.Msg { return switchMsg{id: api.OverseerID} }
 	case "switch":

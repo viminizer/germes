@@ -50,6 +50,7 @@ steps:
     next: find
 ```
 Built-ins: `merge`, `cleanup` (remove the job's worktree), `notify "<text>"` (a message for the user). `done` ends the job. Values: {GOAL} (the job's prompt), {OUTPUT} (the last command's output), and every RESULT token.
+- In the TUI or Telegram, `/plan <task>` makes a plan first without changing anything; it is saved in `<project>/.germes/plans/`.
 - `germes overseer` (or `/overseer`): the overseer, one session in the home folder with tools to control sessions and jobs.
 - `germes setup telegram`: talk to Germes from a Telegram group (asks for the bot token, chat id and user id; saved under `telegram:` in the config). In a topic, `/bind <project>`; General talks to the overseer.
 - `germes doctor`: check the config, engines, database and daemon, with fixes. `germes daemon kill`: stop a hung daemon.

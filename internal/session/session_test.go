@@ -19,11 +19,15 @@ import (
 type fakeRunner struct {
 	block   chan struct{}
 	prompts chan string
+	turns   chan engine.Turn
 }
 
 func (f fakeRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
 	if f.prompts != nil {
 		f.prompts <- t.Prompt
+	}
+	if f.turns != nil {
+		f.turns <- t
 	}
 	out := make(chan engine.Event, 4)
 	go func() {
@@ -239,5 +243,28 @@ func TestSessionEntersAndLeavesWorktree(t *testing.T) {
 	}
 	if s, _ := m.GetSession(ctx, s.ID); s.Dir != project || s.Branch != "" {
 		t.Fatalf("after leaving: %+v", s)
+	}
+}
+
+func TestPlanTurnSavesThePlan(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	turns := make(chan engine.Turn, 1)
+	m := newTestManager(t, fakeRunner{turns: turns})
+	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: project, Text: "Add dark mode!", Plan: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	note := next(t, ch, api.KindNotice)
+	if turn := <-turns; !turn.Plan {
+		t.Fatal("the engine did not get a plan turn")
+	}
+	files, _ := filepath.Glob(filepath.Join(project, ".germes", "plans", "*-add-dark-mode.md"))
+	if len(files) != 1 || !strings.Contains(note.Text, files[0]) {
+		t.Fatalf("plans %v, notice %q", files, note.Text)
+	}
+	if b, _ := os.ReadFile(files[0]); string(b) != "# Plan: Add dark mode!\n\nok\n" {
+		t.Fatalf("plan file:\n%s", b)
 	}
 }

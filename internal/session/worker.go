@@ -20,13 +20,15 @@ const maxQueue = 100
 // worker runs one session's turns, one at a time. Only the worker goroutine
 // touches sess and seq.
 type worker struct {
-	m    *Manager
-	sess api.Session
-	seq  int64
-	wake chan struct{} // a message was queued
+	m     *Manager
+	sess  api.Session
+	seq   int64
+	reply string        // the turn's last text (a plan turn saves it)
+	wake  chan struct{} // a message was queued
 
 	mu      sync.Mutex
 	queue   []string           // messages waiting for the next turn
+	plan    bool               // a queued message asks for a plan turn
 	cancel  context.CancelFunc // cancels the running turn
 	running bool               // turns are running
 }
@@ -43,8 +45,8 @@ func (w *worker) run() {
 			}
 			w.setRunning(true)
 			// Everything queued while a turn ran becomes one turn.
-			for texts := w.take(); len(texts) > 0; texts = w.take() {
-				w.runTurn(strings.Join(texts, "\n\n"))
+			for texts, plan := w.take(); len(texts) > 0; texts, plan = w.take() {
+				w.runTurn(strings.Join(texts, "\n\n"), plan)
 			}
 			w.setRunning(false)
 			idle.Reset(idleTime)
@@ -107,13 +109,14 @@ func (w *worker) isBusy() bool {
 }
 
 // enqueue adds a message for the next turn and wakes the worker.
-func (w *worker) enqueue(text string) error {
+func (w *worker) enqueue(text string, plan bool) error {
 	w.mu.Lock()
 	if len(w.queue) >= maxQueue {
 		w.mu.Unlock()
 		return api.NewError(api.CodeUnavailable, "session %s has too many queued messages", w.sess.ID)
 	}
 	w.queue = append(w.queue, text)
+	w.plan = w.plan || plan
 	q := w.queuedLocked()
 	w.mu.Unlock()
 	w.publishQueue(q)
@@ -124,16 +127,17 @@ func (w *worker) enqueue(text string) error {
 	return nil
 }
 
-// take empties the queue and returns what was in it.
-func (w *worker) take() []string {
+// take empties the queue and returns what was in it, and whether one of
+// the messages asked for a plan.
+func (w *worker) take() ([]string, bool) {
 	w.mu.Lock()
-	texts := w.queue
-	w.queue = nil
+	texts, plan := w.queue, w.plan
+	w.queue, w.plan = nil, false
 	w.mu.Unlock()
 	if len(texts) > 0 {
 		w.publishQueue(nil)
 	}
-	return texts
+	return texts, plan
 }
 
 // queued returns a copy of the waiting messages.
@@ -179,7 +183,7 @@ func (w *worker) stopTurn(dropQueue bool) {
 	}
 }
 
-func (w *worker) runTurn(text string) {
+func (w *worker) runTurn(text string, plan bool) {
 	ctx, cancel := context.WithCancel(w.m.ctx)
 	w.mu.Lock()
 	w.cancel = cancel
@@ -196,6 +200,8 @@ func (w *worker) runTurn(text string) {
 		}
 		if stopped {
 			w.emit(api.Event{Kind: api.KindError, Text: "stopped"})
+		} else if plan && w.reply != "" {
+			w.savePlan(text, w.reply)
 		}
 		// Status first: a client that sees turn_done must read idle.
 		w.setStatus(api.StatusIdle)
@@ -203,6 +209,7 @@ func (w *worker) runTurn(text string) {
 	}()
 
 	w.emit(api.Event{Kind: api.KindUserMessage, Text: text})
+	w.reply = ""
 	w.setStatus(api.StatusWorking)
 	w.refresh()
 	prompt := text
@@ -217,7 +224,7 @@ func (w *worker) runTurn(text string) {
 
 	for {
 		turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Project: w.sess.Project, Branch: w.sess.Branch,
-			Prompt: prompt, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine, Overseer: w.sess.ID == api.OverseerID}
+			Prompt: prompt, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine, Overseer: w.sess.ID == api.OverseerID, Plan: plan}
 		events, err := w.m.runner.Run(ctx, turn)
 		var unavail *engine.UnavailableError
 		if errors.As(err, &unavail) {
@@ -264,6 +271,7 @@ func (w *worker) handle(ev engine.Event) {
 	case engine.KindTextDelta:
 		w.emit(api.Event{Kind: api.KindTextDelta, Text: ev.Text})
 	case engine.KindText:
+		w.reply = ev.Text
 		w.emit(api.Event{Kind: api.KindText, Text: ev.Text})
 	case engine.KindToolCall:
 		w.emit(api.Event{Kind: api.KindToolCall, Tool: toolOf(ev.Tool)})

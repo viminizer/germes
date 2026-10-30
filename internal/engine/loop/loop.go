@@ -9,6 +9,7 @@ import (
 	"github.com/viminizer/germes/internal/stream"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/viminizer/germes/internal/api"
@@ -36,6 +37,8 @@ type Options struct {
 	// Todos gives the model its open task items again after a compaction;
 	// nil = none.
 	Todos TaskLists
+	// PlanToolsets are the tools of a plan turn: reading only.
+	PlanToolsets []string
 	// SubagentToolsets are the tools of the subagents delegate_task starts.
 	// Empty: no delegate_task.
 	SubagentToolsets []string
@@ -117,12 +120,17 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 				msgs[0].Text += "\n\n" + plan
 			}
 		}
-		toolsets := l.opts.Toolsets
-		if t.Overseer {
-			toolsets = l.opts.OverseerToolsets
+		spec := turnSpec{toolsets: l.opts.Toolsets, maxSteps: l.opts.MaxSteps,
+			review: true, delegate: len(l.opts.SubagentToolsets) > 0, ask: true}
+		switch {
+		case t.Plan:
+			// Read only, and no subagents: they could change files.
+			spec.toolsets, spec.delegate = l.opts.PlanToolsets, false
+			msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: strings.TrimSpace(prompt.PlanMode)})
+		case t.Overseer:
+			spec.toolsets = l.opts.OverseerToolsets
 		}
-		l.turn(ctx, t, system, msgs, out, turnSpec{toolsets: toolsets, maxSteps: l.opts.MaxSteps,
-			review: true, delegate: len(l.opts.SubagentToolsets) > 0, ask: true})
+		l.turn(ctx, t, system, msgs, out, spec)
 	}()
 	return out, nil
 }

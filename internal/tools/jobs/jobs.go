@@ -18,11 +18,11 @@ func New(svc api.Service) []tool.Tool {
 	tools := []tool.Tool{
 		{
 			Name: "job_create", Toolset: "jobs",
-			Description: "Create and start a job in a project folder: a prompt that runs round after round in a new session each time (until the agent replies [DONE]), " +
+			Description: "Create and start a job in a project folder: a prompt that runs round after round in a new session each time (until the agent replies [DONE]; with repeat, the same task every round forever), " +
 				"or a workflow (a file in ~/.germes/workflows or <project>/.germes/workflows; the prompt is then its {GOAL}).",
 			Schema: json.RawMessage(`{"type":"object","properties":{"dir":{"type":"string"},"prompt":{"type":"string"},"workflow":{"type":"string"},` +
 				`"name":{"type":"string"},"every":{"type":"string","description":"time between round starts, like 30m or 1h; empty = back to back"},` +
-				`"max_runs":{"type":"integer"},"no_worktree":{"type":"boolean"}},"required":["dir"],"additionalProperties":false}`),
+				`"max_runs":{"type":"integer"},"no_worktree":{"type":"boolean"},"repeat":{"type":"boolean","description":"a chore: the same task every round, never done by itself; needs every"}},"required":["dir"],"additionalProperties":false}`),
 			Run: tool.NewRun(func(ctx context.Context, c tool.Call, a struct {
 				Dir        string `json:"dir"`
 				Prompt     string `json:"prompt"`
@@ -31,6 +31,7 @@ func New(svc api.Service) []tool.Tool {
 				Every      string `json:"every"`
 				MaxRuns    int    `json:"max_runs"`
 				NoWorktree bool   `json:"no_worktree"`
+				Repeat     bool   `json:"repeat"`
 			}) (string, error) {
 				var every time.Duration
 				if a.Every != "" {
@@ -41,7 +42,7 @@ func New(svc api.Service) []tool.Tool {
 					every = d
 				}
 				j, err := svc.CreateJob(ctx, api.JobRequest{Name: a.Name, Dir: a.Dir, Prompt: a.Prompt, Workflow: a.Workflow,
-					Every: every, MaxRuns: a.MaxRuns, NoWorktree: a.NoWorktree})
+					Every: every, MaxRuns: a.MaxRuns, NoWorktree: a.NoWorktree, Repeat: a.Repeat})
 				if err != nil {
 					return "", err
 				}

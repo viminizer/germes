@@ -111,6 +111,9 @@ func schedule(j api.Job) string {
 	if j.Every == 0 {
 		return "back to back"
 	}
+	if j.Repeat {
+		return "repeat every " + j.Every.String()
+	}
 	return "every " + j.Every.String()
 }
 

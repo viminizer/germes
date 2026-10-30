@@ -852,6 +852,9 @@ Each round:
 - `germes attach <job name>` opens the TUI on the latest round's session: history, live output, and I can type to steer it. Ctrl+C or `/exit` quits; the job keeps running.
 - Auto-follow: when the next round starts, the attached TUI follows it and shows `── round 15 ──`.
 - Skipped: cron expressions ("every Monday 9am"). Only `Every` for now.
+- Repeating jobs (`--repeat`, needs `--every`): a chore, the same task every round. The round prompt is just the task (no `PROGRESS.md`), and `[DONE]` does not end it; it stops only when stopped, at `MaxRuns`, or after 3 failed rounds. The `SCHEDULE` column says `repeat every …`.
+- Built-in jobs (`daemon.Options.Jobs`): created at daemon start when no job has that name. A stopped one stays stopped; a deleted one comes back.
+- The curator (Hermes' curator): a built-in repeating job, every 7 days, in Germes' home folder (`prompt/curator.md`). It runs `germes insights --days 60`, merges overlapping skills, moves skills unused for 30 days (and older than 30 days) to `skills/.archive/` (never deletes), fixes descriptions, and brings each memory file under 80% of its limit. It changes nothing outside `memories/` and `skills/`. The first round runs when it is created. `germes job stop curator` turns it off.
 
 ### Workflows
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -115,5 +116,23 @@ func TestJobStopsAtMaxRuns(t *testing.T) {
 	}
 	if err := s.StartJob(context.Background(), j.ID); err == nil {
 		t.Fatal("started a job that ran all its rounds")
+	}
+}
+
+func TestRepeatingJobIgnoresDone(t *testing.T) {
+	s, r := newTestScheduler(t, "all finished [DONE]", "all finished [DONE]")
+	j, err := s.CreateJob(context.Background(), api.JobRequest{Dir: t.TempDir(), Prompt: "tidy up", Repeat: true, Every: time.Millisecond, MaxRuns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobDone || j.Runs != 2 {
+		t.Fatalf("got %s after %d runs, want done after 2 (max runs)", j.Status, j.Runs)
+	}
+	if strings.Contains(r.turns[0].Prompt, "PROGRESS.md") {
+		t.Fatalf("a repeating round got the goal instructions: %q", r.turns[0].Prompt)
+	}
+	if _, err := s.CreateJob(context.Background(), api.JobRequest{Dir: t.TempDir(), Prompt: "x", Repeat: true}); err == nil {
+		t.Fatal("created a repeating job with no every")
 	}
 }

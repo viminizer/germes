@@ -25,7 +25,8 @@ blocked:                 # commands and files no agent may touch, Claude Code sy
 Commands:
 - `germes reserve on|off <engine>`: turn an engine's reserve on or off.
 - `germes ls`: list sessions. `germes stop <id>`: stop a session's turn.
-- `germes job add [--every 1h] [--max-runs n] [--name x] "<prompt>"`: run a prompt again and again in the current folder, a new session each round, until the agent ends a reply with [DONE]. `germes job ls|start|stop|rm <id>`.
+- `germes job add [--every 1h] [--max-runs n] [--name x] "<prompt>"`: run a prompt again and again in the current folder, a new session each round, until the agent ends a reply with [DONE]. `--repeat` (needs `--every`): a chore, the same task every round, never done by itself. `germes job ls|start|stop|rm <id>`.
+- The `curator` job (built in, every 7 days, in the Germes home folder) merges overlapping skills, archives unused ones to `skills/.archive/`, and trims memory. `germes job stop curator` turns it off.
 - `germes job add --workflow <name> [--every 1h] ["<goal>"]`: run a workflow each round instead (the goal is the {GOAL} value). `germes workflow ls`, `germes workflow check <name>`.
 
 ## Workflows: `{{HOME}}/workflows/<name>.yaml` (or `<project>/.germes/workflows/`)

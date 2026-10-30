@@ -66,8 +66,8 @@ const usage = `usage:
   germes ls             list sessions
   germes insights [--days 30]  how Germes was used: sessions, turns, tools, skills
   germes stop <id>      stop a session's current step
-  germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"
-                        run a prompt again and again in this folder, a new session each round
+  germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] [--repeat] "<prompt>"
+                        run a prompt again and again in this folder, a new session each round (--repeat: a chore, never done by itself)
   germes job add --workflow <name> [--every ...] ["<goal>"]
                         run a workflow round after round (steps in ~/.germes/workflows/<name>.yaml)
   germes job ls|start|stop|rm <id>  list, start, stop or delete jobs
@@ -338,6 +338,7 @@ func runDaemon(p paths) error {
 			slog.Info("cleanup", "tool_outputs", outputs, "snapshot_repos", snapshots)
 		},
 		Insights: st.GetInsights,
+		Jobs:     []api.JobRequest{{Name: "curator", Dir: p.home, Prompt: strings.TrimSpace(prompt.Curator), NoWorktree: true, Repeat: true, Every: 7 * 24 * time.Hour}},
 	}).Run(context.Background())
 }
 
@@ -595,18 +596,19 @@ func jobCommand(ctx context.Context, client *api.Client, args []string) error {
 		name := fs.String("name", "", "a name to attach to it by")
 		workflow := fs.String("workflow", "", "follow this workflow each round")
 		noWorktree := fs.Bool("no-worktree", false, "work in this folder, not in the job's own git worktree")
+		repeat := fs.Bool("repeat", false, "the same task every round, never done by itself (needs --every)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() > 1 || (fs.NArg() == 0 && *workflow == "") {
-			return errors.New(`usage: germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] [--workflow w] "<prompt>"`)
+			return errors.New(`usage: germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] [--repeat] [--workflow w] "<prompt>"`)
 		}
 		dir, err := os.Getwd()
 		if err != nil {
 			return err
 		}
 		return cli.CreateJob(ctx, client, api.JobRequest{Name: *name, Dir: dir, Prompt: fs.Arg(0), Workflow: *workflow,
-			NoWorktree: *noWorktree, Every: *every, MaxRuns: *maxRuns}, os.Stdout)
+			NoWorktree: *noWorktree, Repeat: *repeat, Every: *every, MaxRuns: *maxRuns}, os.Stdout)
 	}
 	if len(args) != 2 {
 		return fmt.Errorf("usage: germes job %s <id>", args[0])

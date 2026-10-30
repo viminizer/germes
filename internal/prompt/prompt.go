@@ -41,6 +41,12 @@ var executionRules string
 //go:embed review.md
 var Review string
 
+// Curator is the prompt of the built-in weekly job that keeps memory and
+// skills small and without overlap.
+//
+//go:embed curator.md
+var Curator string
+
 // PlanMode is the instruction for a plan turn (both engines).
 //
 //go:embed plan.md

@@ -51,6 +51,9 @@ type Options struct {
 	// Cleanup deletes old files (snapshots, saved tool outputs). It runs at
 	// start and once a day; nil = never.
 	Cleanup func(ctx context.Context)
+	// Jobs are built-in jobs (the curator), created when missing. One that
+	// was stopped stays stopped.
+	Jobs []api.JobRequest
 	// Insights counts what happened since a time (the store).
 	Insights func(ctx context.Context, since time.Time) (api.Insights, error)
 }
@@ -130,6 +133,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.jobs.Start(ctx); err != nil {
 		slog.Error("resume jobs", "err", err)
 	}
+	d.createJobs(ctx)
 
 	// Watch streams never end on their own; cancel them on shutdown or
 	// hand-over, so clients reconnect to the new daemon.
@@ -350,6 +354,23 @@ func shutdown(srv *http.Server) {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Warn("http shutdown", "err", err)
+	}
+}
+
+// createJobs creates the built-in jobs that do not exist yet.
+func (d *Daemon) createJobs(ctx context.Context) {
+	for _, r := range d.opts.Jobs {
+		_, err := d.jobs.GetJob(ctx, r.Name)
+		var e *api.Error
+		if !errors.As(err, &e) || e.Code != api.CodeNotFound {
+			if err != nil {
+				slog.Warn("read built-in job", "job", r.Name, "err", err)
+			}
+			continue
+		}
+		if _, err := d.jobs.CreateJob(ctx, r); err != nil {
+			slog.Warn("create built-in job", "job", r.Name, "err", err)
+		}
 	}
 }
 

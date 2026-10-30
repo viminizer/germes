@@ -130,6 +130,8 @@ func (s *Scheduler) CreateJob(ctx context.Context, r api.JobRequest) (api.Job, e
 		return api.Job{}, api.NewError(api.CodeInvalid, "empty prompt")
 	case r.Every < 0 || r.MaxRuns < 0:
 		return api.Job{}, api.NewError(api.CodeInvalid, "every and max runs must not be negative")
+	case r.Repeat && (r.Every == 0 || r.Workflow != ""):
+		return api.Job{}, api.NewError(api.CodeInvalid, "a repeating job needs every, and no workflow")
 	}
 	if fi, err := os.Stat(r.Dir); err != nil || !fi.IsDir() {
 		return api.Job{}, api.NewError(api.CodeInvalid, "folder %q does not exist", r.Dir)
@@ -141,7 +143,7 @@ func (s *Scheduler) CreateJob(ctx context.Context, r api.JobRequest) (api.Job, e
 	}
 	now := time.Now()
 	j := api.Job{ID: api.NewID(), Name: strings.TrimSpace(r.Name), Dir: r.Dir, Prompt: prompt, NoWorktree: r.NoWorktree,
-		Every: r.Every, MaxRuns: r.MaxRuns, NextRunAt: now, Status: api.JobRunning, Workflow: r.Workflow, CreatedAt: now, UpdatedAt: now}
+		Repeat: r.Repeat, Every: r.Every, MaxRuns: r.MaxRuns, NextRunAt: now, Status: api.JobRunning, Workflow: r.Workflow, CreatedAt: now, UpdatedAt: now}
 	if j.Name == "" {
 		j.Name = j.ID
 	}
@@ -401,7 +403,11 @@ func (s *Scheduler) runRound(ctx context.Context, j api.Job) round {
 	if err != nil {
 		return failed(err)
 	}
-	return s.plainRound(s.waitIdle(ctx, id, 0))
+	reply, failure := s.waitIdle(ctx, id, 0)
+	if j.Repeat {
+		return round{failure: failure}
+	}
+	return s.plainRound(reply, failure)
 }
 
 // plainRound reads a prompt round's reply.
@@ -479,6 +485,9 @@ func (s *Scheduler) checkRound(ctx context.Context, sessionID string) (gone, idl
 // roundPrompt tells the agent how a round works. The first line is the
 // round session's title.
 func roundPrompt(j api.Job) string {
+	if j.Repeat {
+		return fmt.Sprintf("Job %s, round %d.\n\n%s", j.Name, j.Runs, j.Prompt)
+	}
 	return fmt.Sprintf(`Job %s, round %d.
 
 Each round starts with fresh context in the same folder. Read PROGRESS.md first if it exists, do the next piece of work toward the goal, then update PROGRESS.md (what is done, what is left). When nothing is left, end your reply with %s.

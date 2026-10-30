@@ -166,8 +166,9 @@ type Job struct {
 	Dir        string            `json:"dir"`
 	Prompt     string            `json:"prompt"`
 	NoWorktree bool              `json:"no_worktree,omitempty"`
-	Every      time.Duration     `json:"every"`    // time between round starts; 0 = next round right away
-	MaxRuns    int               `json:"max_runs"` // 0 = no limit
+	Repeat     bool              `json:"repeat,omitempty"` // the same task every round, never done by itself (no PROGRESS.md, no [DONE])
+	Every      time.Duration     `json:"every"`            // time between round starts; 0 = next round right away
+	MaxRuns    int               `json:"max_runs"`         // 0 = no limit
 	Runs       int               `json:"runs"`
 	Failures   int               `json:"failures"` // failed rounds in a row
 	NextRunAt  time.Time         `json:"next_run_at"`
@@ -190,6 +191,7 @@ type JobRequest struct {
 	Dir        string        `json:"dir"`
 	Prompt     string        `json:"prompt"`
 	NoWorktree bool          `json:"no_worktree,omitempty"`
+	Repeat     bool          `json:"repeat,omitempty"` // needs Every
 	Every      time.Duration `json:"every,omitempty"`
 	MaxRuns    int           `json:"max_runs,omitempty"`
 }

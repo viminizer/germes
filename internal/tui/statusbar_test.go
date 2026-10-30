@@ -25,9 +25,9 @@ func TestStatusLineFitsAndDropsTheLeastImportantFirst(t *testing.T) {
 		width      int
 		has, lacks []string
 	}{
-		{160, []string{"ready", "gpt-5.5", "57K/200K", "28%", "2h 5m", "✓ 13s", "Fix the footer under the input (germes/abc123)"}, nil},
-		{90, []string{"ready", "gpt-5.5", "57K/200K", "2h 5m", "…"}, []string{"Fix the footer"}},
-		{50, []string{"ready", "gpt-5.5", "57K/200K"}, []string{"2h 5m", "germes/abc123"}},
+		{160, []string{"ready", "gpt 5.5", "57k/200k", "28%", "2h 5m", "✓ 13s", "Fix the footer under the input (germes/abc123)"}, nil},
+		{90, []string{"ready", "gpt 5.5", "57k/200k", "2h 5m", "…"}, []string{"Fix the footer"}},
+		{50, []string{"ready", "gpt 5.5", "57k/200k"}, []string{"2h 5m", "germes/abc123"}},
 		{20, []string{"ready"}, nil},
 	} {
 		got := ansi.Strip(s.view(c.width))
@@ -47,18 +47,18 @@ func TestStatusLineFitsAndDropsTheLeastImportantFirst(t *testing.T) {
 	}
 	// Before a turn ends there is no context: the engine stands in for the
 	// model; before a title the project is on the right.
-	if got := ansi.Strip(statusBar{Engine: "codex-api", Project: "/p/germes"}.view(80)); !strings.Contains(got, "codex-api") || !strings.HasSuffix(got, "─ /p/germes") {
+	if got := ansi.Strip(statusBar{Engine: "codex-api", Project: "/p/germes"}.view(80)); !strings.Contains(got, "codex api") || !strings.HasSuffix(got, "─ /p/germes") {
 		t.Errorf("no context, no title: %q", got)
 	}
 }
 
-func TestFooterWritesShortNumbers(t *testing.T) {
-	for in, want := range map[int]string{950: "950", 57_257: "57K", 1_000_000: "1M", 1_234_567: "1.2M"} {
+func TestStatusLineWritesShortNumbers(t *testing.T) {
+	for in, want := range map[int]string{950: "950", 57_257: "57.3k", 999_950: "1M", 1_234_567: "1.2M"} {
 		if got := shortCount(in); got != want {
 			t.Errorf("shortCount(%d) = %q, want %q", in, got, want)
 		}
 	}
-	for in, want := range map[time.Duration]string{45 * time.Second: "45s", 12 * time.Minute: "12m", 3*time.Hour + 5*time.Minute: "3h 5m", 51 * time.Hour: "2d 3h"} {
+	for in, want := range map[time.Duration]string{45 * time.Second: "45s", 12*time.Minute + 5*time.Second: "12m 5s", 3*time.Hour + 5*time.Minute: "3h 5m", 51 * time.Hour: "2d 3h"} {
 		if got := shortDuration(in); got != want {
 			t.Errorf("shortDuration(%s) = %q, want %q", in, got, want)
 		}
@@ -66,7 +66,12 @@ func TestFooterWritesShortNumbers(t *testing.T) {
 	if got := ansi.Strip(contextUse(api.Context{Used: 300_000, Window: 200_000})); !strings.Contains(got, "[██████████] 100%") {
 		t.Errorf("over the window: %q", got)
 	}
-	if got := ansi.Strip(contextUse(api.Context{Used: 4000})); got != "4K" {
+	for in, want := range map[string]string{"claude-opus-5-5": "opus 5.5", "gpt-6.1-sol": "gpt 6.1 sol", "openai/gpt-5.5": "gpt 5.5"} {
+		if got := modelLabel(in); got != want {
+			t.Errorf("modelLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := ansi.Strip(contextUse(api.Context{Used: 4000})); got != "4k" {
 		t.Errorf("unknown window: %q", got)
 	}
 }

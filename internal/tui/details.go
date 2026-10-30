@@ -56,7 +56,7 @@ func (m *model) showDetails() tea.Cmd {
 // as `$ command`, others as one line of JSON) and its output, each cut at
 // maxDetailLines.
 func detailView(t *api.ToolCall, dir string, width int) string {
-	dot, label := toolMark(t)
+	label := toolStyle(t)
 	var args struct {
 		Command string `json:"command"`
 	}
@@ -65,7 +65,7 @@ func detailView(t *api.ToolCall, dir string, width int) string {
 	if args.Command == "" {
 		in = string(t.Args)
 	}
-	lines := []string{dot + label.Render(t.Name)}
+	lines := []string{styleAccent.Render("● ") + label.Render(toolName(t.Name))}
 	lines = append(lines, detailLines(shortPaths(in, dir), styleText, width)...)
 	if t.Output != "" {
 		lines = append(lines, detailLines(shortPaths(t.Output, dir), styleDim, width)...)

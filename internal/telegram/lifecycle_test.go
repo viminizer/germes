@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -475,9 +476,16 @@ func TestRunReplyRegistrationDuringSend(t *testing.T) {
 				started, release := make(chan api.MessageRequest, 1), make(chan struct{})
 				svc := &registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 3)}}}
 				startup := id != ""
+				// An accepted message keeps the session busy until its turn
+				// ends; for "failed", the older turn's successor still runs.
+				var busy atomic.Bool
+				busy.Store(name == "failed")
 				svc.lookup = func(context.Context, string) (api.Session, error) {
 					if startup {
 						startup = false
+						return api.Session{Status: api.StatusWorking}, nil
+					}
+					if busy.Load() {
 						return api.Session{Status: api.StatusWorking}, nil
 					}
 					return api.Session{Status: api.StatusIdle}, nil
@@ -491,6 +499,7 @@ func TestRunReplyRegistrationDuringSend(t *testing.T) {
 					if name == "failed" {
 						return api.MessageResult{}, api.NewError(api.CodeUnavailable, "send unavailable")
 					}
+					busy.Store(true)
 					return api.MessageResult{SessionID: "s1"}, nil
 				}
 				tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
@@ -515,7 +524,10 @@ func TestRunReplyRegistrationDuringSend(t *testing.T) {
 					// comparison alone cannot prevent premature cleanup.
 					svc.events <- api.Event{SessionID: "s1", Kind: api.KindTurnDone}
 					synctest.Wait()
-					if got := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; got != 8 {
+					tg.mu.Lock()
+					got := tg.state.ReplyTo["s1"]
+					tg.mu.Unlock()
+					if got != 8 {
 						t.Errorf("completion during send erased reservation: topic = %d", got)
 					}
 				}
@@ -534,6 +546,7 @@ func TestRunReplyRegistrationDuringSend(t *testing.T) {
 					t.Error("registered an unknown session ID")
 				}
 				if name != "failed" {
+					busy.Store(false)
 					svc.events <- api.Event{SessionID: "s1", Kind: api.KindText, Text: "next answer"}
 					svc.events <- api.Event{SessionID: "s1", Kind: api.KindTurnDone}
 					synctest.Wait()
@@ -763,4 +776,115 @@ func TestRunCreationPlanNoticeCannotOvertakeReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// A queued turn can finish before the earlier turn's completion is handled
+// (the answer waits on Telegram). Idle with nothing queued is then not the
+// end: the later turn's stored events still have to reach the topic.
+func TestRunLaterTurnFinishedBeforeEarlierCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := savedState(t, "s1", 7)
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 5)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindText, Text: "first answer"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindTurnDone},
+			{SessionID: "s1", Seq: 3, Kind: api.KindUserMessage, Text: "queued"},
+			{SessionID: "s1", Seq: 4, Kind: api.KindText, Text: "second answer"},
+			{SessionID: "s1", Seq: 5, Kind: api.KindTurnDone},
+		}
+		startup := true
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			if startup {
+				startup = false
+				return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+			}
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil // both turns are over
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		for _, ev := range svc.history {
+			svc.events <- ev
+		}
+		synctest.Wait()
+		if len(tr.sent) != 2 || tr.sent[1]["text"] != "second answer" || tr.sent[1]["message_thread_id"] != float64(7) {
+			t.Errorf("later answer lost: sent=%v", tr.sent)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Error("the last completion left the reply destination saved")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A completion handled while a send is in flight is checked again when the
+// send returns, so a finished turn does not stay "waiting" forever.
+func TestRunCompletionDuringSend(t *testing.T) {
+	for _, name := range []string{"accepted", "failed"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "telegram.json")
+				b, err := json.Marshal(state{Topics: map[int64]topic{8: {Project: "/project", SessionID: "s1"}}, ReplyTo: map[string]int64{"s1": 7}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				started, release := make(chan struct{}), make(chan struct{})
+				svc := &registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 2)}}}
+				startup := true
+				svc.lookup = func(context.Context, string) (api.Session, error) {
+					if startup {
+						startup = false
+						return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+					}
+					return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+				}
+				svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+					close(started)
+					<-release
+					if name == "failed" {
+						return api.MessageResult{}, api.NewError(api.CodeUnavailable, "send unavailable")
+					}
+					return api.MessageResult{SessionID: "s1"}, nil
+				}
+				tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+				tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+				tg.bot.http.Transport = tr
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- tg.Run(ctx) }()
+				<-tr.polls
+				tr.updates <- []update{msg(1, 8, kevin, "next message")}
+				<-started
+				// The whole turn ends before the acceptance response.
+				svc.events <- api.Event{SessionID: "s1", Seq: 1, Kind: api.KindText, Text: "the answer"}
+				svc.events <- api.Event{SessionID: "s1", Seq: 2, Kind: api.KindTurnDone}
+				synctest.Wait()
+				if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" || tr.sent[0]["message_thread_id"] != float64(8) {
+					t.Errorf("answer = %v", tr.sent)
+				}
+				close(release)
+				<-tr.polls
+				synctest.Wait()
+				if got, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+					t.Errorf("finished turn still waiting in topic %d", got)
+				}
+				cancel()
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
 }

@@ -69,6 +69,7 @@ type Telegram struct {
 	// Kept across cleanup to distinguish successive requests to the same topic.
 	replyGeneration map[string]uint64
 	replySending    map[string]int
+	replyDone       map[string]int64 // turn_done seq seen while a send was in flight
 
 	outputMu sync.Mutex // serializes stored creation replay with the live watcher
 	output   replyOutput
@@ -97,7 +98,7 @@ func New(svc api.Service, opts Options) *Telegram {
 	}
 	b := &bot{base: base + "/bot" + opts.Token, files: base + "/file/bot" + opts.Token, http: &http.Client{}}
 	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}},
-		replyGeneration: map[string]uint64{}, replySending: map[string]int{},
+		replyGeneration: map[string]uint64{}, replySending: map[string]int{}, replyDone: map[string]int64{},
 		output: replyOutput{last: map[string]string{}, sending: map[string]bool{}, limited: map[string]bool{}, seq: map[string]int64{}, noticeSeq: map[string]int64{}, replaying: map[string]bool{}}}
 	if b, err := os.ReadFile(opts.StatePath); err == nil {
 		if err := json.Unmarshal(b, &t.state); err != nil {
@@ -331,6 +332,9 @@ func (t *Telegram) sendMessage(ctx context.Context, thread int64, r api.MessageR
 		t.registerCreated(ctx, res.SessionID, thread)
 	}
 	t.save()
+	if id != "" {
+		t.finishSent(ctx, id)
+	}
 	return res, err
 }
 

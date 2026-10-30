@@ -141,24 +141,68 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 		}
 		delete(t.output.last, ev.SessionID)
 		delete(t.output.limited, ev.SessionID)
-		// Messages queued during the turn run next: keep listening.
-		s, err := t.svc.GetSession(ctx, ev.SessionID)
-		if err != nil && !api.IsNotFound(err) {
-			if !errors.Is(err, context.Canceled) {
-				slog.Warn("telegram: check a finished turn", "session", ev.SessionID, "err", err)
-			}
-			return // an unknown state is not proof that queued work finished
+		t.finishReply(ctx, ev.SessionID, ev.Seq, generation)
+	}
+}
+
+// finishReply forgets the topic waiting for a session after the turn_done
+// at seq, once the session is gone, or idle with nothing queued and nothing
+// stored after seq: a later turn may have finished before this one's
+// answer went out, and its events are still on their way. A send in flight
+// defers the check to finishSent. Runs with outputMu held.
+func (t *Telegram) finishReply(ctx context.Context, id string, seq int64, generation uint64) {
+	s, err := t.svc.GetSession(ctx, id)
+	if err == nil && (s.Status != api.StatusIdle || len(s.Queued) > 0) {
+		return // messages queued during the turn run next: keep listening
+	}
+	if err == nil {
+		var later api.Page[api.Event]
+		if later, err = t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: seq, Limit: 1}); err == nil && len(later.Items) > 0 {
+			return
 		}
-		if api.IsNotFound(err) || (s.Status == api.StatusIdle && len(s.Queued) == 0) {
-			t.mu.Lock()
-			if t.replyGeneration[ev.SessionID] == generation && t.replySending[ev.SessionID] == 0 {
-				delete(t.state.ReplyTo, ev.SessionID)
-				delete(t.output.seq, ev.SessionID)
-				delete(t.output.noticeSeq, ev.SessionID)
-			}
-			t.mu.Unlock()
-			t.save()
+	}
+	if err != nil && !api.IsNotFound(err) {
+		if !errors.Is(err, context.Canceled) {
+			slog.Warn("telegram: check a finished turn", "session", id, "err", err)
 		}
+		return // an unknown state is not proof that queued work finished
+	}
+	t.mu.Lock()
+	switch {
+	case t.replySending[id] > 0:
+		t.replyDone[id] = seq // the turn may be the one being sent
+	case t.replyGeneration[id] == generation:
+		delete(t.state.ReplyTo, id)
+		delete(t.replyDone, id)
+		delete(t.output.seq, id)
+		delete(t.output.noticeSeq, id)
+	}
+	t.mu.Unlock()
+	t.save()
+}
+
+// finishSent checks a completion that arrived while a send to the session
+// was in flight, now that the send is over. Only a deferred completion
+// waits for output: the poller must not stall behind slow replies.
+func (t *Telegram) finishSent(ctx context.Context, id string) {
+	t.mu.Lock()
+	_, deferred := t.replyDone[id]
+	t.mu.Unlock()
+	if !deferred {
+		return
+	}
+	t.outputMu.Lock()
+	defer t.outputMu.Unlock()
+	t.mu.Lock()
+	seq, done := t.replyDone[id]
+	done = done && t.replySending[id] == 0
+	if done {
+		delete(t.replyDone, id)
+	}
+	generation := t.replyGeneration[id]
+	t.mu.Unlock()
+	if done {
+		t.finishReply(ctx, id, seq, generation)
 	}
 }
 

@@ -106,12 +106,26 @@ func New(svc api.Service, opts Options) *Telegram {
 	return t
 }
 
-// Run polls Telegram and sends answers until ctx ends.
+// Run polls Telegram and sends answers until ctx ends. Its children finish
+// before it returns or propagates a panic, so a replacement bot can start safely.
 func (t *Telegram) Run(ctx context.Context) error {
 	slog.Info("telegram bot started")
+	ctx, cancel := context.WithCancel(ctx)
+	var children sync.WaitGroup
+	defer func() {
+		cancel()
+		children.Wait()
+	}()
 	t.setCommands(ctx)
-	go recovered("telegram watch", func() { t.watch(ctx) })
-	go recovered("telegram typing", func() { t.showTyping(ctx) })
+	children.Add(2)
+	go func() {
+		defer children.Done()
+		recovered("telegram watch", func() { t.watch(ctx) })
+	}()
+	go func() {
+		defer children.Done()
+		recovered("telegram typing", func() { t.showTyping(ctx) })
+	}()
 	t.tellLostAnswers(ctx)
 	for ctx.Err() == nil {
 		var updates []update

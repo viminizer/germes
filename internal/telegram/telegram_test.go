@@ -156,7 +156,26 @@ func (s *fakeService) SendMessage(ctx context.Context, r api.MessageRequest) (ap
 }
 
 func (s *fakeService) Watch(ctx context.Context, f api.WatchFilter) (<-chan api.Event, error) {
-	return s.events, nil
+	out := make(chan api.Event)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-s.events:
+				if !ok {
+					return
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 func (s *fakeService) GetSession(ctx context.Context, id string) (api.Session, error) {

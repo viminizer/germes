@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/viminizer/germes/internal/api"
@@ -48,5 +49,46 @@ func TestModelTitleReplacesTheCutTitleButNotARename(t *testing.T) {
 		if err != nil || got.Title != want {
 			t.Fatalf("rename %q: title %q (err %v), want %q", rename, got.Title, err, want)
 		}
+	}
+}
+
+// countTitler names every session as a greeting and counts the calls.
+type countTitler struct{ calls *atomic.Int32 }
+
+func (c countTitler) CreateTitle(context.Context, string) (string, error) {
+	c.calls.Add(1)
+	return "friendly Greeting", nil
+}
+
+// Like Hermes: small talk asks for a title for 3 messages only, and a
+// session made with a title (a job round) never asks.
+func TestNamingStopsAfterThreeMessagesAndSkipsGivenTitles(t *testing.T) {
+	ctx := context.Background()
+	calls := &atomic.Int32{}
+	m := newTestManager(t, fakeRunner{})
+	m.opts.Titles = countTitler{calls}
+	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	next(t, ch, api.KindTurnDone)
+	for range 4 {
+		if _, err := m.SendMessage(ctx, api.MessageRequest{SessionID: res.SessionID, Text: "thanks"}); err != nil {
+			t.Fatal(err)
+		}
+		next(t, ch, api.KindTurnDone)
+	}
+	job, err := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: "Job x, round 2. Do the work.", Title: "Job x, round 2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, m, job.SessionID)
+	m.Stop(ctx)
+	if n := calls.Load(); n != 3 {
+		t.Errorf("asked for a title %d times, want 3", n)
+	}
+	if s := mustSession(t, m, job.SessionID); s.Title != "Job x, round 2" {
+		t.Errorf("job round title %q", s.Title)
 	}
 }

@@ -141,6 +141,7 @@ type MessageRequest struct {
 	SameDirAs string `json:"same_dir_as,omitempty"` // new session works where this session works (a job's rounds share a worktree)
 	Plan      bool   `json:"plan,omitempty"`        // a plan turn: change nothing; the reply is saved as a plan file
 	Skill     string `json:"skill,omitempty"`       // a skill the turn loads first (/<skill> in the TUI)
+	Title     string `json:"title,omitempty"`       // a new session's title; "" = from the message, then a model names it
 }
 
 // MessageResult says which session got the message.

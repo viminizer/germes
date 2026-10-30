@@ -373,7 +373,7 @@ func (m *Manager) createSession(ctx context.Context, r api.MessageRequest, text 
 		if _, err := os.Stat(src.Dir); err != nil {
 			return api.Session{}, "", api.NewError(api.CodeInvalid, "folder %q of session %s is gone", src.Dir, src.ID)
 		}
-		s := api.Session{ID: api.NewID(), Title: titleOf(text), Project: src.Project, Dir: src.Dir, Branch: src.Branch,
+		s := api.Session{ID: api.NewID(), Title: firstTitle(r, text), Project: src.Project, Dir: src.Dir, Branch: src.Branch,
 			Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
 		return s, "", m.store.CreateSession(ctx, s)
 	}
@@ -384,7 +384,7 @@ func (m *Manager) createSession(ctx context.Context, r api.MessageRequest, text 
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return api.Session{}, "", api.NewError(api.CodeInvalid, "folder %q does not exist", dir)
 	}
-	s := api.Session{ID: api.NewID(), Title: titleOf(text), Project: GetProjectRoot(dir), Dir: dir,
+	s := api.Session{ID: api.NewID(), Title: firstTitle(r, text), Project: GetProjectRoot(dir), Dir: dir,
 		Status: api.StatusIdle, ResumeIDs: map[string]string{}, CreatedAt: now, UpdatedAt: now}
 	warning := ""
 	if r.Worktree {

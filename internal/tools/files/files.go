@@ -284,11 +284,11 @@ func grep(ctx context.Context, c tool.Call, a grepArgs) (string, error) {
 	total := 0
 	rg := rgPath()
 	if rg != "" {
-		out, total, err = rgGrep(ctx, rg, root, a, maxMatches)
+		out, total, err = rgGrep(ctx, rg, root, a, maxMatches, c.IsReadBlocked)
 	} else {
 		// Without ripgrep: one folder walk, .gitignore not read (issue #15).
 		err = walk(ctx, root, func(path, rel string) bool {
-			if only != nil && !only.MatchString(rel) {
+			if (only != nil && !only.MatchString(rel)) || (c.IsReadBlocked != nil && c.IsReadBlocked(path)) {
 				return true
 			}
 			f, err := os.Open(path)

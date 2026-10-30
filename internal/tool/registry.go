@@ -112,6 +112,7 @@ func (r *Registry) Run(ctx context.Context, name string, c Call) (res Result) {
 	}()
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
+	c.IsReadBlocked = func(path string) bool { return r.isReadBlocked(path, c.Dir) }
 	out, err := t.Run(ctx, c)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {

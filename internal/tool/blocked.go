@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -16,6 +17,7 @@ type rule struct {
 	raw     string
 	tool    string
 	pattern string
+	matches func(string) bool // the pattern, compiled once
 }
 
 var ruleRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\((.*)\)$`)
@@ -23,7 +25,7 @@ var ruleRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\((.*)\)$`)
 func parseRule(s string) (rule, error) {
 	s = strings.TrimSpace(s)
 	if m := ruleRe.FindStringSubmatch(s); m != nil {
-		return rule{raw: s, tool: m[1], pattern: m[2]}, nil
+		return rule{raw: s, tool: m[1], pattern: m[2], matches: compilePattern(m[2])}, nil
 	}
 	if ruleRe.MatchString(s+"()") && !strings.ContainsAny(s, "()") {
 		return rule{raw: s, tool: s}, nil // whole tool blocked
@@ -33,22 +35,35 @@ func parseRule(s string) (rule, error) {
 
 // isBlocked checks the call's MatchArg against the rules for its tool.
 func (r *Registry) isBlocked(t Tool, c Call) (string, bool) {
+	value := func() (string, error) { return protectedArgument(c.Args, t.MatchArg) }
+	return r.ruleBlocking([]string{t.Name, t.BlockedAs}, t.MatchArg, value, c.Dir)
+}
+
+// isReadBlocked reports whether a Read rule blocks path.
+func (r *Registry) isReadBlocked(path, dir string) bool {
+	_, blocked := r.ruleBlocking([]string{"Read"}, "file_path", func() (string, error) { return path, nil }, dir)
+	return blocked
+}
+
+// ruleBlocking returns the first rule of tools that blocks the value of arg
+// (read only when a rule has a pattern), or false.
+func (r *Registry) ruleBlocking(tools []string, arg string, value func() (string, error), dir string) (string, bool) {
 	for _, rl := range r.blocked {
-		if rl.tool != t.Name && rl.tool != t.BlockedAs {
+		if rl.tool == "" || !slices.Contains(tools, rl.tool) {
 			continue
 		}
 		if rl.pattern == "" {
 			return rl.raw, true
 		}
-		value, err := protectedArgument(c.Args, t.MatchArg)
+		v, err := value()
 		if err != nil {
 			return fmt.Sprintf("%s: %v", rl.raw, err), true
 		}
-		if value == "" {
+		if v == "" {
 			continue
 		}
-		for _, candidate := range candidates(t.MatchArg, value, c.Dir) {
-			if match(rl.pattern, candidate) {
+		for _, candidate := range candidates(arg, v, dir) {
+			if rl.matches(candidate) {
 				return rl.raw, true
 			}
 		}
@@ -141,13 +156,13 @@ func candidates(arg, value, dir string) []string {
 	return out
 }
 
-// match reports whether s matches pattern, where * matches any characters
-// (also /) and a leading **/ matches any folder.
-func match(pattern, s string) bool {
+// compilePattern turns a rule's pattern into a matcher: * matches any
+// characters (also /) and a leading **/ matches any folder. Compiled once
+// per rule: Grep checks every file it searches.
+func compilePattern(pattern string) func(string) bool {
 	if rest, ok := strings.CutPrefix(pattern, "**/"); ok {
-		return match(rest, s) || match(rest, filepath.Base(s)) || match("*/"+rest, s)
+		inner, nested := compilePattern(rest), compilePattern("*/"+rest)
+		return func(s string) bool { return inner(s) || inner(filepath.Base(s)) || nested(s) }
 	}
-	re := "(?s)^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$"
-	ok, _ := regexp.MatchString(re, s)
-	return ok
+	return regexp.MustCompile("(?s)^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$").MatchString
 }

@@ -24,6 +24,10 @@ type Call struct {
 	SessionID string
 	Dir       string // project folder; relative paths resolve here
 	Args      json.RawMessage
+	// IsReadBlocked reports whether the block list keeps Read away from a
+	// file, so tools that read many files (Grep) skip it too. The registry
+	// sets it; nil = nothing blocked.
+	IsReadBlocked func(path string) bool
 }
 
 // Result is what goes back to the model. Errors are results too.

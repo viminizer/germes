@@ -1,11 +1,14 @@
 package files
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/viminizer/germes/internal/tool"
 )
 
 // search runs Glob or Grep in dir.
@@ -89,6 +92,28 @@ func TestCutResultsSaySo(t *testing.T) {
 		}
 		if got := search(t, "Grep", dir, "hit"); !strings.Contains(got, want[withRg]) {
 			t.Errorf("rg %v: no note in %q", withRg, got[len(got)-120:])
+		}
+	}
+}
+
+func TestGrepSkipsFilesReadMayNotOpen(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("TOKEN=secret\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("// TOKEN is read from the env\n"), 0o600)
+	reg, err := tool.NewRegistry(New(), nil, []string{"Read(**/.env*)"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, withRg := range []bool{true, false} {
+		if withRg && rgPath() == "" {
+			continue
+		}
+		if !withRg {
+			t.Setenv("PATH", "")
+		}
+		res := reg.Run(context.Background(), "Grep", tool.Call{Dir: dir, Args: []byte(`{"pattern":"TOKEN"}`)})
+		if strings.Contains(res.Output, "secret") || !strings.Contains(res.Output, "main.go:1:") {
+			t.Errorf("rg %v: %q", withRg, res.Output)
 		}
 	}
 }

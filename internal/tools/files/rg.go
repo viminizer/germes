@@ -27,10 +27,7 @@ func rgPath() string {
 // line it prints. It returns what ripgrep printed on stderr when it failed
 // without output.
 func rgRun(ctx context.Context, rg, root string, args []string, line func(string)) error {
-	dir, target := root, []string{}
-	if fi, err := os.Stat(root); err == nil && !fi.IsDir() {
-		dir, target = filepath.Dir(root), []string{filepath.Base(root)}
-	}
+	dir, target := rgDir(root)
 	args = append([]string{"--hidden", "--color", "never"}, args...)
 	for _, d := range skipDirs {
 		args = append(args, "--glob", "!"+d)
@@ -64,9 +61,19 @@ func rgRun(ctx context.Context, rg, root string, args []string, line func(string
 	return fmt.Errorf("rg: %s", strings.TrimSpace(stderr.String()))
 }
 
+// rgDir is where ripgrep runs for root, and what it gets to search: root
+// itself, or a file's folder and the file.
+func rgDir(root string) (string, []string) {
+	if fi, err := os.Stat(root); err == nil && !fi.IsDir() {
+		return filepath.Dir(root), []string{filepath.Base(root)}
+	}
+	return root, nil
+}
+
 // rgGrep searches with ripgrep. It returns the first max matches as
-// "file:line: text" and how many there are in all.
-func rgGrep(ctx context.Context, rg, root string, a grepArgs, max int) ([]string, int, error) {
+// "file:line: text" and how many there are in all. Matches in files
+// isBlocked refuses (nil = none) are dropped.
+func rgGrep(ctx context.Context, rg, root string, a grepArgs, max int, isBlocked func(string) bool) ([]string, int, error) {
 	// --null ends the path with a NUL: a path may hold a colon.
 	args := []string{"--line-number", "--no-heading", "--with-filename", "--null",
 		"--max-columns", fmt.Sprint(maxColumns), "--max-columns-preview", "--regexp", a.Pattern}
@@ -75,15 +82,21 @@ func rgGrep(ctx context.Context, rg, root string, a grepArgs, max int) ([]string
 	}
 	var out []string
 	total := 0
+	dir, _ := rgDir(root)
 	err := rgRun(ctx, rg, root, args, func(l string) {
+		path, rest, ok := strings.Cut(l, "\x00")
+		if !ok {
+			return // not a match line
+		}
+		if isBlocked != nil && isBlocked(filepath.Join(dir, path)) {
+			return
+		}
 		total++
 		if len(out) < max {
-			if path, rest, ok := strings.Cut(l, "\x00"); ok {
-				if n, text, ok := strings.Cut(rest, ":"); ok {
-					l = fmt.Sprintf("%s:%s: %s", path, n, strings.TrimSpace(text))
-				}
+			if n, text, ok := strings.Cut(rest, ":"); ok {
+				rest = fmt.Sprintf("%s: %s", n, strings.TrimSpace(text))
 			}
-			out = append(out, l)
+			out = append(out, path+":"+rest)
 		}
 	})
 	return out, total, err

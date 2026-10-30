@@ -243,7 +243,11 @@ func items(msgs []llm.Message) []any {
 			out = append(out, map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": m.Text}}})
 		case llm.RoleAssistant:
 			if m.Text != "" {
-				out = append(out, map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": m.Text}}})
+				msg := map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": m.Text}}}
+				if m.Phase != "" {
+					msg["phase"] = string(m.Phase) // the model tells progress from final answers by it
+				}
+				out = append(out, msg)
 			}
 			for _, tc := range m.ToolCalls {
 				args := string(tc.Args)
@@ -287,6 +291,7 @@ type item struct {
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+	Phase     string `json:"phase"`
 	Content   []struct {
 		Type, Text string
 	} `json:"content"`
@@ -360,7 +365,7 @@ func itemChunk(raw json.RawMessage) (llm.Chunk, bool) {
 				b.WriteString(part.Text)
 			}
 		}
-		return llm.Chunk{Kind: llm.KindText, Text: b.String()}, b.Len() > 0
+		return llm.Chunk{Kind: llm.KindText, Text: b.String(), Phase: llm.Phase(it.Phase)}, b.Len() > 0
 	case "function_call":
 		return llm.Chunk{Kind: llm.KindToolCall, ToolCall: &llm.ToolCall{ID: it.CallID, Name: it.Name, Args: json.RawMessage(it.Arguments)}}, true
 	case "reasoning":

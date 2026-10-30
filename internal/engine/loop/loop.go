@@ -9,6 +9,7 @@ import (
 	"github.com/viminizer/germes/internal/stream"
 	"log/slog"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 
@@ -178,6 +179,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
 	g := newGuard(t.Dir)
+	askedWhy := false // the model sent a final answer with tool calls once
 	defer func() {
 		if spec.review && l.reviews() && l.opts.Reviews.IsDue(t.SessionID) {
 			l.opts.Reviews.Run(t.SessionID, func(ctx context.Context) { l.review(ctx, t) })
@@ -201,13 +203,13 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		}
 		var raws []llm.Message
 		var calls []llm.ToolCall
-		var texts []string
+		var texts []llm.Message
 		for ch := range chunks {
 			switch ch.Kind {
 			case llm.KindTextDelta:
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindTextDelta, Text: ch.Text})
 			case llm.KindText:
-				texts = append(texts, ch.Text)
+				texts = append(texts, llm.Message{Role: llm.RoleAssistant, Text: ch.Text, Phase: ch.Phase})
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindText, Text: ch.Text})
 			case llm.KindToolCall:
 				calls = append(calls, *ch.ToolCall)
@@ -229,8 +231,17 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		}
 		// Reasoning first, then the assistant's text and calls, then results.
 		msgs = append(msgs, raws...)
-		for _, text := range texts {
-			msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Text: text})
+		msgs = append(msgs, texts...)
+		if len(calls) > 0 && isFinal(texts) {
+			// A final answer ends the turn: calls sent with it do not run.
+			// Once a turn the model may say why it is not done and go on.
+			if !askedWhy && step < spec.maxSteps {
+				askedWhy = true
+				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: finalWithCalls})
+				continue
+			}
+			slog.Warn("final answer came with tool calls; not running them", "session", t.SessionID, "calls", len(calls))
+			calls = nil
 		}
 		if len(calls) == 0 {
 			if nudge := g.finishNudge(); nudge != "" && step < spec.maxSteps {
@@ -290,4 +301,14 @@ func (l *Loop) fail(ctx context.Context, out chan<- engine.Event, err error) {
 		return
 	}
 	stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
+}
+
+// finalWithCalls goes back to a model that gave its final answer and asked
+// for tools in the same step.
+const finalWithCalls = "[Germes] You gave your final answer and also asked for tools, which did not run. " +
+	"If the task is done, stop now. If it is not, say in one sentence why more work is needed, then call the tools again."
+
+// isFinal reports whether one of a step's texts is the model's final answer.
+func isFinal(texts []llm.Message) bool {
+	return slices.ContainsFunc(texts, func(m llm.Message) bool { return m.Phase == llm.PhaseFinalAnswer })
 }

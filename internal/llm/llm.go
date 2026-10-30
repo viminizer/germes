@@ -37,6 +37,7 @@ const (
 type Message struct {
 	Role       Role
 	Text       string
+	Phase      Phase           // assistant text: commentary or final answer; "" = not known
 	ToolCalls  []ToolCall      // assistant
 	ToolCallID string          // tool
 	Raw        json.RawMessage // raw
@@ -71,11 +72,22 @@ const (
 	KindError     Kind = "error"
 )
 
+// Phase says what an assistant text is: progress while the model works,
+// or its final answer, which ends the turn (Codex sends it per message).
+type Phase string
+
+// Phases.
+const (
+	PhaseCommentary  Phase = "commentary"
+	PhaseFinalAnswer Phase = "final_answer"
+)
+
 // Chunk is one piece of a streamed answer. The channel ends after Done,
 // LimitHit or Error.
 type Chunk struct {
 	Kind     Kind
 	Text     string
+	Phase    Phase // KindText: commentary or final answer; "" = the model did not say
 	ToolCall *ToolCall
 	Raw      json.RawMessage
 	Usage    *Usage

@@ -66,6 +66,9 @@ func messages(events []api.Event) []llm.Message {
 func convert(events []api.Event) []llm.Message {
 	var out []llm.Message
 	open := map[string]bool{} // tool calls still waiting for a result
+	// Stored texts have no phase: a text followed by tool calls was
+	// progress, the others ended a turn.
+	lastText := -1
 	closeOpen := func() {
 		for id := range open {
 			out = append(out, llm.Message{Role: llm.RoleTool, ToolCallID: id, Text: "interrupted: no result"})
@@ -76,6 +79,7 @@ func convert(events []api.Event) []llm.Message {
 		switch ev.Kind {
 		case api.KindUserMessage:
 			closeOpen()
+			lastText = -1
 			out = append(out, llm.Message{Role: llm.RoleUser, Text: ev.Text})
 		case api.KindAttachment:
 			if n := len(out); n > 0 && out[n-1].Role == llm.RoleUser {
@@ -83,12 +87,19 @@ func convert(events []api.Event) []llm.Message {
 			}
 		case api.KindText:
 			closeOpen()
-			out = append(out, llm.Message{Role: llm.RoleAssistant, Text: ev.Text})
+			if lastText >= 0 {
+				out[lastText].Phase = llm.PhaseCommentary // more followed it
+			}
+			lastText = len(out)
+			out = append(out, llm.Message{Role: llm.RoleAssistant, Text: ev.Text, Phase: llm.PhaseFinalAnswer})
 		case api.KindToolCall:
 			if ev.Tool == nil {
 				continue
 			}
 			call := llm.ToolCall{ID: ev.Tool.ID, Name: ev.Tool.Name, Args: ev.Tool.Args}
+			if lastText >= 0 {
+				out[lastText].Phase, lastText = llm.PhaseCommentary, -1
+			}
 			// Calls of one step share one assistant message.
 			if n := len(out); n > 0 && out[n-1].Role == llm.RoleAssistant && out[n-1].Text == "" {
 				out[n-1].ToolCalls = append(out[n-1].ToolCalls, call)

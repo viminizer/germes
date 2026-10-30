@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -194,5 +195,55 @@ func TestPlanTurnReadsOnly(t *testing.T) {
 	}
 	if last := r.Messages[len(r.Messages)-1].Text; !strings.Contains(last, "Plan mode") {
 		t.Fatalf("no plan instruction: %q", last)
+	}
+}
+
+// finalModel answers with a final answer and a tool call in one response.
+type finalModel struct{ requests int }
+
+func (f *finalModel) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, error) {
+	f.requests++
+	out := make(chan llm.Chunk, 3)
+	out <- llm.Chunk{Kind: llm.KindText, Text: "All done.", Phase: llm.PhaseFinalAnswer}
+	out <- llm.Chunk{Kind: llm.KindToolCall, ToolCall: &llm.ToolCall{ID: "c1", Name: "echo", Args: json.RawMessage(`{}`)}}
+	out <- llm.Chunk{Kind: llm.KindDone}
+	close(out)
+	return out, nil
+}
+
+func TestFinalAnswerEndsTheTurn(t *testing.T) {
+	model := &finalModel{}
+	l := New(model, newEchoRegistry(t), prompt.NewBuilder(t.TempDir(), noMemory{}, noSkills{}),
+		fakeHistory{{Seq: 1, Kind: api.KindUserMessage, Text: "check it"}}, Options{Name: "fake", Toolsets: []string{"core"}})
+	events, _ := l.Run(context.Background(), engine.Turn{SessionID: "s", Dir: t.TempDir()})
+	var kinds []engine.Kind
+	for ev := range events {
+		kinds = append(kinds, ev.Kind)
+	}
+	// Asked once why it is not done; the same answer again ends the turn.
+	if model.requests != 2 || slices.Contains(kinds, engine.KindToolCall) || kinds[len(kinds)-1] != engine.KindDone {
+		t.Fatalf("requests %d, events %v; want two requests, no tool run, then done", model.requests, kinds)
+	}
+}
+
+func TestHistoryRebuildsPhases(t *testing.T) {
+	msgs := messages([]api.Event{
+		{Kind: api.KindUserMessage, Text: "a"},
+		{Kind: api.KindText, Text: "looking"},
+		{Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "x", Name: "Read"}},
+		{Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "x", Output: "ok"}},
+		{Kind: api.KindText, Text: "first part"},
+		{Kind: api.KindText, Text: "it works"},
+		{Kind: api.KindTurnDone},
+	})
+	var phases []llm.Phase
+	for _, m := range msgs {
+		if m.Text != "" && m.Role == llm.RoleAssistant {
+			phases = append(phases, m.Phase)
+		}
+	}
+	want := []llm.Phase{llm.PhaseCommentary, llm.PhaseCommentary, llm.PhaseFinalAnswer}
+	if !slices.Equal(phases, want) {
+		t.Fatalf("phases %v, want %v", phases, want)
 	}
 }

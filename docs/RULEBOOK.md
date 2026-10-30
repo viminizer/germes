@@ -175,6 +175,14 @@ Each UI element of the TUI (banner, message, transcript, status bar, composer, p
 - Check: a new UI element gets its own file and type in `internal/tui`; its view takes the width and never writes past it.
 - Example: `internal/tui/statusbar.go`
 
+## R46. Database updates keep older daemons working
+
+During a hand-over an older daemon still runs on the database, so a normal migration only adds: new tables, and new columns that are nullable or have a `DEFAULT`. Removing or renaming goes in two steps: an additive `NNN_x.sql` adds the new form and copies the data, the new code uses it, and a later `NNN_x.contract.sql` copies what older daemons wrote meanwhile (only into rows the new code has not set) and then removes the old form. Only the daemon runs migrations: additive ones when it opens the store, contract ones once every older daemon's process is gone (`Daemon.runContract`). `germes doctor` only reads.
+
+- From: issue #21, 2026-10-30 (Kevin: "finish the other part of the issue")
+- Check: `go test ./internal/store -run TestAdditiveMigrationsKeepOlderDaemonsWorking` passes; no `DROP`, `RENAME`, or `NOT NULL` column without `DEFAULT` outside a `.contract.sql` file; only `cmd/germes/main.go` (the daemon) calls `store.New`.
+- Example: `internal/store/migrate_test.go` (`TestRenameOverlapKeepsBothVersionsWrites`)
+
 ## Default rules
 
 ### Code

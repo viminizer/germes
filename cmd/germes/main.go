@@ -347,8 +347,8 @@ func runDaemon(p paths) error {
 			}
 			slog.Info("cleanup", "tool_outputs", outputs, "snapshot_repos", snapshots, "telegram_files", tgFiles)
 		},
-		Insights: st.GetInsights,
-		Jobs:     []api.JobRequest{{Name: "curator", Dir: p.home, Prompt: strings.TrimSpace(prompt.Curator), NoWorktree: true, Repeat: true, Every: 7 * 24 * time.Hour}},
+		Insights: st.GetInsights, RunContractMigrations: st.RunContractMigrations,
+		Jobs: []api.JobRequest{{Name: "curator", Dir: p.home, Prompt: strings.TrimSpace(prompt.Curator), NoWorktree: true, Repeat: true, Every: 7 * 24 * time.Hour}},
 	}).Run(ctx)
 }
 

@@ -705,7 +705,9 @@ Layers, stable first (for the cache):
 - One `Store` type. Its methods satisfy the small interfaces defined by `session`, `router` and `job`.
 
 ```go
-func New(path string) (*Store, error)   // opens the db, runs migrations
+func New(path string) (*Store, error)   // opens the db, runs pending additive migrations (the daemon only)
+func (s *Store) RunContractMigrations(ctx context.Context) error // pending .contract.sql migrations
+func GetPendingMigrations(ctx context.Context, path string) (int, error) // read-only, for doctor
 func (s *Store) Close() error
 
 // sessions: Create/Get/Update/Delete/ListSessions
@@ -715,7 +717,7 @@ func (s *Store) Close() error
 ```
 
 - Tables: `sessions`, `events` (key: session id + seq, payload as JSON), `events_fts` (FTS5 over event text), `jobs`, `limits`, `usage`.
-- Migrations: numbered SQL files embedded in the binary, run in `New` (R18). What already ran is read first, without a lock, so an up-to-date database opens even while another process writes. Each pending one runs under the write lock (`BEGIN IMMEDIATE`), and whether it ran meanwhile is checked again after taking the lock, from its own row in `schema_migrations`: the daemon and `germes doctor` may open the database at once after an update, and the one that waited skips what the other did (#21). Removing or renaming something an old daemon still uses during a hand-over is not handled yet (#21).
+- Migrations: numbered SQL files embedded in the binary, run in `New` (R18). What already ran is read first, without a lock, so an up-to-date database opens even while another process writes. Each pending one runs under the write lock (`BEGIN IMMEDIATE`), and whether it ran meanwhile is checked again after taking the lock, from its own row in `schema_migrations`: two daemons may migrate at once, and the one that waited skips what the other did (#21). Two files with one number are refused. During a hand-over an older daemon still uses the database (R46): a normal `NNN_x.sql` only adds; removing or renaming waits in a `NNN_x.contract.sql`, which `Store.RunContractMigrations` runs once every older daemon's process is gone. The daemon checks at start (after reading `~/.germes/old/`) and when it sees the last older daemon exit; each registry file holds the private socket and the process id, and only a process that no longer exists (or a removed file) counts as exited, never a socket that does not answer. A failed contract update rolls back, is logged, the daemon keeps serving on the expanded schema, and the next start tries again. `germes doctor` only reads: `GetPendingMigrations` opens the file read-only and reports waiting updates.
 - `New` takes a filesystem path, not a SQLite URI. Resolve relative paths and encode the path separately from the fixed URI query; literal `%`, `?` and `#` in names must not select another database or override connection settings. Reopening preserves data at that exact path.
 - WAL mode + busy timeout: reads do not block writes. Every pooled connection enables foreign keys and a 5000 ms busy timeout.
 - Search is `ListEvents` with a `Query` filter. No new verb.
@@ -1211,8 +1213,9 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Old daemon after an upgrade: it hands over at once (see "Daemon module"). The new daemon does not come up: the old one keeps serving. An old daemon that crashes while finishing turns: its stream to the new daemon ends, and the new daemon removes its registry file and socket and marks the turns it left as `interrupted` (checked live with `kill -9`). A `claude` process of a killed daemon runs on alone until its turn ends; its output is lost. Clients holding a kept-alive connection to the old daemon are moved: it closes its main socket and watch streams after the hand-over.
 - Daemon crash in the middle of a turn (working, or paused for an engine limit): on restart the turn is saved as `interrupted`. Jobs continue; advance-before-run means no double round, and a round that ended during the hand-over or restart is still read (`Finished`, see "Job module"). A round the restart cut is not counted as a failure, but 3 cut rounds in a row fail the job (a round may be what crashes the daemon).
 - A goroutine panics (worker, job, telegram): recover it, save an `error` event, the session goes idle. The daemon keeps running.
-- Migration fails or database broken: refuse to start, do not touch the file. Never delete data automatically. `germes doctor` says to move a broken file away, but for a busy or locked database (another process held it longer than the 5 s busy timeout) it says to run doctor again (`store.IsBusy`).
+- Migration fails or database broken: refuse to start, do not touch the file. Never delete data automatically. `germes doctor` never creates, updates or moves the database; it says to move a broken file away, but for a busy or locked database (another process held it longer than the 5 s busy timeout) it says to run doctor again (`store.IsBusy`).
 - Database busy: wait (busy timeout).
+- A contract update (`NNN_x.contract.sql`) fails: it rolls back and stays pending, the error is logged, the daemon keeps serving on the expanded schema, and the next start tries again. It never runs while an older daemon's process may still exist (#21, R46).
 - Disk full: saving fails, an `error` event is recorded if possible, the session goes idle.
 - Snapshot cleanup cannot read project/age metadata or inspect a project (permission, I/O or other error): preserve that snapshot repo, continue cleaning independent entries, return joined errors with the number removed, and log them in the daemon cleanup callback; a later cleanup retries. An active repo is skipped without waiting. Only `os.ErrNotExist` confirms a project is gone. Missing folder records identify unrelated/uninitialized entries and are left alone; invalid records or missing/non-regular indexes for existing projects are errors, not proof of age.
 

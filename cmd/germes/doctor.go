@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,16 +44,20 @@ func doctor(ctx context.Context, p paths, client *api.Client) error {
 		check("engines "+strings.Join(engines, ", "), problem, "log in with `codex login`, or install Claude Code")
 	}
 
-	st, err := store.New(p.db)
-	if err == nil {
-		st.Close()
-	}
-	fix := "move the file away (Germes starts a new one); never edit it"
-	if store.IsBusy(err) {
+	// Read-only: doctor never creates, updates or moves the database.
+	pending, err := store.GetPendingMigrations(context.Background(), p.db)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		fmt.Printf("· database %s: none yet (the daemon creates it)\n", p.db)
+	case store.IsBusy(err):
 		// The file is fine; another Germes process (an update's migration) held it.
-		fix = "another Germes process is using it; run `germes doctor` again in a moment"
+		check("database "+p.db, err.Error(), "another Germes process is using it; run `germes doctor` again in a moment")
+	default:
+		check("database "+p.db, errText(err), "move the file away (Germes starts a new one); never edit it")
+		if err == nil && pending > 0 {
+			fmt.Printf("· database: %d update(s) waiting (the daemon runs them)\n", pending)
+		}
 	}
-	check("database "+p.db, errText(err), fix)
 
 	pid, err := daemon.GetLockHolder(p.lock)
 	switch {

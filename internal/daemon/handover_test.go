@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,10 +60,12 @@ func (r *gateRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Even
 
 // instance is one daemon of a test, on the shared files in dir.
 type instance struct {
-	d      *Daemon
-	runner *gateRunner
-	done   chan struct{} // closed when Run returns
-	err    error         // Run's result, set before done closes
+	d           *Daemon
+	runner      *gateRunner
+	done        chan struct{} // closed when Run returns
+	err         error         // Run's result, set before done closes
+	contracts   atomic.Int32  // RunContractMigrations calls
+	contractErr error         // what RunContractMigrations returns
 }
 
 func newInstance(t *testing.T, dir, name string, startNew func() error) *instance {
@@ -76,9 +79,11 @@ func newInstance(t *testing.T, dir, name string, startNew func() error) *instanc
 	r := newGateRunner(name)
 	sessions := session.NewManager(st, r, session.Options{Elsewhere: old})
 	jobs := job.NewScheduler(st, sessions, job.Options{})
-	d := New(sessions, jobs, old, Options{Version: name, SocketPath: filepath.Join(dir, "s.sock"),
-		LockPath: filepath.Join(dir, "lock"), OldDir: filepath.Join(dir, "old"), StartNew: startNew})
-	return &instance{d: d, runner: r, done: make(chan struct{})}
+	in := &instance{runner: r, done: make(chan struct{})}
+	in.d = New(sessions, jobs, old, Options{Version: name, SocketPath: filepath.Join(dir, "s.sock"),
+		LockPath: filepath.Join(dir, "lock"), OldDir: filepath.Join(dir, "old"), StartNew: startNew,
+		RunContractMigrations: func(ctx context.Context) error { in.contracts.Add(1); return in.contractErr }})
+	return in
 }
 
 func (in *instance) start(t *testing.T) {
@@ -267,6 +272,52 @@ func TestHandOverFinishesRunningTurn(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(filepath.Dir(a.d.opts.SocketPath), "old")); len(entries) != 0 {
 		t.Fatalf("old daemon left its registry file")
+	}
+}
+
+func TestContractUpdatesWaitForTheOldDaemon(t *testing.T) {
+	a, b, client := setup(t, nil)
+	if n := a.contracts.Load(); n != 1 {
+		t.Fatalf("A with no older daemon ran contract updates %d times", n)
+	}
+	startTurn(t, a, client)
+	handOver(t, a, client)
+	// A registered its process id, the proof B waits on.
+	files, _ := filepath.Glob(filepath.Join(filepath.Dir(a.d.opts.SocketPath), "old", "*"))
+	if len(files) != 1 {
+		t.Fatalf("registry: %v", files)
+	}
+	if _, pid, err := readEntry(files[0]); err != nil || pid != os.Getpid() {
+		t.Fatalf("registry entry: pid %d, %v", pid, err)
+	}
+	// A still runs its turn: B must not remove what A uses.
+	time.Sleep(300 * time.Millisecond)
+	if n := b.contracts.Load(); n != 0 {
+		t.Fatalf("B ran contract updates while A ran: %d", n)
+	}
+	close(a.runner.release)
+	if err := waitExit(t, a); err != nil {
+		t.Fatalf("old daemon: %v", err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); b.contracts.Load() == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	}
+	if n := b.contracts.Load(); n != 1 {
+		t.Fatalf("B ran contract updates %d times after A exited", n)
+	}
+}
+
+func TestFailedContractUpdatesKeepTheDaemonServing(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "gd") // short: socket paths are limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	a := newInstance(t, dir, "A", nil)
+	a.contractErr = errors.New("no such column")
+	a.start(t)
+	waitVersion(t, api.NewClient(filepath.Join(dir, "s.sock")), "A")
+	if n := a.contracts.Load(); n != 1 {
+		t.Fatalf("contract updates tried %d times", n)
 	}
 }
 

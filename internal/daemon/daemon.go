@@ -56,6 +56,10 @@ type Options struct {
 	Jobs []api.JobRequest
 	// Insights counts what happened since a time (the store).
 	Insights func(ctx context.Context, since time.Time) (api.Insights, error)
+	// RunContractMigrations runs the database updates that remove or rename what
+	// an older daemon may still use (the store). It runs once every older
+	// daemon surely exited; nil = never.
+	RunContractMigrations func(ctx context.Context) error
 }
 
 // Gateway is a long-running client inside the daemon (the Telegram bot). It
@@ -127,6 +131,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	// Old daemons first: their running sessions are not interrupted.
 	d.old.load(ctx)
+	d.runContract(ctx)
 	if err := d.sessions.Start(ctx); err != nil {
 		slog.Error("recover sessions", "err", err)
 	}
@@ -139,7 +144,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// hand-over, so clients reconnect to the new daemon.
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
-	d.old.relay(serveCtx, d.sessions)
+	d.old.relay(serveCtx, d.sessions, func() { d.runContract(serveCtx) })
 	srv := &http.Server{Handler: api.NewHandler(d), BaseContext: func(net.Listener) context.Context { return serveCtx }}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
@@ -231,6 +236,20 @@ func (d *Daemon) handOver(ctx context.Context, unlock func()) (*privateServer, e
 	return nil, errors.New("the new daemon did not come up; see the log")
 }
 
+// runContract runs the contract database updates once every older daemon
+// surely exited: at start, and when the last one exits. Running it twice is
+// harmless: each update checks under the write lock whether it ran. A
+// failure is logged; this daemon keeps serving on the expanded schema and
+// the next start tries again.
+func (d *Daemon) runContract(ctx context.Context) {
+	if d.opts.RunContractMigrations == nil || !d.old.allExited() {
+		return
+	}
+	if err := d.opts.RunContractMigrations(ctx); err != nil {
+		slog.Error("database updates that wait for older daemons failed; the next start tries again", "err", err)
+	}
+}
+
 // privateServer is an old daemon's socket for the new daemon.
 type privateServer struct {
 	srv              *http.Server
@@ -254,7 +273,7 @@ func (d *Daemon) servePrivate() (*privateServer, error) {
 		p.close()
 		return nil, err
 	}
-	if err := os.WriteFile(p.registry, []byte(socket), 0o600); err != nil {
+	if err := os.WriteFile(p.registry, fmt.Appendf(nil, "%s\n%d\n", socket, os.Getpid()), 0o600); err != nil {
 		p.close()
 		return nil, err
 	}

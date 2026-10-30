@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,8 +145,10 @@ func (c *Client) run(ctx context.Context, body io.ReadCloser, resend func() (io.
 			return false
 		}
 		slog.Warn("codex stream failed; sending the request again", "attempt", attempt, "err", end.chunk.Err)
+		// The backend's own retry_after wins when it asks for longer.
+		wait := max(time.Duration(attempt)*c.retryWait, end.wait)
 		select {
-		case <-time.After(time.Duration(attempt) * c.retryWait):
+		case <-time.After(wait):
 		case <-ctx.Done():
 			return false
 		}
@@ -355,12 +358,53 @@ func nestedError(raw json.RawMessage) (code, message string) {
 // transientCodes are error codes worth sending the request again for: the
 // backend is expected back soon. Hermes retries the same kinds
 // (hermes/agent/error_classifier.py: overloaded, server_error, timeout).
-var transientCodes = map[string]bool{"server_error": true, "overloaded": true, "service_unavailable": true, "timeout": true}
+// server_is_overloaded is what Codex sent on 2026-10-30 (issue #32).
+var transientCodes = map[string]bool{"server_error": true, "server_is_overloaded": true, "overloaded": true,
+	"service_unavailable": true, "timeout": true, "rate_limit_exceeded": true}
+
+// maxRetryAfter caps a backend's retry_after, as Hermes does (120 s,
+// hermes/agent/turn_recovery_autorecover.py).
+const maxRetryAfter = 120 * time.Second
 
 // streamEnd is how a stream ended without completing.
 type streamEnd struct {
-	chunk llm.Chunk // the error or limit hit to send
-	retry bool      // a temporary error: the request may be sent again
+	chunk llm.Chunk     // the error or limit hit to send
+	retry bool          // a temporary error: the request may be sent again
+	wait  time.Duration // the backend's retry_after, 0 when it gave none
+}
+
+// retryAfter reads retry_after (seconds, a number or a text) from an error
+// event: at the top level, under "error", or under "response"."error"
+// (Hermes reads the top level and "error" too: hermes/agent/retry_utils.py).
+func retryAfter(data string) time.Duration {
+	type field struct {
+		RetryAfter json.RawMessage `json:"retry_after"`
+	}
+	var ev struct {
+		field
+		Error    json.RawMessage `json:"error"`
+		Response struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(data), &ev) != nil {
+		return 0
+	}
+	var nested, failed field
+	json.Unmarshal(ev.Error, &nested)
+	json.Unmarshal(ev.Response.Error, &failed)
+	for _, raw := range []json.RawMessage{ev.RetryAfter, nested.RetryAfter, failed.RetryAfter} {
+		var v any
+		json.Unmarshal(raw, &v)
+		secs, _ := v.(float64)
+		if str, ok := v.(string); ok {
+			secs, _ = strconv.ParseFloat(strings.TrimSpace(str), 64)
+		}
+		if secs > 0 {
+			return min(time.Duration(secs*float64(time.Second)), maxRetryAfter)
+		}
+	}
+	return 0
 }
 
 // errorText describes an error from its code and message, never as "".
@@ -389,8 +433,9 @@ type item struct {
 // stream reads the SSE body. It returns nil when the response completed,
 // else how it ended, and whether any chunk went out.
 func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chunk) (end *streamEnd, sent bool) {
-	fail := func(code, message string) *streamEnd {
-		return &streamEnd{chunk: llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + errorText(code, message))}, retry: transientCodes[code]}
+	fail := func(code, message, data string) *streamEnd {
+		return &streamEnd{chunk: llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + errorText(code, message))},
+			retry: transientCodes[code], wait: retryAfter(data)}
 	}
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 64*1024), 32*1024*1024)
@@ -432,7 +477,7 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 			if code+message == "" {
 				message = "the response failed"
 			}
-			return fail(code, message), sent
+			return fail(code, message, data), sent
 		case "error":
 			// A usage limit can come this way too: the session then waits
 			// for the reset instead of failing.
@@ -444,7 +489,7 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 			code, message := nestedError(ev.Error)
 			code, message = cmp.Or(ev.Code, code), cmp.Or(ev.Message, message)
 			slog.Warn("codex error event", "code", code, "message", message, "event", text.Shorten(data, 500))
-			return fail(code, message), sent
+			return fail(code, message, data), sent
 		}
 	}
 	if ctx.Err() != nil {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/viminizer/germes/internal/llm"
 )
@@ -101,5 +102,32 @@ func TestStreamGivesUpAfterTheRetries(t *testing.T) {
 	ok, chunks, resends := runStreams(serverError, serverError)
 	if ok || resends != streamRetries || len(chunks) != 1 || !strings.Contains(chunks[0].Err.Error(), "server_error") {
 		t.Fatalf("completed %v, resends %d, chunks %+v; want the error after %d resends", ok, resends, chunks, streamRetries)
+	}
+}
+
+func TestOverloadedStreamIsSentAgain(t *testing.T) {
+	for _, first := range []string{
+		// What Codex sent on 2026-10-30 (session ahx0mu).
+		`data: {"type":"error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}` + "\n\n",
+		`data: {"type":"error","error":{"code":"rate_limit_exceeded","message":"slow down"}}` + "\n\n",
+	} {
+		if ok, _, resends := runStreams(first, answer); !ok || resends != 1 {
+			t.Errorf("%s: completed %v, resends %d; want the answer after one resend", first, ok, resends)
+		}
+	}
+}
+
+func TestRetryAfterIsRead(t *testing.T) {
+	for event, want := range map[string]time.Duration{
+		`{"type":"error","code":"server_is_overloaded","retry_after":6}`:                          6 * time.Second,
+		`{"type":"error","error":{"code":"server_is_overloaded","retry_after":"1.5"}}`:            1500 * time.Millisecond, // as a text
+		`{"type":"response.failed","response":{"error":{"code":"server_error","retry_after":2}}}`: 2 * time.Second,
+		`{"type":"error","code":"server_is_overloaded","retry_after":9999}`:                       maxRetryAfter,
+		`{"type":"error","code":"server_is_overloaded","message":"Please try again later."}`:      0,
+	} {
+		e, _ := (&Client{}).stream(context.Background(), strings.NewReader("data: "+event+"\n\n"), make(chan llm.Chunk, 1))
+		if e.wait != want || !e.retry {
+			t.Errorf("%s: wait %v, retry %v; want %v and a retry", event, e.wait, e.retry, want)
+		}
 	}
 }

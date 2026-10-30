@@ -193,10 +193,20 @@ func (b *Builder) memoryBlock(ctx context.Context) (string, error) {
 // projectContext reads AGENTS.md, or CLAUDE.md when there is no AGENTS.md
 // (only one type, like Hermes). It reports whether the file was CLAUDE.md.
 func projectContext(dir string) (string, bool, error) {
+	name, text, err := LoadRules(dir)
+	if err != nil || name == "" {
+		return "", false, err
+	}
+	return fmt.Sprintf("# Project instructions (%s)\n\n%s", name, text), name == "CLAUDE.md", nil
+}
+
+// LoadRules reads a folder's instructions for agents: AGENTS.md, else
+// CLAUDE.md, cut to a size a prompt can take. No file: name "".
+func LoadRules(dir string) (name, text string, err error) {
 	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
 		text, err := readOptional(filepath.Join(dir, name))
 		if err != nil {
-			return "", false, err
+			return "", "", err
 		}
 		if text == "" {
 			continue
@@ -204,9 +214,9 @@ func projectContext(dir string) (string, bool, error) {
 		if r := []rune(text); len(r) > maxProjectFile {
 			text = string(r[:maxProjectFile]) + "\n\n[... cut ...]"
 		}
-		return fmt.Sprintf("# Project instructions (%s)\n\n%s", name, strings.TrimSpace(text)), name == "CLAUDE.md", nil
+		return name, strings.TrimSpace(text), nil
 	}
-	return "", false, nil
+	return "", "", nil
 }
 
 func readOptional(path string) (string, error) {

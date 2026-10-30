@@ -57,9 +57,10 @@ type Loop struct {
 	history History
 	opts    Options
 
-	mu     sync.Mutex
-	frozen map[string]string // session id -> system prompt, frozen for the cache
-	steps  map[string]int    // session id -> tool calls since memory/skills were last saved
+	mu          sync.Mutex
+	frozen      map[string]string          // session id -> system prompt, frozen for the cache
+	steps       map[string]int             // session id -> tool calls since memory/skills were last saved
+	seenFolders map[string]map[string]bool // session id -> subfolders whose instructions were given
 }
 
 var _ engine.Engine = (*Loop)(nil)
@@ -73,7 +74,7 @@ func New(client llm.Client, tools *tool.Registry, prompts *prompt.Builder, histo
 		opts.ContextWindow = 200_000
 	}
 	return &Loop{client: client, tools: tools, prompts: prompts, history: history, opts: opts,
-		frozen: map[string]string{}, steps: map[string]int{}}
+		frozen: map[string]string{}, seenFolders: map[string]map[string]bool{}, steps: map[string]int{}}
 }
 
 // Name returns the engine name.
@@ -243,6 +244,9 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			default:
 				res = l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
 				res.Output += g.note(call, res)
+				if !res.IsError {
+					res.Output += l.folderRules(t.SessionID, t.Dir, call)
+				}
 			}
 			if ctx.Err() != nil {
 				return

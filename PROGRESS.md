@@ -341,6 +341,29 @@
 - New regression `TestRunFailedGapReplayIsRetried` (text after a gap with a failing history read, then `turn_done` with history). BEFORE (HEAD `out.go` via `-overlay`): failed, exit 1 (no answer sent). AFTER: pass. No existing test changed.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix13-path` -> `/tmp/germes-r6-fix13.*`. Both review gates must run again on the new commit.
 
+### Round 6 fourteenth check
+
+- HEAD `50e67e372600932ef529ebe4c64f92c29a477d72`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check14.log`), focused tests (`/tmp/germes-r6-focused14.log`), race tests (`/tmp/germes-r6-race14.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 fourteenth independent Codex review (HEAD `50e67e3`)
+
+- Evidence `/tmp/germes-r6-review14.hN12sL/` (transcript.log, verdict.txt, exit 0, session `01a18ef5-73d9-76b1-9b81-ba3e8ce8e77b`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections; peers, wiring, file.Save callers, check logs. R1-R48 unique. VERDICT: Actionable findings: 1.
+- Open finding for the fix step:
+  1. P2 `telegram.go:339` (`settle` lost branch): after replaying a stored text whose `turn_done` failed to save, `settle` reports the answer lost and removes `ReplyTo`/`Answered` but leaves `output.last[id]` (and other per-turn output state). If the next request's turn produces no text (fails or is stopped), its `turn_done` sends the previous turn's text (`out.go:189-193`) as the new answer. Uncommon (needs a failed final save), deterministic then. Suggested: clear abandoned per-turn output when declaring a turn lost; regression for that sequence.
+
+### Round 6 fourteenth consistency audit (read-only, HEAD `50e67e3`)
+
+- Finding CONFIRMED, introduced by this job: `settle` replays the stored last turn through `sendReplyEvent` (`telegram.go:283-300`), which stores its text in `output.last`; the lost branch (`telegram.go:339-344`) deletes `ReplyTo` and `Answered` only. `output.last` is cleared only at a handled `turn_done` (`out.go:189-193`), so the next turn of that session that ends without text (error or `/stop`) sends the old text as its answer. Main never replayed into `output.last` at start, so this is new. The peer cleanup in `finishReply` (`out.go`) also clears the reply cursors.
+- Suggested fix: in the lost branch, also drop the abandoned per-turn output for that session (`output.last`, `output.limited`, the reply and notice cursors, and its pending `send_file` keys in `output.sending`), as `finishReply` and the `turn_done` case do. Regression: replay of a saved text whose `turn_done` was not saved, lost notice, then a new request whose turn ends with an error and no text: only the error goes out.
+- Nothing else: R1-R48 unique. Result: FINDINGS.
+
+### Round 6 fourteenth fix (clear a lost turn's output)
+
+- `internal/telegram/telegram.go` `settle`, lost branch: besides `ReplyTo` and `Answered`, now drops the session's `output.last`, `output.limited`, reply and notice cursors, and its pending `send_file` keys in `output.sending` (all under the `outputMu` the function already holds). The dedup floor `handled` is kept.
+- PLAN: the lost notice also forgets the turn's replayed output; regression name added.
+- New regression `TestRunLostTurnTextIsNotReused` (stored text without a saved `turn_done`, lost at start, then a turn ending with only an error). BEFORE (HEAD `telegram.go` via `-overlay`): failed, exit 1 ("old partial" sent after the error). AFTER: pass. No existing test changed.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix14-path` -> `/tmp/germes-r6-fix14.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

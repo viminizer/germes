@@ -340,6 +340,16 @@ func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost str
 	delete(t.state.ReplyTo, id)
 	delete(t.state.Answered, id)
 	t.mu.Unlock()
+	// The lost turn's replayed output must not become the next turn's.
+	delete(t.output.last, id)
+	delete(t.output.limited, id)
+	delete(t.output.seq, id)
+	delete(t.output.noticeSeq, id)
+	for key := range t.output.sending {
+		if strings.HasPrefix(key, id+" ") {
+			delete(t.output.sending, key)
+		}
+	}
 	t.save()
 	t.reply(ctx, thread, lost)
 }

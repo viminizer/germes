@@ -1807,3 +1807,53 @@ func TestRunFailedGapReplayIsRetried(t *testing.T) {
 		}
 	})
 }
+
+// A turn whose turn_done could not be saved is replayed and called lost at
+// start. Its text must not become the answer of the next turn, which here
+// ends with an error and no text.
+func TestRunLostTurnTextIsNotReused(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project","session_id":"s1"}},"reply_to":{"s1":8}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 3)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "first"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "old partial"},
+		}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			return api.MessageResult{SessionID: "s1"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls // the start called the first turn lost
+		tr.updates <- []update{msg(1, 8, kevin, "next")}
+		<-tr.polls
+		next := []api.Event{
+			{SessionID: "s1", Seq: 3, Kind: api.KindUserMessage, Text: "next"},
+			{SessionID: "s1", Seq: 4, Kind: api.KindError, Text: "boom"},
+			{SessionID: "s1", Seq: 5, Kind: api.KindTurnDone},
+		}
+		svc.history = append(svc.history, next...)
+		for _, ev := range next {
+			svc.events <- ev
+		}
+		synctest.Wait()
+		if len(tr.sent) != 2 || !strings.Contains(tr.sent[0]["text"].(string), "was lost") || tr.sent[1]["text"] != "⚠ boom" {
+			t.Errorf("sent = %v, want the lost notice, then only the error", tr.sent)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

@@ -87,3 +87,23 @@ func TestMemoryCallsSayWhatTheySave(t *testing.T) {
 		}
 	}
 }
+
+// Like Hermes, the task list prints when the turn ends: in full while
+// items are open, as one line once all are done.
+func TestTaskListPrintsWhenTheTurnEnds(t *testing.T) {
+	for out, wantLines := range map[string]int{
+		"- [x] 1. Read main.go\n- [>] 2. Add sub\n  - [ ] 2a. Test it": 4,
+		"- [x] 1. Read main.go\n- [-] 2. Add sub":                      1,
+	} {
+		var tr transcript
+		tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "1", Name: "todo_list"}})
+		tr.apply(api.Event{Seq: 2, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "1", Output: out}})
+		got := tr.apply(api.Event{Seq: 3, Kind: api.KindTurnDone})
+		if len(got) != 3 || got[0].Kind != kindTools || got[1].Kind != kindTodo || got[2].Kind != kindTurnEnd {
+			t.Fatalf("%q: got %+v, want the tree, the list, the end", out, got)
+		}
+		if n := strings.Count(strings.TrimPrefix(got[1].view(80), "\n"), "\n") + 1; n != wantLines {
+			t.Errorf("%q: list is %d lines, want %d:\n%s", out, n, wantLines, got[1].view(80))
+		}
+	}
+}

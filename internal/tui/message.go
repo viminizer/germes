@@ -18,6 +18,7 @@ type message struct {
 	Text  string
 	Tool  *api.ToolCall // call with its result, for kindDetail
 	Tools []toolRun     // the calls of one step, for kindTools
+	Todos []todoItem    // the task list at the end of a turn, for kindTodo
 	Dir   string        // project folder: paths under it are shown short
 	Cont  bool          // kindAssistant: more of a reply already partly printed
 }
@@ -35,6 +36,7 @@ const (
 	kindRound   // an attached job moved on to its next round
 	kindAlert   // a job's message for the user
 	kindTurnEnd // the short rule under a finished turn
+	kindTodo    // the model's task list at the end of a turn
 )
 
 // view renders the message for the given width. Each block starts with a
@@ -61,6 +63,10 @@ func (m message) view(width int) string {
 		return "\n" + gutter(styleAccent.Render("◆ "), styleAccent, m.Text, width)
 	case kindRound:
 		return "\n" + styleAccent.Render("── "+m.Text+" ──")
+	case kindTodo:
+		// Like Hermes: a finished list closed, an open one shown in full.
+		done := isTodoDone(m.Todos)
+		return "\n" + todoView(m.Todos, width, done, !done, 0)
 	case kindTurnEnd:
 		return "\n" + styleBorder.Render("───")
 	default:
@@ -128,8 +134,6 @@ func treeView(runs []toolRun, dir string, width int, spin string, now time.Time,
 		case !r.Done:
 		case r.Call.IsError:
 			sub = styleError.Render(ansi.Truncate("└─ "+firstLine(shortPaths(r.Call.Output, dir)), max(width-5, 10), "…"))
-		case r.Call.Name == "todo_list":
-			sub = taskList(r.Call.Output, width-5)
 		case r.Call.Name == "delegate_task":
 			sub = subagentList(r.Call.Output, width-5)
 		}
@@ -215,30 +219,6 @@ func toolPreview(t *api.ToolCall, dir string) string {
 		}
 	}
 	return ""
-}
-
-// maxTaskLines is how much of a task list the transcript shows.
-const maxTaskLines = 20
-
-// taskList shows the model's task list under its call: open items plain,
-// finished ones dim.
-func taskList(list string, width int) string {
-	lines := strings.Split(strings.TrimSpace(list), "\n")
-	more := len(lines) - maxTaskLines
-	if more > 0 {
-		lines = lines[:maxTaskLines]
-	}
-	for i, l := range lines {
-		style := styleText
-		if strings.Contains(l, "[x]") || strings.Contains(l, "[-]") {
-			style = styleDim
-		}
-		lines[i] = style.Render(ansi.Truncate("  "+l, max(width, 10), "…"))
-	}
-	if more > 0 {
-		lines = append(lines, styleDim.Render(fmt.Sprintf("  (+%d more)", more)))
-	}
-	return strings.Join(lines, "\n")
 }
 
 // subagentList shows one line per subagent report: its goal and how long

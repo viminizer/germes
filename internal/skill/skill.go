@@ -24,6 +24,9 @@ const (
 	maxSkill       = 100_000 // characters of a SKILL.md (same as Hermes)
 )
 
+// ErrRename means a change would rename a skill.
+var ErrRename = errors.New("a skill's name cannot change; save it under the new name instead")
+
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // Summary is what the prompt lists about a skill.
@@ -159,7 +162,7 @@ func (s *Store) Update(ctx context.Context, name, old, repl string) error {
 		return err
 	}
 	if sum.Name != name {
-		return errors.New("a skill's name cannot change; save it under the new name instead")
+		return ErrRename
 	}
 	return s.Save(ctx, Skill{Summary: sum, Body: body})
 }

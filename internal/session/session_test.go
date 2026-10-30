@@ -230,7 +230,7 @@ func TestSessionEntersAndLeavesWorktree(t *testing.T) {
 
 	// Work in the worktree: neither leaving nor deleting may lose it.
 	os.WriteFile(s.Dir+"/new.txt", []byte("x"), 0o644)
-	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: s.ID, LeaveWorktree: true}); err == nil || !strings.Contains(err.Error(), "merge") {
+	if err := m.UpdateSession(ctx, api.SessionUpdate{ID: s.ID, LeaveWorktree: true}); !api.HasCode(err, api.CodeInvalid) {
 		t.Fatalf("leave with work: %v", err)
 	}
 	if err := m.DeleteSession(ctx, s.ID); err == nil {

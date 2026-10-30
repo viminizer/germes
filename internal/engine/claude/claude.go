@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"syscall"
@@ -45,12 +44,14 @@ type Options struct {
 	// as an MCP server, for Germes' own tools. "" = no MCP.
 	Germes     string
 	GermesHome string // GERMES_HOME: for that server, and a folder Claude may edit
+	// Reviews runs the background review that learns from a session; nil
+	// (or no GermesHome) = no review.
+	Reviews *engine.Reviews
 }
 
 // Claude is the claude CLI engine.
 type Claude struct {
-	opts  Options
-	steps engine.Steps
+	opts Options
 }
 
 // New creates the engine.
@@ -93,8 +94,9 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 			}
 			more := c.grantable(denied, t.Dir, granted)
 			if len(more) == 0 || granted != nil {
-				if c.steps.IsDue(t.SessionID) {
-					go c.review(t, done.ResumeID, extra) // after the turn, in the background
+				if c.reviews() && c.opts.Reviews.IsDue(t.SessionID) && done.ResumeID != "" {
+					resumeID := done.ResumeID
+					c.opts.Reviews.Run(t.SessionID, func(ctx context.Context) { c.review(ctx, t, resumeID, extra) })
 				}
 				stream.Send(ctx, out, *done)
 				return
@@ -268,7 +270,9 @@ func (c *Claude) stream(ctx context.Context, cancel context.CancelFunc, sessionI
 			case engine.KindError:
 				ended = true
 			case engine.KindToolCall:
-				c.steps.Update(sessionID, c.savesLearning(ev.Tool))
+				if c.reviews() {
+					c.opts.Reviews.Update(sessionID, c.savesLearning(ev.Tool))
+				}
 			}
 			stream.Send(ctx, out, ev)
 		}
@@ -279,6 +283,9 @@ func (c *Claude) stream(ctx context.Context, cancel context.CancelFunc, sessionI
 	}
 	return done, p.denied, ended
 }
+
+// reviews reports whether this engine learns from its sessions.
+func (c *Claude) reviews() bool { return c.opts.Reviews != nil && c.opts.GermesHome != "" }
 
 // savesLearning reports whether a tool call saved memory or a skill: claude
 // edits them as files.
@@ -296,17 +303,7 @@ func (c *Claude) savesLearning(tc *engine.ToolCall) bool {
 // review learns from a session in the background (Hermes' learning loop):
 // claude resumes a fork of the conversation, so the session itself does not
 // change, and may only read files and edit memory and skills.
-func (c *Claude) review(t engine.Turn, resumeID, extra string) {
-	defer func() {
-		if p := recover(); p != nil {
-			slog.Error("review panicked", "session", t.SessionID, "panic", p, "stack", string(debug.Stack()))
-		}
-	}()
-	if c.opts.GermesHome == "" || resumeID == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), engine.ReviewTimeout)
-	defer cancel()
+func (c *Claude) review(ctx context.Context, t engine.Turn, resumeID, extra string) {
 	t.Prompt = strings.TrimSpace(prompt.Review)
 	pr, err := c.start(ctx, t, c.reviewArgs(resumeID, extra))
 	if err == nil {

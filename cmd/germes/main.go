@@ -313,7 +313,12 @@ func runDaemon(p paths) error {
 	}
 	defer st.Close()
 
-	rt, reg, err := newRouter(p, cfg, st)
+	// Background reviews end with the daemon, before the store closes.
+	ctx, cancel := context.WithCancel(context.Background())
+	reviews := engine.NewReviews(ctx)
+	defer reviews.Wait()
+	defer cancel()
+	rt, reg, err := newRouter(p, cfg, st, reviews)
 	if err != nil {
 		return err
 	}
@@ -343,7 +348,7 @@ func runDaemon(p paths) error {
 		},
 		Insights: st.GetInsights,
 		Jobs:     []api.JobRequest{{Name: "curator", Dir: p.home, Prompt: strings.TrimSpace(prompt.Curator), NoWorktree: true, Repeat: true, Every: 7 * 24 * time.Hour}},
-	}).Run(context.Background())
+	}).Run(ctx)
 }
 
 // ensureDaemon connects to the daemon, or starts it in the background and
@@ -517,7 +522,7 @@ func availableEngines(p paths, cfg config.Config) []string {
 
 // newRouter builds every available engine, in config order, behind the router.
 // newRouter also returns the tool registry: @ references expand through it.
-func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *tool.Registry, error) {
+func newRouter(p paths, cfg config.Config, st *store.Store, reviews *engine.Reviews) (*router.Router, *tool.Registry, error) {
 	names := availableEngines(p, cfg)
 	if len(names) == 0 {
 		return nil, nil, errors.New("no engine found: log in with `codex login`, or install Claude Code")
@@ -570,12 +575,12 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 				return nil, nil, err
 			}
 			engines = append(engines, claude.New(claude.Options{Model: ec.Model, Blocked: cfg.Blocked, Prompts: prompts,
-				Germes: exe, GermesHome: p.home}))
+				Germes: exe, GermesHome: p.home, Reviews: reviews}))
 			continue
 		}
 		client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
 		engines = append(engines, loop.New(client, reg, prompts, st, loop.Options{
-			Name: name, Toolsets: []string{"project"}, OverseerToolsets: []string{"overseer"}, ReviewToolsets: []string{"review"}, SubagentToolsets: []string{"subagent"}, PlanToolsets: []string{"plan"}, Todos: todos}))
+			Name: name, Toolsets: []string{"project"}, OverseerToolsets: []string{"overseer"}, ReviewToolsets: []string{"review"}, Reviews: reviews, SubagentToolsets: []string{"subagent"}, PlanToolsets: []string{"plan"}, Todos: todos}))
 	}
 	rt, err := router.New(engines, cfg.Engines, st, time.Now)
 	return rt, reg, err

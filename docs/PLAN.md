@@ -1200,7 +1200,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Codex token about to expire: take the Codex CLI's fresh token. Both expiring: refresh, and write the new token back to `~/.codex/auth.json`. Refresh fails for good: the engine cannot start, the router moves the turn on, and I am told to run `codex login`.
 - Codex usage call fails: logged only; usage is a hint, the turn goes on.
 - Compaction fails: logged; the turn runs with the full history (the model may refuse a too-long input, which shows as an error).
-- Background review fails: logged; nothing is saved, the user sees nothing.
+- Background review fails, or is cancelled because the daemon exits: logged; nothing is saved, the user sees nothing.
 - A built-in job (the curator) cannot be created at daemon start: logged; the next daemon start tries again.
 - A skill cannot be read (broken frontmatter): it is left out of the skills list.
 - `claude` missing or not logged in: error event, engine marked unavailable for a while, router switches.
@@ -1259,7 +1259,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - The prompt has the Germes config knowledge, the skills index (descriptions cut to 200 characters) and memory. Claude gets the same parts through `--append-system-prompt`, so it edits memory and skills as plain files.
    - Compaction: at the start of a turn, when history is over half the context window (default 200k tokens), older events are summarized; a `compacted` event saves the summary and `keep_from`. Next turns load the summary plus the kept events. Inside a long turn, old tool outputs are trimmed instead.
    - Background review: after 10 tool calls without saving memory or a skill, a silent review with only memory and skill tools runs after the turn.
-   - Later, both engines: the counter is shared (`engine.Steps`) and so is the instruction (`prompt.Review`). The loop's review gets today's memory and skills. Claude's review resumes a fork of the conversation (`--resume <id> --fork-session`, so the session does not change) with only Read/Glob/Grep and edits inside `memories/` and `skills/`; no acceptEdits, so any other edit is refused, and no shell. Claude counts as saved when it edits a file there.
+   - Later, both engines: one `engine.Reviews`, made in `main.go` with the daemon's context, counts the calls for both (a session keeps its count when it changes engine) and runs the reviews: each has a 5-minute limit, a panic is logged, and when the daemon exits (also after a hand-over) running reviews are cancelled and waited for before the store closes. The instruction is shared too (`prompt.Review`). The loop's review gets today's memory and skills. Claude's review resumes a fork of the conversation (`--resume <id> --fork-session`, so the session does not change) with only Read/Glob/Grep and edits inside `memories/` and `skills/`; no acceptEdits, so any other edit is refused, and no shell. Claude counts as saved when it edits a file there.
    - `skill_patch` fixes part of a skill (one exact match; the result must still parse and keep its name). The prompt and the review say to fix a skill that turned out wrong while it was used; Claude does it with Edit. SKILL.md is at most 100,000 characters (same as Hermes).
    - Checked live: memory saved, config edited by the agent, search found an old session, the right skill named, review ran, Claude knew the config path and memory.
 5. Worktrees. Done:

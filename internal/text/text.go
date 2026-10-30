@@ -18,6 +18,12 @@ func Shorten(s string, n int) string {
 	return s
 }
 
+// Errors of Replace.
+var (
+	ErrNoMatch     = errors.New("the old text was not found; read it again and copy it exactly")
+	ErrManyMatches = errors.New("the old text was found more than once; quote more of it")
+)
+
 // Replace puts text in the place old appears in s, or in every place with
 // all. Models often escape text that is not escaped in s (\\ \" \'); that
 // is undone only when the result appears exactly once. It returns the new s
@@ -35,9 +41,9 @@ func Replace(s, old, text string, all bool) (string, int, error) {
 	}
 	switch {
 	case count == 0:
-		return "", 0, errors.New("the old text was not found; read it again and copy it exactly")
+		return "", 0, ErrNoMatch
 	case count > 1 && !all:
-		return "", 0, fmt.Errorf("the old text was found %d times; quote more of it", count)
+		return "", 0, fmt.Errorf("%w (%d times)", ErrManyMatches, count)
 	case all:
 		return strings.ReplaceAll(s, old, text), count, nil
 	}

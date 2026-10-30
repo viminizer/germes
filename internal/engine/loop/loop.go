@@ -43,8 +43,9 @@ type Options struct {
 	// Empty: no delegate_task.
 	SubagentToolsets []string
 	// ReviewToolsets are the tools of the background self-learning review
-	// (memory and skills). Empty: no review.
+	// (memory and skills), run by Reviews. Empty or no Reviews: no review.
 	ReviewToolsets []string
+	Reviews        *engine.Reviews
 }
 
 // TaskLists reads a session's open task items (the todo_list tool).
@@ -61,8 +62,7 @@ type Loop struct {
 	opts    Options
 
 	mu          sync.Mutex
-	frozen      map[string]string // session id -> system prompt, frozen for the cache
-	steps       engine.Steps
+	frozen      map[string]string          // session id -> system prompt, frozen for the cache
 	seenFolders map[string]map[string]bool // session id -> subfolders whose instructions were given
 }
 
@@ -179,8 +179,8 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 	}
 	g := newGuard(t.Dir)
 	defer func() {
-		if spec.review && l.steps.IsDue(t.SessionID) {
-			l.review(t) // after the turn, in the background
+		if spec.review && l.reviews() && l.opts.Reviews.IsDue(t.SessionID) {
+			l.opts.Reviews.Run(t.SessionID, func(ctx context.Context) { l.review(ctx, t) })
 		}
 	}()
 	for step := 0; step <= spec.maxSteps; step++ {
@@ -240,9 +240,9 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
 			return
 		}
-		if spec.review {
+		if spec.review && l.reviews() {
 			for _, c := range calls {
-				l.steps.Update(t.SessionID, c.Name == "memory" || c.Name == "skill_save" || c.Name == "skill_patch")
+				l.opts.Reviews.Update(t.SessionID, c.Name == "memory" || c.Name == "skill_save" || c.Name == "skill_patch")
 			}
 		}
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})

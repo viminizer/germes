@@ -2,8 +2,10 @@ package skill
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
+
+	"github.com/viminizer/germes/internal/text"
 )
 
 func TestUpdate(t *testing.T) {
@@ -12,14 +14,13 @@ func TestUpdate(t *testing.T) {
 	if err := s.Save(ctx, Skill{Summary: Summary{Name: "deploy", Description: "Use to deploy."}, Body: "1. run make\n2. run make"}); err != nil {
 		t.Fatal(err)
 	}
-	for old, want := range map[string]string{
-		"run make":     "2 times",
-		"run ship":     "not found",
-		"name: deploy": "cannot change",
-		"":             "non-empty",
+	for old, want := range map[string]error{
+		"run make":     text.ErrManyMatches,
+		"run ship":     text.ErrNoMatch,
+		"name: deploy": ErrRename,
 	} {
-		if err := s.Update(ctx, "deploy", old, "name: other"); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("%q: got %v, want %q", old, err, want)
+		if err := s.Update(ctx, "deploy", old, "name: other"); !errors.Is(err, want) {
+			t.Errorf("%q: got %v, want %v", old, err, want)
 		}
 	}
 	if err := s.Update(ctx, "deploy", "2. run make", "2. run make test"); err != nil {

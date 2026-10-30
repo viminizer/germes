@@ -1,5 +1,71 @@
 # Germes quality-loop ledger
 
+## Active: germes-continuous-quality-loop / round 5 / fix
+
+### Identity, isolation, base and coordination
+
+- Repository verified: module `github.com/viminizer/germes`, origin `https://github.com/viminizer/germes.git`, GitHub `viminizer/germes`, default/target branch `main`, tracking `origin/main`.
+- Job `pn9q9i`, session `1owd9a`, isolated branch `germes/1owd9a`, worktree `/Users/mac/.germes/worktrees/germes-1aca4ad9/1owd9a`. Initial shell was in shared main; worktree_enter created isolation but did NOT change Bash cwd. EVERY shell command must explicitly cd to this verified isolated directory; file tools must use absolute isolated paths. Never edit shared `/Users/mac/dev/github/germes/germes`.
+- Shared and new isolated checkouts were clean. `git fetch origin && git rebase origin/main` succeeded without conflicts, already current. Base/HEAD: `b3de252a9e87a8c249e6ff0fe889bffc60dd3add`. Prior SQLite initialization repair is merged via PR #39; old active sections below are historical, not unfinished work or approval for this round.
+- Worktree list: shared main and this job checkout only. GitHub reports no open PRs. Job list shows this Germes loop, independent EduCenter work and home curator; no competing Germes code owner observed. No CODEOWNERS or nested instructions found. Recheck coordination before expanding/integrating. No work discarded and no workflow changes.
+
+### ONE selected responsibility and exact paths
+
+Responsibility: atomic whole-file replacement for small persistent files, including temporary-file uniqueness, safe creation, permissions, failure cleanup and error propagation. Inspect the entire selected owner files and affected saving callers, including pre-existing issues. Do not expand into general persistence, retention, Telegram routing, or authentication policy.
+
+1. `internal/file/file.go` — shared Save owner; read entire file, but DeleteOld retention changes are unrelated unless required by this responsibility.
+2. `internal/file/file_test.go` — prospective public Save safety/data-integrity regression tests (currently absent).
+3. `internal/telegram/telegram.go` — existing independent save implementation is a directly affected peer; preserve R5 (entry points import only api) and state-lock semantics. Review whole file for context, changes limited to whole-file saving and necessary wiring.
+4. `internal/telegram/telegram_test.go` — existing public safety-test context; add only important persistence regressions if justified by R35.
+5. `docs/PLAN.md` — shared safe-save, permissions and directly affected failure contracts only.
+6. `PROGRESS.md` — this durable scope/findings/authorization/verification ledger.
+
+Selection evidence: shared Save uses predictable `path + ".tmp"`, os.WriteFile, then Rename. Concurrent independent saves can share/truncate/rename the same inode; a pre-existing temporary symlink can redirect the write; old temporary permissions survive os.WriteFile. Config/auth callers request private modes, so unwanted disclosure or wrong-file overwrite is a real safety candidate. Telegram save duplicates the same scheme and explicitly cites the R5 import restriction: fix the same demonstrated flaw without bypassing that boundary, redesigning api, or inventing a broad abstraction. These are source-based candidates, not reproduced defects or clean review verdicts. Reproduce using synthetic temporary files only. No production/test fixes made during preparation.
+
+Initial paths are not a permission boundary: include directly necessary owner/wiring/contracts minimally, checking ownership and recording why. R5/R2 remain genuine restrictions; do not simply import internal/file into Telegram. Preserve public semantics unless correcting an established defect. No dependency, scheduler/workflow edits, secret-file reads, authentication changes, retention audit, fsync/power-loss guarantees, or repo-wide rewrite are justified by selection alone. Caller-level read-modify-write locking is separate from atomic replacement; do not claim unique temps solve lost updates at that higher level.
+
+### Instructions, architecture, peers and prerequisites
+
+- Read root `AGENTS.md` and full `docs/RULEBOOK.md`; relevant `docs/PLAN.md`: module map/shared pieces, Store/Memory/Skill, Config, startup/disk failure, Tools, Worktrees and Implementation. Initial full PLAN output was truncated; relevant contracts were reread in bounded sections. Discoveries: no nested AGENTS.md/CLAUDE.md, CODEOWNERS, separate verification policy or postponed-feature document. No additional owner prerequisite discovered.
+- Read `Makefile`, `go.mod`, `.github/workflows/ci.yml`, `internal/archtest/imports_test.go`. Go 1.26.0. internal/file is a leaf (standard library only); Telegram imports only api. No init/global mutable wiring; cmd/germes owns wiring. Keep R1–R8/R12–R16/R19–R23/R26/R30/R35/R37–R41/R45 in view. New behavior/failure contracts require PLAN updates; only add a reusable rule if genuinely warranted.
+- Read peers/callers: `internal/config/config.go` (private configuration), `internal/memory/memory.go` (mutex + private safe save), `internal/tools/todo/todo.go` (locked JSON persistence), Telegram save/bind context, `cmd/germes/doctor.go` CreateTemp probe. Search also found Save callers in `internal/skill/skill.go`, `internal/llm/codex/auth.go`; read their complete affected code during review, never runtime token/config contents. Doctor probe is NOT an atomic-write implementation. No independent proven safe-replacement helper found: prefer standard library rather than a new dependency.
+- Skills loaded: `verify-germes-worktree-isolation`, `consistency-audit`. The actual rulebook is docs/RULEBOOK.md, overriding audit's root default. Load `recover-read-only-codex-review` at the independent review step; do not substitute self-review. No skill for retention is applicable to this write-only responsibility.
+
+### Exact verification commands and delivery policy
+
+- Tests permitted for important safety/data-loss logic (R35), using standard Go testing and temporary synthetic files, no secrets/network or new libraries. Safety regressions must fail before their fixes; use public Save behavior. Preserve existing tests and architecture gate.
+- Required `make check` expands to `go build ./...`, `go vet ./...`, `test -z "$(gofmt -l .)"`, `go test -count=1 ./...`; CI runs exactly make check. Focused: `go test ./internal/file ./internal/telegram ./internal/archtest -count=1`. Optional targeted concurrency validation after changes: `go test -race ./internal/file ./internal/telegram -count=1`. Diff checks: `git diff --check` and `git diff origin/main...HEAD --check`. No standalone typecheck. Rulebook also names `staticcheck ./...` and `go run github.com/mibk/dupl@latest -t 40 ./internal ./cmd`; disclose actual execution and tooling limits rather than claim unrun checks.
+- Workflow `/Users/mac/.germes/workflows/germes-review-loop.yaml` read unchanged. Required gates: project checks -> independent read-only Codex ENTIRE-scope review -> separate read-only consistency audit; fix verified findings and repeat BOTH and checks until clean on current code, including contracts/docs. Missing/truncated/errored reviews are never clean; store full review evidence outside repo. Fetch/rebase before integration; updated base requires checks and BOTH reviews again.
+- Full current user authorization includes commit, initial draft PR, visible reviewed revision/results summary read back, marking ready as needed, merge after checks/reviews/protections, verifying remote merge, safe local reconciliation and cleanup of ONLY this merged job branch/worktree. No routine approval needed; older ledger approval restrictions are stale. No force push/reset/protection bypass or destruction of others' changes. No preparation commit required.
+- Repeat-enabled continuous goal continues until explicitly stopped. Delivery ends only this round. Genuine external decision/credential blocker or lack of useful work means report and wait/back off, not claim permanent completion. Recover truncated SCOPE from THIS active section.
+
+### Preparation status
+
+- Identity, isolated clean base, latest remote, instructions, build policy and focused selection verified. Only this ledger is changed; no production behavior changed. Safety candidates remain for independent verification and repair.
+
+### Round 5 substantive atomic-replacement repair
+
+- Independent read-only Codex review (`/tmp/germes-round5-review.c5FZHb/verdict-resume-1.txt`, exit 0 after timeout recovery) and separate consistency audit (`/tmp/germes-round5-audit.8iwNAO/`) confirmed concurrent shared-inode corruption, temporary-symlink destructive writes and stale public temporary permissions. Neither before-fix verdict clears current gates.
+- Added public Save regressions. BEFORE repair, `go test ./internal/file -count=1` failed for stale 0644 mode, published symlink, concurrent partial/mixed output and rename failures, and failed-rename temporary leakage; evidence `/tmp/germes-round5-before.log`. Tests use isolated synthetic files only.
+- Save now exclusively creates a unique private sibling inode, writes, applies final mode, checks close before rename, and removes its own temporary path on failure, joining cleanup/close errors. Telegram mirrors exclusive creation/write/close/rename/cleanup at fixed CreateTemp mode 0600; its state mutex remains held across serialization/publication and R5 imports remain unchanged. No new abstraction/dependency, retention edit, fsync guarantee or higher-level lost-update claim.
+- Added Telegram binding persistence checks with stale temporary files/symlinks and restart readback; failed replacement preserves destination and cleans temporary files. Shared Save tests also verify complete concurrent publication, requested 0644/0600 modes, cleanup and preservation.
+- PLAN records save/failure semantics and durability limits. Added directly necessary scope path `docs/RULEBOOK.md`: R46 codifies this evidenced reusable exclusive-temporary publication pattern, with a concrete focused check and documented boundary exception; AGENTS already points to the rulebook, so no extra pointer is needed.
+- `git fetch origin` succeeded before repair verification; no rebase/base change. Focused tests, `make check` (build/vet/gofmt/uncached full tests), `go test -race ./internal/file ./internal/telegram -count=1`, `git diff --check` and `git diff origin/main...HEAD --check` PASSED. Evidence `/tmp/germes-round5-fix.Y5B0Km/`. Only the result ledger changed afterward. Both post-fix reviews remain required; no commit/delivery claimed in this fix step.
+
+### Round 5 post-fix review gates
+
+- Independent Codex entire-responsibility review completed with **no actionable findings**, final exit 0 in `/tmp/germes-round5-fix.Y5B0Km/verdict-resume-1.txt`. Initial runner hit the outer two-minute deadline; resumed the same session `01a18bf2-87a5-7a51-9711-316d8d6fc8f3` retaining read-only/never approval. An exploratory search used two nonexistent peer paths; subsequent complete reads used actual `internal/tools/todo/todo.go` and `cmd/germes/doctor.go`. This lookup error did not replace coverage or a verdict. Full transcripts retained. Parent check/race logs were reviewed, not rerun by Codex. No injected write/chmod/close/cleanup failure or power-loss testing claimed.
+- Separate read-only consistency audit completed with **no verified actionable findings**, confirming R2/R5/R8/R46 and saving-caller compatibility. Evidence `/tmp/germes-round5-consistency.jdlEtO/`: focused tests passed independently; installed `staticcheck` was absent (127), recovered via `go run honnef.co/go/tools/cmd/staticcheck@latest ./...` (exit 0, Go 1.26.10); `go run github.com/mibk/dupl@latest -t 40 ./internal ./cmd` completed (exit 0), 11 unrelated clone groups and none in selected source/tests. Supplied full-check/race provenance inspected.
+- Verified unchanged tracked diff against the review snapshot and current HEAD/status; no implementation change after checks or reviews. Only this observed-result ledger entry was added afterward. The three verified original defects are fixed. Delivery/rebase gates remain for the workflow; no PR or merge performed by this fix step.
+
+### Round 5 initial check
+
+- Verified isolated cwd/branch and HEAD `b3de252a9e87a8c249e6ff0fe889bffc60dd3add`; only PROGRESS.md modified. No prior round-5 fix or completed review exists, so the unchanged-findings retry shortcut does not apply. Historical round findings below are not current open findings.
+- `make check` PASSED (exit 0): `go build ./...`, `go vet ./...`, `test -z "$(gofmt -l .)"`, `go test -count=1 ./...`. All existing tests passed; internal/file currently has no tests. This verifies the baseline, not the safety candidates identified at selection.
+- `git diff --check` and `git diff origin/main...HEAD --check` PASSED (exit 0). Only this observed-result ledger entry was added afterward; no production/test code changed. Optional race, staticcheck and duplication scans were not run in this check step. Independent Codex entire-scope review and separate consistency audit remain pending; passing checks do not approve delivery.
+
+---
+
 ## Active: germes-continuous-quality-loop / round 4 / preparation
 
 ### Identity, isolation, base and coordination

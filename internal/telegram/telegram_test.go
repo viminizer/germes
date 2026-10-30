@@ -274,6 +274,66 @@ func TestTopicsRouteToSessions(t *testing.T) {
 	}
 }
 
+func TestBindingSaveIgnoresExistingTemporaryPaths(t *testing.T) {
+	for _, symlink := range []bool{false, true} {
+		t.Run(fmt.Sprint(symlink), func(t *testing.T) {
+			fake := &fakeAPI{}
+			srv := httptest.NewServer(fake)
+			defer srv.Close()
+			path := filepath.Join(t.TempDir(), "telegram.json")
+			other := filepath.Join(t.TempDir(), "other")
+			if err := os.WriteFile(other, []byte("untouched"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if symlink {
+				if err := os.Symlink(other, path+".tmp"); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path+".tmp", []byte("stale"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tg := New(&fakeService{}, Options{ChatID: chatID, UserID: kevin, APIBase: srv.URL, StatePath: path})
+			project := t.TempDir()
+			tg.handle(context.Background(), msg(1, 7, kevin, "/bind "+project))
+			info, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+				t.Fatalf("published mode %v", info.Mode())
+			}
+			if got := New(&fakeService{}, Options{StatePath: path}).state.Topics[7].Project; got != project {
+				t.Fatalf("saved binding %q, want %q", got, project)
+			}
+			got, err := os.ReadFile(other)
+			if err != nil || string(got) != "untouched" {
+				t.Fatalf("other file: %q, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestStateSaveFailurePreservesDestination(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "telegram.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(path, "old")
+	if err := os.WriteFile(child, []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tg := New(&fakeService{}, Options{StatePath: path})
+	tg.save()
+	got, err := os.ReadFile(child)
+	if err != nil || string(got) != "preserved" {
+		t.Fatalf("old destination: %q, %v", got, err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("remaining entries: %v, %v", entries, err)
+	}
+}
+
 func TestErrorsHideTheToken(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	srv.Close() // nothing listens: the request fails

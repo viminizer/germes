@@ -11,14 +11,28 @@ import (
 	"time"
 )
 
-// Save writes data to a temp file next to path, then renames it over path,
-// so a crash never leaves a half-written file.
-func Save(path string, data []byte, perm fs.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+// Save replaces path with a complete file with the requested permissions.
+// Concurrent saves publish whole files; callers must serialize read-modify-write
+// operations themselves. Rename does not guarantee durability after power loss.
+func Save(path string, data []byte, perm fs.FileMode) (err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".germes-save-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, os.Remove(f.Name()))
+		}
+	}()
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(perm)
+	}
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // DeleteOld deletes the files in dir last changed before before, and returns

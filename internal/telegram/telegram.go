@@ -17,6 +17,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -513,17 +514,30 @@ func (t *Telegram) save() {
 	defer t.mu.Unlock()
 	b, err := json.MarshalIndent(t.state, "", "  ")
 	if err == nil {
-		// A temp file and a rename, so a crash never leaves a half-written
-		// file. This is file.Save, which R5 does not let this package import.
-		tmp := t.opts.StatePath + ".tmp"
-		err = os.WriteFile(tmp, b, 0o600)
-		if err == nil {
-			err = os.Rename(tmp, t.opts.StatePath)
-		}
+		err = saveState(t.opts.StatePath, b)
 	}
 	if err != nil {
 		slog.Warn("telegram: save state", "err", err)
 	}
+}
+
+// This mirrors file.Save because R5 allows this client to import only api.
+func saveState(path string, data []byte) (err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".germes-save-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, os.Remove(f.Name()))
+		}
+	}()
+	_, err = f.Write(data)
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // recovered runs fn and logs a panic instead of crashing the daemon.

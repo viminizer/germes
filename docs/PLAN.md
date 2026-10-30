@@ -93,6 +93,8 @@ leaves                api                                  → stream
 
 Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `stream.Wait` (wait for goroutines unless cancelled), `file.Save` (safe write), `text.Shorten`, `text.Replace` (exact replace, undoing a model's added escaping) and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `api.IsNotFound` and `api.HasCode` (check an error's code), `tool.NewRun` (decode tool arguments). Also imported by: job (stream), llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text), tools/files and skill (text).
 
+`file.Save` creates an exclusive, unique sibling temporary file at `0600`, writes the complete data, applies the requested final permissions, closes it successfully, then renames it over the destination. Concurrent saves publish complete individual versions (last rename wins), not a shared temporary inode. Existing `.tmp` files or symlinks are not opened or removed. Failed saves preserve the destination and remove their own temporary file, returning cleanup errors too. Caller-level read-modify-write serialization remains the caller's responsibility. Rename is not a power-loss durability guarantee; no file/directory fsync is performed. Telegram mirrors this small pattern locally because R5 forbids importing file; its state mutex covers serialization through replacement. Regression checks: `go test ./internal/file ./internal/telegram ./internal/archtest -count=1`.
+
 Notes:
 - Shared plain types live low: `api` (Session, Event, Job, Page, filters), `engine` (Turn, Event, Usage). Higher modules and `store` use them, so nothing imports upward.
 - `session` does not import `router`, and `job` does not import `session`: each defines the small interface it needs (R4), and `main.go` passes the real thing in.
@@ -1076,7 +1078,7 @@ Not its own module. The overseer is a normal session with:
 - A bound topic has its own session for that project: folder = project, project toolset, loads `AGENTS.md`.
 - `/new` in a topic: fresh session for the same project. `/unbind`: remove the binding.
 - Rule: project topic → that project's session. General or unbound topic → the overseer (any subject, any project).
-- Bindings are saved in `~/.germes/telegram.json` (owned by this module, no new `Service` methods), with the sessions waiting for an answer and their topics (`reply_to`), so a new bot after a daemon hand-over still sends them. It is written through a temp file and a rename, so a crash never leaves it half-written.
+- Bindings are saved in `~/.germes/telegram.json` (owned by this module, no new `Service` methods), with the sessions waiting for an answer and their topics (`reply_to`), so a new bot after a daemon hand-over still sends them. It is replaced through a unique, exclusively created owner-only sibling temporary file, checked write/close and rename while holding the state mutex. Failed saves preserve the previous destination, clean up their own temporary file and log the error. This prevents partial publication, not power-loss data loss.
 
 ### Messages
 
@@ -1243,6 +1245,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Database busy: wait (busy timeout).
 - A contract update (`NNN_x.contract.sql`) fails: it rolls back and stays pending, the error is logged, the daemon keeps serving on the expanded schema, and the next start tries again. It never runs while an older daemon's process may still exist (#21, R46).
 - Disk full, or any failed save of an event (issue #25): the event is not published as saved; the turn stops; the user gets a live error ("could not save the conversation …; free disk space or run `germes doctor`"), and the turn's end still goes out live (Seq 0) so the TUI, Telegram and jobs know it ended. The next saved event takes the failed one's number (no gap). Live events may differ from the saved history only by the failure notice.
+- Whole-file replacement cannot create/write/chmod/close/rename: leave the previous destination intact, close the temporary file and remove only this save's unique temporary path; return operation and cleanup errors to the caller. Telegram logs save errors and keeps its in-memory state for a later save. A process killed before cleanup may leave an unpublished temporary file; these files are not reused.
 - Snapshot cleanup cannot read project/age metadata or inspect a project (permission, I/O or other error): preserve that snapshot repo, continue cleaning independent entries, return joined errors with the number removed, and log them in the daemon cleanup callback; a later cleanup retries. An active repo is skipped without waiting. Only `os.ErrNotExist` confirms a project is gone. Missing folder records identify unrelated/uninitialized entries and are left alone; invalid records or missing/non-regular indexes for existing projects are errors, not proof of age.
 
 ### TUI and clients

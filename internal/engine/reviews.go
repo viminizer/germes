@@ -27,15 +27,17 @@ type Reviews struct {
 	home   string                       // Germes' home: memories/ and skills/ are here
 	notify func(sessionID, text string) // tells the session what a review saved
 	wg     sync.WaitGroup
+	one    sync.Mutex // one review at a time, so each sees only its own saves
 	mu     sync.Mutex
 	n      map[string]int
+	queued map[string]bool // sessions with a review waiting for its turn
 }
 
 // NewReviews creates Reviews whose reviews stop when ctx ends. After a
 // review that changed memory or skills under home, notify gets one line
 // saying what (issue #18); nil notify says nothing.
 func NewReviews(ctx context.Context, home string, notify func(sessionID, text string)) *Reviews {
-	return &Reviews{ctx: ctx, home: home, notify: notify, n: map[string]int{}}
+	return &Reviews{ctx: ctx, home: home, notify: notify, n: map[string]int{}, queued: map[string]bool{}}
 }
 
 // Update records one tool call; saved means it saved memory or a skill.
@@ -60,9 +62,20 @@ func (r *Reviews) IsDue(sessionID string) bool {
 	return true
 }
 
-// Run runs review in the background. Its ctx ends after a few minutes, or
+// Run runs review in the background, after any review still running: two
+// at once would each count the other's saves as their own. A session has
+// at most one review waiting; another one is skipped, and the waiting one
+// covers the same ground. Its ctx ends a few minutes after it starts, or
 // when the Reviews' context ends. A panic is logged.
 func (r *Reviews) Run(sessionID string, review func(ctx context.Context)) {
+	r.mu.Lock()
+	if r.queued[sessionID] {
+		r.mu.Unlock()
+		slog.Info("review skipped: one for this session is waiting", "session", sessionID)
+		return
+	}
+	r.queued[sessionID] = true
+	r.mu.Unlock()
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
@@ -71,6 +84,14 @@ func (r *Reviews) Run(sessionID string, review func(ctx context.Context)) {
 				slog.Error("review panicked", "session", sessionID, "panic", p, "stack", string(debug.Stack()))
 			}
 		}()
+		r.one.Lock()
+		defer r.one.Unlock()
+		r.mu.Lock()
+		delete(r.queued, sessionID) // running now: a later one may wait
+		r.mu.Unlock()
+		if r.ctx.Err() != nil {
+			return // the daemon stopped while this review waited
+		}
 		ctx, cancel := context.WithTimeout(r.ctx, reviewTimeout)
 		defer cancel()
 		before := r.learned()
@@ -84,9 +105,8 @@ func (r *Reviews) Run(sessionID string, review func(ctx context.Context)) {
 // learned is the size and time of every memory and skill file. Both engines
 // save through files (claude edits them, the Germes loop's tools write them),
 // so comparing before and after a review shows what it saved.
-// ponytail: a turn that saves memory while a review runs, or another
-// session's review at the same time, counts as this review's too; tell
-// them apart if that ever confuses.
+// ponytail: a turn that saves memory while a review runs counts as this
+// review's too; tell them apart if that ever confuses.
 func (r *Reviews) learned() map[string]string {
 	files := map[string]string{}
 	if r.home == "" {

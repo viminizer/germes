@@ -84,7 +84,7 @@ func TestBlockListResolvedFilePaths(t *testing.T) {
 					r, err := NewRegistry([]Tool{{Name: name, MatchArg: "file_path", Run: func(context.Context, Call) (string, error) {
 						called = true
 						return "ran", nil
-					}}}, nil, []string{name + "(" + tc.pattern + ")"})
+					}}}, nil, []string{name + "(" + tc.pattern + ")"}, "")
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -118,7 +118,7 @@ func TestBlockListWildcardMatchesNewlines(t *testing.T) {
 			r, err := NewRegistry([]Tool{{Name: tc.name, MatchArg: tc.arg, Run: func(context.Context, Call) (string, error) {
 				called = true
 				return "ran", nil
-			}}}, nil, []string{tc.name + "(" + tc.pattern + ")"})
+			}}}, nil, []string{tc.name + "(" + tc.pattern + ")"}, "")
 			if err != nil {
 				t.Fatal(err)
 			}

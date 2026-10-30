@@ -392,6 +392,7 @@ func TestRunNewMessageSurvivesOlderCompletionLookup(t *testing.T) {
 		}
 		lookup, release := make(chan struct{}), make(chan struct{})
 		startup := true
+		var finished atomic.Bool
 		svc := &turnDoneService{fakeService: fakeService{events: make(chan api.Event, 3)}}
 		svc.lookup = func(context.Context, string) (api.Session, error) {
 			if startup {
@@ -403,8 +404,15 @@ func TestRunNewMessageSurvivesOlderCompletionLookup(t *testing.T) {
 			default:
 				close(lookup)
 				<-release
+				return api.Session{ID: "s1", Status: api.StatusIdle}, nil // first response captured before new message
 			}
-			return api.Session{ID: "s1", Status: api.StatusIdle}, nil // first response captured before new message
+			svc.mu.Lock()
+			accepted := len(svc.messages) > 0
+			svc.mu.Unlock()
+			if accepted && !finished.Load() {
+				return api.Session{ID: "s1", Status: api.StatusWorking}, nil // the accepted message's turn
+			}
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
 		}
 		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
 		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
@@ -426,6 +434,7 @@ func TestRunNewMessageSurvivesOlderCompletionLookup(t *testing.T) {
 		if got := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; got != 7 {
 			t.Errorf("older idle response erased newer message reply destination: %d", got)
 		}
+		finished.Store(true)
 		svc.events <- api.Event{SessionID: "s1", Kind: api.KindText, Text: "answer to next message"}
 		svc.events <- api.Event{SessionID: "s1", Kind: api.KindTurnDone}
 		synctest.Wait()
@@ -879,6 +888,114 @@ func TestRunCompletionDuringSend(t *testing.T) {
 				synctest.Wait()
 				if got, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
 					t.Errorf("finished turn still waiting in topic %d", got)
+				}
+				cancel()
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
+// The send can end while the completion lookup is still running, before the
+// completion is recorded for finishSent: the lookup must check again.
+func TestRunSendEndsDuringCompletionLookup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		b, err := json.Marshal(state{Topics: map[int64]topic{8: {Project: "/project", SessionID: "s1"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		started, release := make(chan struct{}), make(chan struct{})
+		looking, answer := make(chan struct{}), make(chan struct{})
+		svc := &registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 2)}}}
+		first := true
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			if first {
+				first = false
+				close(looking)
+				<-answer
+			}
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			close(started)
+			<-release
+			return api.MessageResult{SessionID: "s1"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		tr.updates <- []update{msg(1, 8, kevin, "next message")}
+		<-started
+		svc.events <- api.Event{SessionID: "s1", Seq: 1, Kind: api.KindText, Text: "the answer"}
+		svc.events <- api.Event{SessionID: "s1", Seq: 2, Kind: api.KindTurnDone}
+		<-looking
+		close(release)
+		<-tr.polls // the send and its finishSent are over
+		close(answer)
+		synctest.Wait()
+		if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" {
+			t.Errorf("answer = %v", tr.sent)
+		}
+		if got, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Errorf("finished turn still waiting in topic %d", got)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A turn_done that could not be saved arrives live with Seq 0 (issue #25).
+// Older stored history must not keep the topic waiting forever, whether or
+// not this bot saw that history.
+func TestRunUnsavedTurnDoneFinishesReply(t *testing.T) {
+	for _, name := range []string{"seen", "fresh"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				path := savedState(t, "s1", 7)
+				svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 4)}}}}
+				svc.history = []api.Event{
+					{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+					{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "partial"},
+				}
+				startup := true
+				svc.lookup = func(context.Context, string) (api.Session, error) {
+					if startup {
+						startup = false
+						return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+					}
+					return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+				}
+				tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+				tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+				tg.bot.http.Transport = tr
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- tg.Run(ctx) }()
+				<-tr.polls
+				if name == "seen" {
+					for _, ev := range svc.history {
+						svc.events <- ev
+					}
+				}
+				svc.events <- api.Event{SessionID: "s1", Kind: api.KindError, Text: "could not save the conversation"}
+				svc.events <- api.Event{SessionID: "s1", Kind: api.KindTurnDone}
+				synctest.Wait()
+				if got, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+					t.Errorf("unsaved completion left the topic waiting: %d", got)
 				}
 				cancel()
 				if err := <-done; err != nil {

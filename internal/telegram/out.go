@@ -149,36 +149,51 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 // at seq, once the session is gone, or idle with nothing queued and nothing
 // stored after seq: a later turn may have finished before this one's
 // answer went out, and its events are still on their way. A send in flight
-// defers the check to finishSent. Runs with outputMu held.
+// defers the check to finishSent; a send that ended during the check makes
+// it check again. Runs with outputMu held.
 func (t *Telegram) finishReply(ctx context.Context, id string, seq int64, generation uint64) {
-	s, err := t.svc.GetSession(ctx, id)
-	if err == nil && (s.Status != api.StatusIdle || len(s.Queued) > 0) {
-		return // messages queued during the turn run next: keep listening
+	if seq == 0 {
+		// A turn_done that could not be saved goes out live (issue #25):
+		// the last stored event this bot saw is the watermark instead.
+		seq = max(t.output.seq[id], t.output.noticeSeq[id])
 	}
-	if err == nil {
-		var later api.Page[api.Event]
-		if later, err = t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: seq, Limit: 1}); err == nil && len(later.Items) > 0 {
-			return
+	for {
+		s, err := t.svc.GetSession(ctx, id)
+		if err == nil && (s.Status != api.StatusIdle || len(s.Queued) > 0) {
+			return // messages queued during the turn run next: keep listening
 		}
-	}
-	if err != nil && !api.IsNotFound(err) {
-		if !errors.Is(err, context.Canceled) {
-			slog.Warn("telegram: check a finished turn", "session", id, "err", err)
+		if err == nil && seq != 0 {
+			var later api.Page[api.Event]
+			if later, err = t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: seq, Limit: 1}); err == nil && len(later.Items) > 0 {
+				return
+			}
 		}
-		return // an unknown state is not proof that queued work finished
+		if err != nil && !api.IsNotFound(err) {
+			if !errors.Is(err, context.Canceled) {
+				slog.Warn("telegram: check a finished turn", "session", id, "err", err)
+			}
+			return // an unknown state is not proof that queued work finished
+		}
+		t.mu.Lock()
+		switch {
+		case t.replySending[id] > 0:
+			t.replyDone[id] = seq // the turn may be the one being sent
+		case t.replyGeneration[id] == generation:
+			delete(t.state.ReplyTo, id)
+			delete(t.replyDone, id)
+			delete(t.output.seq, id)
+			delete(t.output.noticeSeq, id)
+		default:
+			// A send ended during the check, too early for finishSent to
+			// see this completion: check again with its outcome.
+			generation = t.replyGeneration[id]
+			t.mu.Unlock()
+			continue
+		}
+		t.mu.Unlock()
+		t.save()
+		return
 	}
-	t.mu.Lock()
-	switch {
-	case t.replySending[id] > 0:
-		t.replyDone[id] = seq // the turn may be the one being sent
-	case t.replyGeneration[id] == generation:
-		delete(t.state.ReplyTo, id)
-		delete(t.replyDone, id)
-		delete(t.output.seq, id)
-		delete(t.output.noticeSeq, id)
-	}
-	t.mu.Unlock()
-	t.save()
 }
 
 // finishSent checks a completion that arrived while a send to the session

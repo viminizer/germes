@@ -39,6 +39,33 @@
 - `docs/RULEBOOK.md`: atomic-save rule renumbered R47 -> R48 (R47 belongs to main's engine rule; this rule was never merged, so no published number changes). Ledger references updated. `docs/PLAN.md` Telegram failure contract documents both behaviors and the new regression names.
 - Checks, all exit 0: regressions `-count=100`; focused `go test ./internal/daemon ./internal/session ./internal/telegram ./internal/file ./internal/archtest -count=1`; `go test -race ./internal/daemon ./internal/session ./internal/telegram -count=1`; `make check`; `git diff --check`; `git diff 28b473d... --check`. Evidence: `/tmp/germes-r6-fix-path` -> `/tmp/germes-r6-fix.*` (before/after logs, exit files, overlay). Both review gates must run again on the new commit.
 
+### Round 6 post-fix check
+
+- HEAD `d8277911fc56a0775632b8e598e6bec448ca1ac0`, clean tree; `origin/main` still `28b473d` after fetch. All exit 0: `make check` (`/tmp/germes-r6-check2.log`), focused tests (`/tmp/germes-r6-focused2.log`), race tests (`/tmp/germes-r6-race2.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 second independent Codex review (HEAD `d827791`)
+
+- Evidence `/tmp/germes-r6-review2.dAMtye/` (transcript.log, verdict.txt, exit 0, session `01a18dff-186e-7be3-9826-5d7e554ccda2`, read-only / never). HEAD, status and worktree diff unchanged before and after. Coverage: all 12 Go files and RULEBOOK through EOF in ranges of at most 160 lines; PLAN scope sections. No failed reviewer commands. verdict.txt prints "22" but the transcript final message says "Actionable findings: 2" and lists two.
+- Open findings for the fix step:
+  1. P2 `internal/telegram/out.go:170`: the watcher captures the generation, then waits in GetSession/ListEvents; meanwhile the send returns (generation advances, replySending 0) and `finishSent` finds no `replyDone`. The watcher then sees a stale generation and replySending 0, so it neither cleans up nor defers: `ReplyTo` stays forever. Fix: record the pending completion before the slow checks, or let the watcher recheck with the current generation when the reservation ended during its checks. Regression: release the send while the completion lookup is blocked.
+  2. P2 `internal/telegram/out.go:160`: when saving `turn_done` fails, `worker.lose` publishes it live with `Seq: 0` (`internal/session/worker.go:399`). `finishReply` then lists events after 0, finds old history and keeps `ReplyTo` forever. Fix: use a real stored watermark for a live-only completion (not 0). Regression: existing history plus a failed final-event save.
+
+### Round 6 second consistency audit (read-only, HEAD `d827791`)
+
+- Both Codex findings independently CONFIRMED; both are gaps in the round-6 fix itself.
+  1. `out.go:96` captures the generation before `finishReply`; `finishReply` (out.go:153-180) does GetSession/ListEvents without locks. If the send returns during those calls, `sendMessage` (telegram.go) drops `replySending` to 0 and advances the generation, and `finishSent` (out.go:186-192) returns because `replyDone` is not set yet. The switch at out.go:171-179 then matches neither case: no cleanup, no deferral, nothing later retries. Suggested fix (smallest): when `replySending == 0` but the generation changed, rerun the checks with the current generation instead of giving up (each retry needs another finished send, so it is bounded). Regression: hold the completion lookup, release the send response, then release the lookup.
+  2. `worker.go:412` publishes `turn_done` live with `Seq: 0` when its save fails (issue #25). `finishReply` then asks for events after 0 (out.go:160), always finds old history, and keeps `ReplyTo` forever. Before round 6 this path cleaned up. Suggested fix: for `seq == 0` use the last stored sequence the bot has seen for the session (`t.output.seq`) as the watermark, or skip the later-events check. Regression: history exists, then a Seq-0 turn_done with idle/empty lookup clears the topic.
+- Peers: `registerCreated` (out.go:56) is the only other `ListEvents` paging user; it already treats sequence as the watermark. `tellLostAnswers` (telegram.go:227) depends on cleanup working, so both bugs turn into false "answer was lost" warnings on restart.
+- Rule numbers R1-R48 unique (R47 engine, R48 atomic save). PLAN Telegram contract matches code except for these two gaps. Result: FINDINGS.
+
+### Round 6 second fix (both findings)
+
+- `internal/telegram/out.go` `finishReply`: (1) if the generation changed but no send is in flight (a send ended during the lookup, before `finishSent` could see the completion), it now loops and checks again with the current generation instead of giving up. Each retry needs another finished send, so it is bounded. (2) A Seq-0 `turn_done` (unsaved, issue #25, `worker.go:412`) uses the last stored sequence this bot saw (`max(output.seq, output.noticeSeq)`) as the watermark; with none it skips the later-events check, as before round 6.
+- New regressions in `internal/telegram/lifecycle_test.go`: `TestRunSendEndsDuringCompletionLookup`, `TestRunUnsavedTurnDoneFinishesReply/{seen,fresh}`. BEFORE (HEAD `out.go` via `-overlay`): all three failed, exit 1 (topic stuck at 8 / 7). AFTER: pass.
+- `TestRunNewMessageSurvivesOlderCompletionLookup`: its fake now reports the session working once the new message is accepted and until its answer turn (as the real manager does with queued/claimed work). With the recheck, an always-idle fake would otherwise clean up a topic that a real session would still need. The old-idle-response case it protects is unchanged.
+- `docs/PLAN.md` Telegram failure contract documents both behaviors and the new regression names.
+- Checks, all exit 0: listed regressions `-count=100`; focused tests; race tests; `make check`; `git diff --check`; base diff check. Evidence: `/tmp/germes-r6-fix2-path` -> `/tmp/germes-r6-fix2.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

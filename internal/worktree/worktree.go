@@ -55,43 +55,148 @@ func Create(ctx context.Context, base, project, sessionID string) (Worktree, err
 	return Worktree{Dir: dir, Branch: branch}, nil
 }
 
-// HasWork reports whether the worktree has uncommitted changes, or commits
-// that the project's current branch does not have.
+// HasWork checks both the actual checkout HEAD and the saved owned branch.
 func HasWork(ctx context.Context, project string, wt Worktree) (bool, error) {
-	status, err := RunGit(ctx, wt.Dir, "status", "--porcelain")
-	if err != nil {
-		return false, err
-	}
-	if status != "" {
+	_, _, err := inspect(ctx, project, wt)
+	if errors.Is(err, ErrHasWork) {
 		return true, nil
 	}
-	ahead, err := RunGit(ctx, project, "rev-list", "--count", "HEAD.."+wt.Branch)
+	return false, err
+}
+
+// inspect returns the verified branch tip and whether the checkout remains.
+// A missing, unregistered checkout is a retry after worktree removal; an
+// existing but unrecognized checkout is never treated as a completed removal.
+func inspect(ctx context.Context, project string, wt Worktree) (string, bool, error) {
+	ref := "refs/heads/" + wt.Branch
+	if !strings.HasPrefix(wt.Branch, "germes/") {
+		return "", false, errors.New("not a session branch")
+	}
+	if _, err := RunGit(ctx, project, "check-ref-format", ref); err != nil {
+		return "", false, err
+	}
+	registered, err := registeredCheckout(ctx, project, wt)
+	if err != nil {
+		return "", false, err
+	}
+	_, statErr := os.Lstat(wt.Dir)
+	present := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return "", false, statErr
+	}
+	if registered != present {
+		return "", false, errors.New("worktree registration and directory disagree; restore or repair the checkout before cleanup")
+	}
+	var heads []string
+	if present {
+		if !registered || !IsRepo(ctx, wt.Dir) {
+			return "", false, errors.New("not the registered worktree root")
+		}
+		common, err := RunGit(ctx, project, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			return "", false, err
+		}
+		other, err := RunGit(ctx, wt.Dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil || evalLinks(common) != evalLinks(other) {
+			return "", false, fmt.Errorf("cannot verify checkout repository: %w", errors.Join(err, errors.New("repository identity mismatch")))
+		}
+		status, err := RunGit(ctx, wt.Dir, "status", "--porcelain")
+		if err != nil {
+			return "", false, err
+		}
+		if status != "" {
+			return "", false, ErrHasWork
+		}
+		head, err := RunGit(ctx, wt.Dir, "rev-parse", "--verify", "HEAD")
+		if err != nil {
+			return "", false, err
+		}
+		heads = append(heads, head)
+	}
+	refs, err := RunGit(ctx, project, "for-each-ref", "--format=%(refname) %(objectname)", ref)
+	if err != nil {
+		return "", false, err
+	}
+	tip := ""
+	for _, line := range strings.Split(refs, "\n") {
+		name, oid, _ := strings.Cut(line, " ")
+		if name == ref {
+			tip = oid
+			heads = append(heads, tip)
+		}
+	}
+	for _, head := range heads {
+		ahead, err := RunGit(ctx, project, "rev-list", "--count", "HEAD.."+head)
+		if err != nil {
+			return "", false, err
+		}
+		n, err := strconv.Atoi(ahead)
+		if err != nil {
+			return "", false, fmt.Errorf("read commit count %q: %w", ahead, err)
+		}
+		if n > 0 {
+			return "", false, ErrHasWork
+		}
+	}
+	return tip, present, nil
+}
+
+func registeredCheckout(ctx context.Context, project string, wt Worktree) (bool, error) {
+	out, err := RunGit(ctx, project, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return false, err
 	}
-	n, err := strconv.Atoi(ahead)
-	if err != nil {
-		return false, fmt.Errorf("read commit count %q: %w", ahead, err)
+	found, current := false, ""
+	for _, field := range strings.Split(out, "\x00") {
+		if path, ok := strings.CutPrefix(field, "worktree "); ok {
+			current = filepath.Clean(evalLinks(path))
+			if current == filepath.Clean(evalLinks(wt.Dir)) {
+				found = true
+				if current == filepath.Clean(evalLinks(project)) {
+					return false, errors.New("cannot remove the project checkout")
+				}
+			}
+		}
+		if branch, ok := strings.CutPrefix(field, "branch "); ok {
+			ours := branch == "refs/heads/"+wt.Branch
+			target := current == filepath.Clean(evalLinks(wt.Dir))
+			if (target && !ours) || (ours && !target) {
+				return false, errors.New("session branch is checked out in a different checkout")
+			}
+		}
 	}
-	return n > 0, nil
+	return found, nil
 }
 
-// Delete removes the worktree and its branch. It refuses with ErrHasWork
-// when that would lose anything.
+// Delete is retryable after directory or branch removal. Remove the owned
+// branch's upstream so Git rechecks ancestry against project HEAD, not a stale
+// tracking ref. Ordinary branch deletion also protects checked-out branches.
 func Delete(ctx context.Context, project string, wt Worktree) error {
-	has, err := HasWork(ctx, project, wt)
+	tip, present, err := inspect(ctx, project, wt)
 	if err != nil {
 		return err
 	}
-	if has {
-		return ErrHasWork
+	if present {
+		if _, err := RunGit(ctx, project, "worktree", "remove", wt.Dir); err != nil {
+			return fmt.Errorf("remove worktree: %w", err)
+		}
 	}
-	if _, err := RunGit(ctx, project, "worktree", "remove", wt.Dir); err != nil {
-		return fmt.Errorf("remove worktree: %w", err)
-	}
-	// -d (not -D): git itself refuses to drop a branch that is not merged.
-	if _, err := RunGit(ctx, project, "branch", "-d", wt.Branch); err != nil {
-		return fmt.Errorf("delete branch %s: %w", wt.Branch, err)
+	if tip != "" {
+		if _, err := registeredCheckout(ctx, project, wt); err != nil {
+			return err
+		}
+		upstream, err := RunGit(ctx, project, "for-each-ref", "--count=1", "--format=%(upstream)", "refs/heads/"+wt.Branch)
+		if err != nil {
+			return err
+		}
+		if upstream != "" {
+			if _, err := RunGit(ctx, project, "branch", "--unset-upstream", wt.Branch); err != nil {
+				return fmt.Errorf("unset owned branch upstream (retry cleanup): %w", err)
+			}
+		}
+		if _, err := RunGit(ctx, project, "branch", "-d", "--", wt.Branch); err != nil {
+			return fmt.Errorf("delete branch %s (retry cleanup): %w", wt.Branch, err)
+		}
 	}
 	return nil
 }

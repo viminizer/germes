@@ -389,6 +389,21 @@
 - PLAN: lost branch keeps a newer registration; each stored `user_message` drops stale turn output; regression names.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix15-path` -> `/tmp/germes-r6-fix15.*`. Both review gates must run again on the new commit.
 
+### Round 6 sixteenth check
+
+- HEAD `6e32319a9f800cebcd655c6348508382cfead0b7`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check16.log`), focused tests (`/tmp/germes-r6-focused16.log`), race tests (`/tmp/germes-r6-race16.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 sixteenth independent Codex review (HEAD `6e32319`)
+
+- Evidence `/tmp/germes-r6-review16.K7vCEm/` (transcript.log, verdict.txt, exit 0, session `01a18f1b-1938-7ad3-9451-18565577da77`, read-only / never). HEAD, status and worktree diff unchanged before and after; no failed reviewer commands. Coverage: all 12 Go files, RULEBOOK and PROGRESS through EOF in reads of at most 160 lines; PLAN scope sections and job diff hunks; supporting api, bot, watch, title, plan, checkpoints, daemon, main wiring, store events, archtest and every `file.Save` caller; Elsewhere implementations; parent check logs read, not rerun. R1-R48 unique.
+- VERDICT: **No actionable findings.** The six documented limits (a)-(f) in PLAN Telegram failures were not re-reported. Separate consistency audit still required on this HEAD.
+
+### Round 6 sixteenth consistency audit (read-only, HEAD `6e32319`)
+
+- Independent checks: all 26 regression names in PLAN's Telegram regression command exist as tests, and that exact command passes; every new Telegram helper (`markAnswered`, `watermark`, `replayMissed`, `storedEvents`, `settle`, `catchUp`, `finishSent`, `finishReply`, `recoverAnswer`) has a caller (no dead code); no stale PLAN wording from reverted designs (seeding, "never replayed", last-turn-only for the first request); `handled` comment matches its dedup-floor role; R47 (engine) and R48 (atomic save) unique, R48 example paths exist; `go vet ./...` and `staticcheck` on telegram/file/session/daemon exit 0 (`/tmp/germes-r6-audit-staticcheck.log`). Import boundaries unchanged (archtest passes in `make check`); new tests are safety regressions under R35, standard library only.
+- Codex review 16 on this HEAD: no actionable findings. Checks on this HEAD (sixteenth check) all exit 0. Documented limits (a)-(f) remain in PLAN with their reasons; (a), (e) and (f) need user decisions as separate tasks.
+- Result: CLEAN.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

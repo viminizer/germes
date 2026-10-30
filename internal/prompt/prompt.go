@@ -52,6 +52,12 @@ var Curator string
 //go:embed plan.md
 var PlanMode string
 
+// Title is the instruction for naming a session from its first message
+// (both engines), Hermes' prompt (hermes/agent/title_generator.py).
+//
+//go:embed title.md
+var Title string
+
 const (
 	maxProjectFile = 20_000 // characters of AGENTS.md / CLAUDE.md in the prompt
 	maxSkillDesc   = 200    // characters of each skill description in the index

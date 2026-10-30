@@ -221,6 +221,7 @@ func (w *worker) runTurn(text string, plan bool, skills []string) {
 	w.reply, w.used = "", nil
 	w.setStatus(api.StatusWorking)
 	w.refresh()
+	w.nameSession(text)
 	w.snapshot(ctx, text)
 	prompt := text
 	if w.m.opts.Refs != nil {

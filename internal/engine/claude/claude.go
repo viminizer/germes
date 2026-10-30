@@ -118,6 +118,26 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 	return out, nil
 }
 
+// titleModel is the model claude names sessions with: a title is a few
+// words, not worth the session's model.
+const titleModel = "haiku"
+
+// CreateTitle names a session with a one-off claude call: no tools and no
+// saved conversation (engine.Titler).
+func (c *Claude) CreateTitle(ctx context.Context, message string) (string, error) {
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", titleModel, "--tools", "", "--no-session-persistence",
+		"--output-format", "text", "--system-prompt", strings.TrimSpace(prompt.Title))
+	cmd.Dir = os.TempDir() // no project files in its context
+	cmd.Stdin = strings.NewReader(message)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("claude title: %w: %s", err, lastLine(stderr.String()))
+	}
+	return string(out), nil
+}
+
 // proc is one running claude process.
 type proc struct {
 	cmd    *exec.Cmd

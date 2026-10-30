@@ -77,6 +77,7 @@ type Options struct {
 	// Checkpoints is where folders are snapshot before each turn, for
 	// rollback; "" = no snapshots.
 	Checkpoints string
+	Titles      Titler // nil = a session's title stays its first message cut short
 }
 
 // NewManager creates a manager.

@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,5 +44,14 @@ func TestAnswersThatAreNotTitlesAreRefused(t *testing.T) {
 		if title, err := newRouter(t, &fakeStore{}, nil, e).CreateTitle(context.Background(), "x"); err == nil {
 			t.Errorf("%q: got title %q, want an error", answer, title)
 		}
+	}
+}
+
+// Text without spaces is one "word": the title is cut at 80 characters.
+func TestLongTitleWithoutSpacesIsCut(t *testing.T) {
+	e := &titleEngine{fakeEngine: fakeEngine{name: "a"}, answer: `{"title": "` + strings.Repeat("标题", 60) + `"}`}
+	title, err := newRouter(t, &fakeStore{}, nil, e).CreateTitle(context.Background(), "x")
+	if err != nil || len([]rune(title)) > maxTitleChars+1 {
+		t.Fatalf("title %q (%d runes), err %v", title, len([]rune(title)), err)
 	}
 }

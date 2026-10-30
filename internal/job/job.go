@@ -500,8 +500,9 @@ func (s *Scheduler) plainRound(reply, failure string) round {
 // sendRound starts the round's session with text, in the folder of the
 // round before, and saves it as the job's latest session.
 func (s *Scheduler) sendRound(ctx context.Context, j api.Job, text string) (string, error) {
+	// The round is the title: rounds are told apart, and no model names them.
 	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: j.Dir, Text: text,
-		Worktree: !j.NoWorktree, SameDirAs: j.SessionID})
+		Worktree: !j.NoWorktree, SameDirAs: j.SessionID, Title: fmt.Sprintf("Job %s, round %d", j.Name, j.Runs)})
 	if err != nil {
 		return "", err
 	}
@@ -561,8 +562,7 @@ func (s *Scheduler) checkRound(ctx context.Context, sessionID string) (gone, idl
 	return false, err == nil && sess.Status == api.StatusIdle && len(sess.Queued) == 0
 }
 
-// roundPrompt tells the agent how a round works. The first line is the
-// round session's title.
+// roundPrompt tells the agent how a round works.
 func roundPrompt(j api.Job) string {
 	if j.Repeat {
 		return fmt.Sprintf("Job %s, round %d. It repeats until the user stops it. Only when you found nothing to do in this round, end your reply with %s: Germes then waits a while before the next round. After doing work, do not write it.\n\n%s",

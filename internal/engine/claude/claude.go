@@ -122,20 +122,20 @@ func (c *Claude) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, e
 // words, not worth the session's model.
 const titleModel = "haiku"
 
-// CreateTitle names a session with a one-off claude call: no tools and no
-// saved conversation (engine.Titler).
+// CreateTitle names a session with a one-off claude call: no tools, no MCP
+// servers, no saved conversation, and no project files (engine.Titler).
 func (c *Claude) CreateTitle(ctx context.Context, message string) (string, error) {
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", titleModel, "--tools", "", "--no-session-persistence",
-		"--output-format", "text", "--system-prompt", strings.TrimSpace(prompt.Title))
-	cmd.Dir = os.TempDir() // no project files in its context
-	cmd.Stdin = strings.NewReader(message)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	pr, err := c.start(ctx, engine.Turn{Dir: os.TempDir(), Prompt: message}, []string{"-p", "--model", titleModel,
+		"--tools", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "text",
+		"--system-prompt", strings.TrimSpace(prompt.Title)})
 	if err != nil {
-		return "", fmt.Errorf("claude title: %w: %s", err, lastLine(stderr.String()))
+		return "", err
 	}
-	return string(out), nil
+	out, err := io.ReadAll(pr.stdout)
+	if werr := pr.cmd.Wait(); werr != nil {
+		return "", fmt.Errorf("claude title: %w: %s", werr, lastLine(pr.stderr.String()))
+	}
+	return string(out), err
 }
 
 // proc is one running claude process.

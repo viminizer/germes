@@ -15,6 +15,7 @@ import (
 const (
 	maxTitleInput = 1000 // characters of the message the model sees
 	maxTitleWords = 12   // longer is an answer, not a title
+	maxTitleChars = 80   // cut there: text without spaces (Chinese) has one "word"
 )
 
 // titleExamples are the prompt's examples: a model that repeats one says
@@ -65,5 +66,5 @@ func parseTitle(answer string) (string, error) {
 	if n := len(strings.Fields(title)); n == 0 || n > maxTitleWords || titleExamples[strings.ToLower(title)] {
 		return "", fmt.Errorf("not a title: %q", title)
 	}
-	return title, nil
+	return text.Shorten(title, maxTitleChars), nil
 }

@@ -21,12 +21,13 @@ const maxQueue = 100
 // worker runs one session's turns, one at a time. Only the worker goroutine
 // touches sess and seq.
 type worker struct {
-	m     *Manager
-	sess  api.Session
-	seq   int64
-	reply string        // the turn's last text (a plan turn saves it)
-	used  *api.Context  // how full the model's context was at the turn's end; nil = unknown
-	wake  chan struct{} // a message was queued
+	m       *Manager
+	sess    api.Session
+	seq     int64
+	reply   string        // the turn's last text (a plan turn saves it)
+	used    *api.Context  // how full the model's context was at the turn's end; nil = unknown
+	namings int           // turns that asked a model for the title (this daemon only)
+	wake    chan struct{} // a message was queued
 
 	mu      sync.Mutex
 	queue   []string           // messages waiting for the next turn

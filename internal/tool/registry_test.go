@@ -74,6 +74,11 @@ func TestBlockListResolvedFilePaths(t *testing.T) {
 		{"home", "/home/test-agent/private.txt", "~/private.txt", true},
 		{"raw home pattern", "~/private.txt", "~/private.txt", true},
 		{"basename", "private.txt", "sub/private.txt", true},
+		{"basename trailing dot", "private.txt", "sub/private.txt/.", true},
+		{"basename parent segments", "private.txt", "sub/private.txt/../private.txt/.", true},
+		{"basename absolute trailing dot", "private.txt", "/elsewhere/private.txt/.", true},
+		{"basename home trailing dot", "private.txt", "~/sub/private.txt/.", true},
+		{"basename different file", "private.txt", "sub/public.txt/.", false},
 		{"different file", "/proj/private.txt", "public.txt", false},
 		{"different directory", "/proj/private.txt", "/elsewhere/private.txt", false},
 	} {

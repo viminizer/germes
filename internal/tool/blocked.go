@@ -123,7 +123,7 @@ func candidates(arg, value, dir string) []string {
 		value = filepath.Join(dir, value)
 	}
 	if abs, err := filepath.Abs(value); err == nil {
-		out = append(out, abs)
+		out = append(out, abs, filepath.Base(abs))
 		if base, err := filepath.Abs(dir); err == nil {
 			if rel, err := filepath.Rel(base, abs); err == nil {
 				out = append(out, rel)

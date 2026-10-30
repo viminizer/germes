@@ -60,6 +60,14 @@ Required next steps: demonstrate defects with regression tests, implement only s
 - No performance improvement is claimed; no scheduler/workflow or out-of-scope production files were modified.
 - Both independent Codex review and consistency audit MUST run again on the fixed revision. Their prior results do not approve these changes; merge and cleanup remain gated.
 
+## Round 1 normalized-basename review repair
+
+- Recovered independent Codex review at `6cdd467` identified a basename-denial bypass; the separate consistency audit independently reproduced it. `sub/private.txt/.` resolved to the same target as `sub/private.txt` but its raw basename was `.` and no normalized basename candidate was checked. Read/Write/Edit were all affected; neither review gate cleared.
+- Before repair, `git fetch origin && git rebase origin/main` succeeded without conflicts onto `6a3afee0344e883cb4a920a0e9bdc4ceee0e0b85`. Rebase changed the reviewed revision, so previous reviews cannot approve this branch.
+- Extended the existing public `Registry.Run` path table with nested trailing-dot, parent-segment, absolute and home-expanded basename denials across Read/Write/Edit, plus an allowed different-file control. `go test ./internal/tool -run TestBlockListResolvedFilePaths -count=1` failed in all twelve new denial cases before the production fix; fake handlers ran when they should have been refused. No protected file was accessed.
+- The shared matcher now appends `filepath.Base(abs)` alongside the already-cleaned absolute target, preserving all previous candidates. PLAN.md specifies normalized-basename matching. Existing R12/R15/R35/R37 cover the pattern; no additional rule, abstraction, import, dependency or scope expansion is needed.
+- After repair, `go test ./internal/tool -run TestBlockList -count=1`, `make check` (build, vet, formatting and uncached full tests), `git diff --check` and `git diff origin/main...HEAD --check` passed. Both independent Codex review and the separate consistency audit must repeat on this repaired revision before merge; no merge or cleanup performed.
+
 ## Round 1 protected-argument review repair
 
 - Recovered independent Codex review at `32c6cd4` completed in the read-only sandbox, with full transcript and verdict saved under `/tmp/germes-cbphan-review/`. Parent-run `make check` supplied verification without relaxing sandbox permissions. Unlike the older attached no-findings transcript, this review identified a pre-existing protected-key decoding bypass. The separate consistency audit independently confirmed it (R12/R13/R15); neither gate cleared.

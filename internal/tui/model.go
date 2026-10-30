@@ -69,8 +69,9 @@ type model struct {
 	gen         int // watch generation; events from older watches are ignored
 	watchCancel context.CancelFunc
 
-	pending  []message // finished messages waiting to be printed together
-	flushing bool      // a flush is scheduled
+	pending   []message // finished messages waiting to be printed together
+	unprinted []string  // rendered lines that did not fit in the last print
+	flushing  bool      // a flush is scheduled
 
 	escPending bool // one Esc pressed; a second within the window stops the turn
 	escGen     int  // ignores timeouts of older Esc presses
@@ -173,10 +174,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case flushMsg:
 		m.flushing = false
-		if len(m.pending) == 0 {
+		if len(m.pending) == 0 && len(m.unprinted) == 0 {
 			return m, nil
 		}
-		return m, tea.Println(m.flush())
+		out := m.flush()
+		return m, tea.Batch(tea.Println(out), m.scheduleFlush())
 
 	case jobMsg:
 		// Follow the job to its new round.
@@ -388,21 +390,35 @@ func (m *model) print(msgs ...message) tea.Cmd {
 		return nil
 	}
 	m.pending = append(m.pending, msgs...)
-	if m.flushing || !m.started {
+	if !m.started {
+		return nil
+	}
+	return m.scheduleFlush()
+}
+
+// scheduleFlush prints what waits a moment from now, unless that is
+// already planned.
+func (m *model) scheduleFlush() tea.Cmd {
+	if m.flushing || (len(m.pending) == 0 && len(m.unprinted) == 0) {
 		return nil
 	}
 	m.flushing = true
 	return tea.Tick(printDelay, func(time.Time) tea.Msg { return flushMsg{} })
 }
 
-// flush prints the waiting messages, rendered for the current width.
+// flush renders the waiting messages for the current width and returns
+// the lines that fit above the live area; the rest wait for the next
+// flush. Bubble Tea prints above the live area as if it were at the bottom
+// of the screen: a print taller than the screen loses lines.
 func (m *model) flush() string {
-	views := make([]string, len(m.pending))
-	for i, msg := range m.pending {
-		views[i] = msg.view(m.width)
+	for _, msg := range m.pending {
+		m.unprinted = append(m.unprinted, strings.Split(msg.view(m.width), "\n")...)
 	}
 	m.pending = nil
-	return strings.Join(views, "\n")
+	n := min(len(m.unprinted), max(m.height-lipgloss.Height(m.View().Content), 1))
+	out := strings.Join(m.unprinted[:n], "\n")
+	m.unprinted = m.unprinted[n:]
+	return out
 }
 
 func (m *model) View() tea.View {
@@ -433,16 +449,13 @@ func (m *model) loadBranch() tea.Cmd {
 	}
 }
 
-// printBanner prints the intro (logo, version, the session's info box) and
-// the messages that waited for it, in one print.
+// printBanner prints the intro (logo, version, the session's info box);
+// the messages that waited for it follow in the next prints.
 func (m *model) printBanner() tea.Cmd {
 	b := banner{Version: m.opts.Version, Project: m.opts.Project, Session: m.sessionID, Engine: m.status.Engine}
 	out := b.view(m.width)
 	if m.startNotice != "" {
 		out += "\n" + message{Kind: kindNotice, Text: m.startNotice}.view(m.width) + "\n"
-	}
-	if len(m.pending) > 0 {
-		out += "\n" + m.flush()
 	}
 	// Blank lines put the live area at the bottom of the screen. Bubble
 	// Tea prints above it as if it were there; higher up, lines land on the
@@ -450,5 +463,5 @@ func (m *model) printBanner() tea.Cmd {
 	if pad := m.height - lipgloss.Height(out) - lipgloss.Height(m.View().Content); pad > 0 {
 		out += strings.Repeat("\n", pad)
 	}
-	return tea.Println(out)
+	return tea.Batch(tea.Println(out), m.scheduleFlush())
 }

@@ -18,11 +18,26 @@ type transcript struct {
 	printed   string          // the part of the current reply already printed
 	started   bool            // a message of the current reply is printed
 	running   []*api.ToolCall // tool calls waiting for their result
+	group     []*api.ToolCall // finished routine calls (reads, searches) not printed yet
 	lastSeq   int64
 }
 
-// apply takes one event and returns the messages it finished.
+// routine tools only look around; in a row they print as one line.
+var routine = map[string]bool{"Read": true, "Glob": true, "Grep": true, "LS": true, "skill_view": true,
+	"session_search": true, "WebFetch": true, "WebSearch": true}
+
+// apply takes one event and returns the messages it finished. Routine calls
+// wait in a group, printed as one line before whatever comes next.
 func (t *transcript) apply(ev api.Event) []message {
+	out := t.applyEvent(ev)
+	if len(t.group) > 0 && (len(out) > 0 || ev.Kind == api.KindTurnDone) {
+		out = append([]message{{Kind: kindTools, Tools: t.group, Dir: t.dir}}, out...)
+		t.group = nil
+	}
+	return out
+}
+
+func (t *transcript) applyEvent(ev api.Event) []message {
 	if ev.Seq != 0 {
 		if ev.Seq <= t.lastSeq {
 			return nil // already shown (replay after a reconnect)
@@ -76,6 +91,10 @@ func (t *transcript) finishTool(result *api.ToolCall) []message {
 			done.Output, done.IsError = result.Output, result.IsError
 			if done.Output == "" {
 				done.Output = "done"
+			}
+			if routine[done.Name] && !done.IsError {
+				t.group = append(t.group, &done)
+				return nil
 			}
 			return []message{{Kind: kindTool, Tool: &done, Dir: t.dir}}
 		}

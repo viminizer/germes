@@ -38,3 +38,18 @@ func TestStreamedLinesPrintOnce(t *testing.T) {
 		t.Fatalf("printed %q", got)
 	}
 }
+
+func TestRoutineCallsPrintAsOneLine(t *testing.T) {
+	var tr transcript
+	call := func(seq int64, id, name string, isErr bool) []message {
+		tr.apply(api.Event{Seq: seq, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: id, Name: name, Args: []byte(`{"file_path":"a.go"}`)}})
+		return tr.apply(api.Event{Seq: seq + 1, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: id, Output: "x", IsError: isErr}})
+	}
+	if got := append(call(1, "1", "Read", false), call(3, "2", "Grep", false)...); len(got) != 0 {
+		t.Fatalf("routine calls printed at once: %+v", got)
+	}
+	got := call(5, "3", "Read", true) // a failure shows right away, after the group
+	if len(got) != 2 || got[0].Kind != kindTools || len(got[0].Tools) != 2 || got[1].Kind != kindTool {
+		t.Fatalf("got %+v, want the group, then the failed call", got)
+	}
+}

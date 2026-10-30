@@ -18,6 +18,7 @@ var commands = []struct{ Name, Args, Help string }{
 	{"switch", "<id>", "open another session"},
 	{"overseer", "", "open the overseer (controls sessions and jobs)"},
 	{"rename", "<text>", "rename this session"},
+	{"details", "", "the last turn's tool calls in full"},
 	{"rollback", "[n]", "list file snapshots of this session; n puts the files back as before turn n"},
 	{"help", "", "this help"},
 	{"exit", "", "quit (the session keeps running)"},
@@ -49,6 +50,8 @@ func (m *model) command(text string) tea.Cmd {
 		return tea.Quit
 	case "help":
 		return notice(helpText())
+	case "details":
+		return m.showDetails()
 	case "new", "clear":
 		// The current session stays saved; a new one is only saved once a
 		// message is sent, so /clear with nothing after it leaves nothing.

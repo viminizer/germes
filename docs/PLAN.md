@@ -959,11 +959,13 @@ Keys (I use Ctrl for other things, so almost none):
 | Esc Esc | stop the current step (`StopSession`); one Esc alone does nothing |
 | Ctrl+C | quit (the session keeps running) |
 
-Slash commands, with autocomplete: `/sessions` (picker), `/switch`, `/rename`, `/overseer`, `/reserve`, `/new`, `/help`, `/exit` (quit, same as Ctrl+C). Handled in the TUI, they call `Service`.
+Slash commands, with autocomplete: `/sessions` (picker), `/switch`, `/rename`, `/overseer`, `/reserve`, `/new`, `/details`, `/help`, `/exit` (quit, same as Ctrl+C). Handled in the TUI, they call `Service`.
 
 - Skipped: markdown rendering of model text (`glamour`). Plain text first.
 
 Scrollback (issue #1): a streaming reply prints each finished line to the scrollback right away; only the unfinished line stays live, in one fixed row, so the live area never changes height while text streams. At start, blank lines put the live area at the bottom of the screen: Bubble Tea (v2.1.1) prints above the live area as if it were there, and higher up printed lines landed on the wrong rows and were lost.
+
+Tool calls (issue #6): routine calls that only look around (Read, Glob, Grep, LS, skill_view, session_search, WebFetch, WebSearch) that succeed wait in a group and print as one line before whatever comes next: `● Inspected: Read ×3, Grep` and a dim line of what they touched. A failed call shows on its own, in red, right away. Other tools keep one line with a one-line result (`(+N lines)`). `/details` prints the last turn's tool calls in full from the saved events (nothing runs again): arguments (a command as `$ command`, others as one line of JSON) and output, each cut at 40 lines with `… (+N more lines)`. Prints go out in pieces that fit above the live area, one per frame: a print taller than the screen made Bubble Tea lose the live area; the banner prints alone and the history follows the same way.
 
 ### To build (Kevin, 2026-10-29)
 

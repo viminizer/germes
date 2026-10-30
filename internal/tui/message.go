@@ -13,11 +13,12 @@ import (
 
 // message is one finished entry of the transcript.
 type message struct {
-	Kind messageKind
-	Text string
-	Tool *api.ToolCall // call with its result, for kindTool
-	Dir  string        // project folder: paths under it are shown short
-	Cont bool          // kindAssistant: more of a reply already partly printed
+	Kind  messageKind
+	Text  string
+	Tool  *api.ToolCall   // call with its result, for kindTool and kindDetail
+	Tools []*api.ToolCall // routine calls in a row, for kindTools
+	Dir   string          // project folder: paths under it are shown short
+	Cont  bool            // kindAssistant: more of a reply already partly printed
 }
 
 type messageKind int
@@ -26,6 +27,8 @@ const (
 	kindUser messageKind = iota
 	kindAssistant
 	kindTool
+	kindTools  // routine calls in a row, as one line
+	kindDetail // a tool call in full (/details)
 	kindError
 	kindNotice
 	kindSwitch // the router moved the session to another engine
@@ -42,6 +45,10 @@ func (m message) view(width int) string {
 		return gutter(replyMark(m.Cont), styleText, m.Text, width)
 	case kindTool:
 		return toolView(m.Tool, m.Dir, width)
+	case kindTools:
+		return groupView(m.Tools, m.Dir, width)
+	case kindDetail:
+		return detailView(m.Tool, m.Dir, width)
 	case kindError:
 		return gutter(styleError.Render("✗ "), styleError, m.Text, width)
 	case kindSwitch:
@@ -81,10 +88,7 @@ func gutter(mark string, style lipgloss.Style, text string, width int) string {
 
 // toolView is `● Name("preview")` and, once done, one dim result line.
 func toolView(t *api.ToolCall, dir string, width int) string {
-	dot, label := styleAccent.Render("● "), styleText
-	if t.IsError {
-		dot, label = styleError.Render("✗ "), styleError
-	}
+	dot, label := toolMark(t)
 	head := dot + label.Render(ansi.Truncate(toolLabel(t, dir), max(width-2, 10), "…"))
 	if t.Output == "" {
 		return head
@@ -102,6 +106,40 @@ func toolView(t *api.ToolCall, dir string, width int) string {
 	return head + "\n" + styleDim.Render(ansi.Truncate("  └─ "+result, max(width, 10), "…"))
 }
 
+// groupView is one line for routine calls in a row (`● Inspected: Read ×3,
+// Grep`) and one dim line of what they looked at.
+func groupView(calls []*api.ToolCall, dir string, width int) string {
+	var names, previews []string
+	counts := map[string]int{}
+	for _, c := range calls {
+		if counts[c.Name] == 0 {
+			names = append(names, c.Name)
+		}
+		counts[c.Name]++
+		if p := toolPreview(c, dir); p != "" {
+			previews = append(previews, p)
+		}
+	}
+	for i, n := range names {
+		if counts[n] > 1 {
+			names[i] = fmt.Sprintf("%s ×%d", n, counts[n])
+		}
+	}
+	head := styleAccent.Render("● ") + styleText.Render(ansi.Truncate("Inspected: "+strings.Join(names, ", "), max(width-2, 10), "…"))
+	if len(previews) == 0 {
+		return head
+	}
+	return head + "\n" + styleDim.Render(ansi.Truncate("  └─ "+strings.Join(previews, ", "), max(width, 10), "…"))
+}
+
+// toolMark is a call's dot and label style: a red cross for a failure.
+func toolMark(t *api.ToolCall) (string, lipgloss.Style) {
+	if t.IsError {
+		return styleError.Render("✗ "), styleError
+	}
+	return styleAccent.Render("● "), styleText
+}
+
 // toolLabel is Name("preview"), with the most telling argument as preview.
 func toolLabel(t *api.ToolCall, dir string) string {
 	var args map[string]any
@@ -109,17 +147,22 @@ func toolLabel(t *api.ToolCall, dir string) string {
 	if tasks, ok := args["tasks"].([]any); ok && t.Name == "delegate_task" {
 		return fmt.Sprintf("%s(%d tasks)", t.Name, len(tasks))
 	}
-	preview := ""
+	if p := toolPreview(t, dir); p != "" {
+		return fmt.Sprintf("%s(%q)", t.Name, p)
+	}
+	return t.Name
+}
+
+// toolPreview is the call's most telling argument, short, or "".
+func toolPreview(t *api.ToolCall, dir string) string {
+	var args map[string]any
+	json.Unmarshal(t.Args, &args)
 	for _, k := range []string{"command", "file_path", "pattern", "url", "query", "name", "text", "description"} {
 		if s, ok := args[k].(string); ok && s != "" {
-			preview = s
-			break
+			return ansi.Truncate(firstLine(shortPaths(s, dir)), 64, "…")
 		}
 	}
-	if preview == "" {
-		return t.Name
-	}
-	return fmt.Sprintf("%s(%q)", t.Name, ansi.Truncate(firstLine(shortPaths(preview, dir)), 64, "…"))
+	return ""
 }
 
 // maxTaskLines is how much of a task list the transcript shows.

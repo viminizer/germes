@@ -34,6 +34,9 @@ func TestReviewSaysWhatItSaved(t *testing.T) {
 		write("skills/fix-issues/SKILL.md", "a new skill")
 		os.RemoveAll(filepath.Join(home, "skills", "old"))
 	})
+	// One after the other: reviews that overlap may take credit for each
+	// other's saves (the ponytail note on learned).
+	r.Wait()
 	r.Run("s2", func(context.Context) {}) // nothing saved
 	r.Wait()
 	want := "s1: saved by the review: memory (about you), memory (agent notes), skill fix-issues, skill old"

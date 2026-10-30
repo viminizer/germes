@@ -1,10 +1,15 @@
 package engine
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
-// reviewEvery is how many tool calls without saving memory or a skill make
-// a background review due.
-const reviewEvery = 10
+const (
+	reviewEvery = 10 // tool calls without saving memory or a skill that make a background review due
+	// ReviewTimeout is how long a background review may run.
+	ReviewTimeout = 5 * time.Minute
+)
 
 // Steps counts each session's tool calls since it last saved memory or a
 // skill, so an engine knows when to review the session in the background

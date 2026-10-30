@@ -123,8 +123,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 // createOverseer creates the overseer's session in the home folder, once.
 func (m *Manager) createOverseer(ctx context.Context) error {
 	_, err := m.store.GetSession(ctx, api.OverseerID)
-	var e *api.Error
-	if !errors.As(err, &e) || e.Code != api.CodeNotFound {
+	if !api.IsNotFound(err) {
 		return err
 	}
 	home, err := os.UserHomeDir()

@@ -200,7 +200,7 @@ Kevin does not want duplicate logic. If it can be avoided, it must be avoided: t
 
 - From: default rulebook. Strengthened by Kevin 2026-10-29, audit: "i do not want duplicate logic, if it can be avoided, we must avoid it, otherwise, we can create duplicate logic in very rare cases"
 - Check: `go run github.com/mibk/dupl@latest -t 40 ./internal ./cmd` for copied blocks, and search by meaning (the same job done twice with other words), e.g. channel sends, safe file writes, argument decoding, text cutting, event paging.
-- Shared pieces today: `stream.Send`, `file.Save`, `text.Shorten`, `text.Replace`, `text.Transcript`, `api.ListAllEvents`, `tool.NewRun`.
+- Shared pieces today: `stream.Send`, `file.Save`, `text.Shorten`, `text.Replace`, `text.Transcript`, `api.ListAllEvents`, `api.IsNotFound` / `api.HasCode`, `tool.NewRun`.
 - Example: `internal/text/text.go`
 
 ## R9. No dead code

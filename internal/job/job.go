@@ -430,9 +430,7 @@ func (s *Scheduler) sendRound(ctx context.Context, j api.Job, text string) (stri
 // failed is a round that could not send its message. A folder or session
 // that is gone fails the job at once.
 func failed(err error) round {
-	var e *api.Error
-	fatal := errors.As(err, &e) && (e.Code == api.CodeInvalid || e.Code == api.CodeNotFound)
-	return round{failure: err.Error(), fatal: fatal}
+	return round{failure: err.Error(), fatal: api.HasCode(err, api.CodeInvalid, api.CodeNotFound)}
 }
 
 // waitIdle watches a session's events after seq after until it is idle
@@ -475,8 +473,7 @@ func (s *Scheduler) waitIdle(ctx context.Context, sessionID string, after int64)
 // nothing queued.
 func (s *Scheduler) checkRound(ctx context.Context, sessionID string) (gone, idle bool) {
 	sess, err := s.sessions.GetSession(ctx, sessionID)
-	var e *api.Error
-	if errors.As(err, &e) && e.Code == api.CodeNotFound {
+	if api.IsNotFound(err) {
 		return true, false
 	}
 	return false, err == nil && sess.Status == api.StatusIdle && len(sess.Queued) == 0

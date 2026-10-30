@@ -187,8 +187,7 @@ func (t *Telegram) send(ctx context.Context, thread int64, text string, plan boo
 	}
 	if tp.SessionID != "" {
 		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: tp.SessionID, Text: text, Plan: plan})
-		var e *api.Error
-		if !errors.As(err, &e) || e.Code != api.CodeNotFound {
+		if !api.IsNotFound(err) {
 			return res.SessionID, err
 		}
 		// The session was deleted: start a new one below.

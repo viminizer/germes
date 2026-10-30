@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"syscall"
@@ -26,10 +27,8 @@ import (
 // Name is this engine's name in config and resume ids.
 const Name = "claude-cli"
 
-const (
-	idleTimeout   = 10 * time.Minute // kills a claude process that prints nothing for this long
-	reviewTimeout = 5 * time.Minute
-)
+// idleTimeout kills a claude process that prints nothing for this long.
+const idleTimeout = 10 * time.Minute
 
 // Prompts builds the Germes part of the prompt (config knowledge, project,
 // skills, memory) that goes into --append-system-prompt.
@@ -201,11 +200,6 @@ func (c *Claude) args(t engine.Turn, extra string, dirs []string) []string {
 	if c.opts.Germes != "" {
 		args = append(args, "--mcp-config", c.mcpConfig(t.SessionID))
 	}
-	// Germes' own files (config, memory, skills, workflows) live outside
-	// the session's folder; without this, Claude may not read or edit them.
-	if c.opts.GermesHome != "" {
-		args = append(args, "--add-dir", c.opts.GermesHome)
-	}
 	for _, d := range dirs {
 		args = append(args, "--add-dir", d)
 	}
@@ -217,11 +211,23 @@ func (c *Claude) args(t engine.Turn, extra string, dirs []string) []string {
 	if len(blocked) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(blocked, " "))
 	}
-	if c.opts.Model != "" {
-		args = append(args, "--model", c.opts.Model)
-	}
 	if id := t.ResumeIDs[Name]; id != "" {
 		args = append(args, "--resume", id)
+	}
+	return append(args, c.sharedArgs(extra)...)
+}
+
+// sharedArgs are in every claude run: Germes' home folder, the model and
+// the Germes prompt.
+func (c *Claude) sharedArgs(extra string) []string {
+	var args []string
+	// Germes' own files (config, memory, skills, workflows) live outside
+	// the session's folder; without this, Claude may not read or edit them.
+	if c.opts.GermesHome != "" {
+		args = append(args, "--add-dir", c.opts.GermesHome)
+	}
+	if c.opts.Model != "" {
+		args = append(args, "--model", c.opts.Model)
 	}
 	if extra != "" {
 		args = append(args, "--append-system-prompt", extra)
@@ -291,10 +297,15 @@ func (c *Claude) savesLearning(tc *engine.ToolCall) bool {
 // claude resumes a fork of the conversation, so the session itself does not
 // change, and may only read files and edit memory and skills.
 func (c *Claude) review(t engine.Turn, resumeID, extra string) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("review panicked", "session", t.SessionID, "panic", p, "stack", string(debug.Stack()))
+		}
+	}()
 	if c.opts.GermesHome == "" || resumeID == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), reviewTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), engine.ReviewTimeout)
 	defer cancel()
 	t.Prompt = strings.TrimSpace(prompt.Review)
 	pr, err := c.start(ctx, t, c.reviewArgs(resumeID, extra))
@@ -320,15 +331,8 @@ func (c *Claude) reviewArgs(resumeID, extra string) []string {
 		"--allowedTools", "Read Glob Grep Edit(" + home + "/memories/**) Edit(" + home + "/skills/**)",
 		"--disallowedTools", strings.Join(append(slices.Clone(c.opts.Blocked), "Bash", "WebFetch", "WebSearch", "NotebookEdit"), " "),
 		"--permission-prompts", "none",
-		"--add-dir", c.opts.GermesHome,
 	}
-	if c.opts.Model != "" {
-		args = append(args, "--model", c.opts.Model)
-	}
-	if extra != "" {
-		args = append(args, "--append-system-prompt", extra)
-	}
-	return args
+	return append(args, c.sharedArgs(extra)...)
 }
 
 func lastLine(s string) string {

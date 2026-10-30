@@ -132,6 +132,10 @@ func TestRepeatingJobIgnoresDone(t *testing.T) {
 	if strings.Contains(r.turns[0].Prompt, "PROGRESS.md") {
 		t.Fatalf("a repeating round got the goal instructions: %q", r.turns[0].Prompt)
 	}
+}
+
+func TestRepeatingJobNeedsEvery(t *testing.T) {
+	s, _ := newTestScheduler(t, "ok")
 	if _, err := s.CreateJob(context.Background(), api.JobRequest{Dir: t.TempDir(), Prompt: "x", Repeat: true}); err == nil {
 		t.Fatal("created a repeating job with no every")
 	}

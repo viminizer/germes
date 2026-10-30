@@ -90,7 +90,7 @@ leaves                api                                  → stream
                       engine, tool, env                    → (none)
 ```
 
-Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `stream.Wait` (wait for goroutines unless cancelled), `file.Save` (safe write), `text.Shorten`, `text.Replace` (exact replace, undoing a model's added escaping) and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `tool.NewRun` (decode tool arguments). Also imported by: job (stream), llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text), tools/files and skill (text).
+Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `stream.Wait` (wait for goroutines unless cancelled), `file.Save` (safe write), `text.Shorten`, `text.Replace` (exact replace, undoing a model's added escaping) and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `api.IsNotFound` and `api.HasCode` (check an error's code), `tool.NewRun` (decode tool arguments). Also imported by: job (stream), llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text), tools/files and skill (text).
 
 Notes:
 - Shared plain types live low: `api` (Session, Event, Job, Page, filters), `engine` (Turn, Event, Usage). Higher modules and `store` use them, so nothing imports upward.
@@ -1199,6 +1199,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Codex usage call fails: logged only; usage is a hint, the turn goes on.
 - Compaction fails: logged; the turn runs with the full history (the model may refuse a too-long input, which shows as an error).
 - Background review fails: logged; nothing is saved, the user sees nothing.
+- A built-in job (the curator) cannot be created at daemon start: logged; the next daemon start tries again.
 - A skill cannot be read (broken frontmatter): it is left out of the skills list.
 - `claude` missing or not logged in: error event, engine marked unavailable for a while, router switches.
 - Claude process hangs: no output for 10 minutes kills it (Hermes uses 600 s too).

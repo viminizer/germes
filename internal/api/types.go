@@ -5,7 +5,9 @@ package api
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -265,6 +267,15 @@ func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
 func NewError(code Code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
+
+// HasCode reports whether err is an *Error with one of codes.
+func HasCode(err error, codes ...Code) bool {
+	var e *Error
+	return errors.As(err, &e) && slices.Contains(codes, e.Code)
+}
+
+// IsNotFound reports whether err says the thing does not exist.
+func IsNotFound(err error) bool { return HasCode(err, CodeNotFound) }
 
 // NewID returns a new short random id, for sessions and jobs.
 func NewID() string {

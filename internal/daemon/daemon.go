@@ -361,8 +361,7 @@ func shutdown(srv *http.Server) {
 func (d *Daemon) createJobs(ctx context.Context) {
 	for _, r := range d.opts.Jobs {
 		_, err := d.jobs.GetJob(ctx, r.Name)
-		var e *api.Error
-		if !errors.As(err, &e) || e.Code != api.CodeNotFound {
+		if !api.IsNotFound(err) {
 			if err != nil {
 				slog.Warn("read built-in job", "job", r.Name, "err", err)
 			}

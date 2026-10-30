@@ -248,8 +248,7 @@ func runTUI(ctx context.Context, p paths, client *api.Client, start tuiStart) er
 	jobID := ""
 	if sessionID != "" {
 		s, err := client.GetSession(ctx, sessionID)
-		var e *api.Error
-		if errors.As(err, &e) && e.Code == api.CodeNotFound {
+		if api.IsNotFound(err) {
 			// Not a session: maybe a job. Open its latest round.
 			j, jerr := client.GetJob(ctx, sessionID)
 			if jerr != nil {

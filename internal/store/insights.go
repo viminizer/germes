@@ -64,7 +64,8 @@ func (s *Store) listCounts(ctx context.Context, query string, args ...any) ([]ap
 // tool, or a read of a SKILL.md.
 func (s *Store) listSkillUses(ctx context.Context, t int64) ([]api.SkillUse, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT time, tool FROM events WHERE time >= ? AND kind = 'tool_call'
-		AND json_extract(tool, '$.name') IN ('skill_view', 'Skill', 'Read')`, t)
+		AND (json_extract(tool, '$.name') IN ('skill_view', 'Skill')
+			OR (json_extract(tool, '$.name') = 'Read' AND json_extract(tool, '$.args.file_path') LIKE '%/SKILL.md'))`, t)
 	if err != nil {
 		return nil, fmt.Errorf("insights: %w", err)
 	}

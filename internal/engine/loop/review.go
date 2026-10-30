@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"strings"
-	"time"
 
 	"github.com/viminizer/germes/internal/engine"
 	"github.com/viminizer/germes/internal/llm"
@@ -14,10 +13,7 @@ import (
 	"github.com/viminizer/germes/internal/tool"
 )
 
-const (
-	reviewSteps   = 6 // model calls the review may make
-	reviewTimeout = 5 * time.Minute
-)
+const reviewSteps = 6 // model calls the review may make
 
 // review runs in the background after a turn: a short, silent agent run with
 // only the memory and skill tools that reads the session and saves what is
@@ -33,7 +29,7 @@ func (l *Loop) review(t engine.Turn) {
 				slog.Error("review panicked", "session", sessionID, "panic", p, "stack", string(debug.Stack()))
 			}
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), reviewTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), engine.ReviewTimeout)
 		defer cancel()
 		events, err := l.loadEvents(ctx, sessionID)
 		if err != nil {

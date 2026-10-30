@@ -188,7 +188,8 @@ func (t *transcript) view(width, height int, spin string, now time.Time) string 
 	if len(t.tools) > 0 {
 		rows = min(rows, room/2) // the tree gets the other half
 	}
-	if rows = min(rows, room); len(t.todos) > 0 && rows >= 5 { // the cap keeps 3 rows: an item and its "…" lines
+	// A cut list needs 3 rows: an item and its "…" lines; a short one fits whole.
+	if rows = min(rows, room); len(t.todos) > 0 && rows >= min(5, len(t.todos)+2) {
 		parts = append(parts, "", todoView(t.todos, width, false, false, rows-2))
 		room -= rows
 	}

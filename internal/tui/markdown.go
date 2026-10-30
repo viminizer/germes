@@ -13,7 +13,7 @@ import (
 // code in accent, code blocks indented under a `─ lang` line, tables in
 // columns with the header underlined.
 var (
-	reFence    = regexp.MustCompile("^\\s*(```|~~~)\\s*(\\S*)")
+	reFence    = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([^`\\s]*)")
 	reHeading  = regexp.MustCompile(`^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$`)
 	reRule     = regexp.MustCompile(`^\s{0,3}([-*_])(\s*[-*_]){2,}\s*$`)
 	reBullet   = regexp.MustCompile(`^(\s*)[-*+]\s+(.*)$`)
@@ -35,10 +35,11 @@ func renderMarkdown(text string, width int) string {
 				out = append(out, styleMuted.Render("  ─ "+lang))
 			}
 			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), fence); i++ {
-				// Wrapped here, so a long line keeps the indent.
-				code := ansi.Hardwrap(strings.ReplaceAll(lines[i], "\t", "    "), max(width-2, 10), true)
-				for _, part := range strings.Split(code, "\n") {
-					out = append(out, "  "+highlight(part, lang))
+				// Colored whole, then wrapped here, so a long line keeps the
+				// indent and a cut string or comment keeps its color.
+				code := highlight(strings.ReplaceAll(lines[i], "\t", "    "), lang)
+				for _, part := range strings.Split(lipgloss.NewStyle().Width(max(width-2, 10)).Render(code), "\n") {
+					out = append(out, "  "+strings.TrimRight(part, " "))
 				}
 			}
 			continue

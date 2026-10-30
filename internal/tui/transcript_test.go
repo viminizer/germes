@@ -67,11 +67,13 @@ func TestToolCallsPrintAsOneTreeBeforeTheText(t *testing.T) {
 // A code block or a table prints whole, once it ends.
 func TestOpenBlocksWaitUntilTheyEnd(t *testing.T) {
 	for in, want := range map[string][2]string{
-		"text\n```go\nx := 1\n":          {"text\n", "```go\nx := 1\n"},
-		"```go\nx := 1\n```\nafter\n":    {"```go\nx := 1\n```\nafter\n", ""},
-		"```js x := 1```\nafter\n":       {"```js x := 1```\nafter\n", ""},
-		"a\n| h |\n|---|\n| 1 |\n":       {"a\n", "| h |\n|---|\n| 1 |\n"},
-		"| h |\n|---|\n| 1 |\n\nafter\n": {"| h |\n|---|\n| 1 |\n\nafter\n", ""},
+		"text\n```go\nx := 1\n":                {"text\n", "```go\nx := 1\n"},
+		"```go\nx := 1\n```\nafter\n":          {"```go\nx := 1\n```\nafter\n", ""},
+		"````md\n```go\nx\n```\n````\nafter\n": {"````md\n```go\nx\n```\n````\nafter\n", ""},
+		"````md\n```go\n":                      {"", "````md\n```go\n"},
+		"```js x := 1```\nafter\n":             {"```js x := 1```\nafter\n", ""},
+		"a\n| h |\n|---|\n| 1 |\n":             {"a\n", "| h |\n|---|\n| 1 |\n"},
+		"| h |\n|---|\n| 1 |\n\nafter\n":       {"| h |\n|---|\n| 1 |\n\nafter\n", ""},
 	} {
 		if ready, held := readyBlocks(in); ready != want[0] || held != want[1] {
 			t.Errorf("%q: got %q / %q, want %q / %q", in, ready, held, want[0], want[1])
@@ -128,6 +130,10 @@ func TestLiveAreaFitsTheScreen(t *testing.T) {
 		tr.apply(api.Event{Seq: int64(4 + 2*i), Kind: api.KindToolResult, Tool: &api.ToolCall{ID: id, Output: "boom", IsError: true}})
 	}
 	tr.apply(api.Event{Kind: api.KindTextDelta, Text: "working on it"})
+	short := transcript{todos: parseTodos("- [>] 1. Only step")}
+	if got := short.view(80, 30, "", time.Now()); !strings.Contains(got, "Only step") {
+		t.Errorf("a one-item list is hidden: %q", got)
+	}
 	for _, height := range []int{5, 12, 30} {
 		if got := lipgloss.Height(tr.view(80, height, "⠋", time.Now())); got > height {
 			t.Errorf("height %d: live area is %d rows", height, got)

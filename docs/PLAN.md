@@ -529,7 +529,7 @@ Needs: `llm` (calls the model with the Codex token), `tool` (registry), `prompt`
 1. Load history: the session's events since the last `Compacted` event, turned into chat messages.
 2. Build the system prompt with `prompt`. Frozen for the session.
 3. Call the model; stream text out as `Text` events.
-4. Tool call: emit `ToolCall` first (the session saves it: save before running). Blocked command: error result. Unknown tool: error result listing valid names. Else run it, emit `ToolResult`.
+4. Tool calls: emit every `ToolCall` of the step first and wait until the session says each is saved (`Event.Saved`, asked for by `Turn.Saves`; issue #25, like Hermes's `agent/turn_tool_round.py`): no tool runs without a saved record. Blocked command: error result. Unknown tool: error result listing valid names. Else run it, emit `ToolResult` and wait for its save before the next tool or model call. A failed save stops the turn; a tool that ran is never run again for it. A subagent's turn does not ask (its events are not saved). Claude runs its tools inside its CLI, so Germes cannot hold them; a failed save there stops the turn too.
 5. Loop until there are no tool calls or the budget runs out (up to 50 steps per turn, then one grace call to wrap up).
 6. At 50% of the context window: trim old tool outputs to their start and end first (free), then summarize the middle with a cheap model and emit `Compacted{Summary}`. The next history load starts from it, so compaction lives in the event log.
 7. Emit `Done`.
@@ -1216,7 +1216,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Migration fails or database broken: refuse to start, do not touch the file. Never delete data automatically. `germes doctor` never creates, updates or moves the database; it says to move a broken file away, but for a busy or locked database (another process held it longer than the 5 s busy timeout) it says to run doctor again (`store.IsBusy`).
 - Database busy: wait (busy timeout).
 - A contract update (`NNN_x.contract.sql`) fails: it rolls back and stays pending, the error is logged, the daemon keeps serving on the expanded schema, and the next start tries again. It never runs while an older daemon's process may still exist (#21, R46).
-- Disk full: saving fails, an `error` event is recorded if possible, the session goes idle.
+- Disk full, or any failed save of an event (issue #25): the event is not published as saved; the turn stops; the user gets a live error ("could not save the conversation …; free disk space or run `germes doctor`"), and the turn's end still goes out live (Seq 0) so the TUI, Telegram and jobs know it ended. The next saved event takes the failed one's number (no gap). Live events may differ from the saved history only by the failure notice.
 - Snapshot cleanup cannot read project/age metadata or inspect a project (permission, I/O or other error): preserve that snapshot repo, continue cleaning independent entries, return joined errors with the number removed, and log them in the daemon cleanup callback; a later cleanup retries. An active repo is skipped without waiting. Only `os.ErrNotExist` confirms a project is gone. Missing folder records identify unrelated/uninitialized entries and are left alone; invalid records or missing/non-regular indexes for existing projects are errors, not proof of age.
 
 ### TUI and clients

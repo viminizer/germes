@@ -266,9 +266,15 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		}
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})
 		asked := "" // the questions for the user, when the model called clarify
+		// Every call of the step is saved before any of them runs (issue #25,
+		// like Hermes's agent/turn_tool_round.py): a tool never changes
+		// anything without a record of it.
 		for _, call := range calls {
-			// The session saves the call before it runs.
-			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args}})
+			if !sendSaved(ctx, out, t, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args}}) {
+				return
+			}
+		}
+		for _, call := range calls {
 			res := tool.Result{IsError: true, Output: g.refuse(call)}
 			switch {
 			case res.Output != "":
@@ -291,7 +297,11 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			if ctx.Err() != nil {
 				return
 			}
-			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolResult, Tool: &engine.ToolCall{ID: call.ID, Output: res.Output, IsError: res.IsError}})
+			// Saved before the next tool or model call; a tool that ran is
+			// never run again for it.
+			if !sendSaved(ctx, out, t, engine.Event{Kind: engine.KindToolResult, Tool: &engine.ToolCall{ID: call.ID, Output: res.Output, IsError: res.IsError}}) {
+				return
+			}
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Text: res.Output})
 		}
 		if asked != "" {
@@ -319,4 +329,24 @@ const finalWithCalls = "[Germes] You gave your final answer and also asked for t
 // isFinal reports whether one of a step's texts is the model's final answer.
 func isFinal(texts []llm.Message) bool {
 	return slices.ContainsFunc(texts, func(m llm.Message) bool { return m.Phase == llm.PhaseFinalAnswer })
+}
+
+// sendSaved sends a tool event. When the session saves them (Turn.Saves),
+// it waits for the save: false means the save failed or the turn ended, and
+// the turn must stop.
+func sendSaved(ctx context.Context, out chan<- engine.Event, t engine.Turn, ev engine.Event) bool {
+	if !t.Saves {
+		return stream.Send(ctx, out, ev)
+	}
+	saved := make(chan error, 1)
+	ev.Saved = saved
+	if !stream.Send(ctx, out, ev) {
+		return false
+	}
+	select {
+	case err := <-saved:
+		return err == nil
+	case <-ctx.Done():
+		return false
+	}
 }

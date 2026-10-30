@@ -32,6 +32,7 @@ type worker struct {
 	plan    bool               // a queued message asks for a plan turn
 	cancel  context.CancelFunc // cancels the running turn
 	running bool               // turns are running
+	lost    bool               // a save failed in this turn: it stopped, and the user was told
 }
 
 func (w *worker) run() {
@@ -187,12 +188,14 @@ func (w *worker) stopTurn(dropQueue bool) {
 func (w *worker) runTurn(text string, plan bool) {
 	ctx, cancel := context.WithCancel(w.m.ctx)
 	w.mu.Lock()
-	w.cancel = cancel
+	w.cancel, w.lost = cancel, false
 	w.mu.Unlock()
 	defer func() {
-		stopped := ctx.Err() != nil && w.m.ctx.Err() == nil
+		cut := ctx.Err() != nil && w.m.ctx.Err() == nil // before cancel, which always sets ctx.Err
 		cancel()
 		w.mu.Lock()
+		// A failed save stopped it: the user was told already (lose).
+		stopped := cut && !w.lost
 		w.cancel = nil
 		w.mu.Unlock()
 		if r := recover(); r != nil {
@@ -226,7 +229,8 @@ func (w *worker) runTurn(text string, plan bool) {
 
 	for {
 		turn := engine.Turn{SessionID: w.sess.ID, Dir: w.sess.Dir, Project: w.sess.Project, Branch: w.sess.Branch,
-			Prompt: prompt, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine, Overseer: w.sess.ID == api.OverseerID, Plan: plan}
+			Prompt: prompt, ResumeIDs: w.sess.ResumeIDs, LastEngine: w.sess.Engine, Overseer: w.sess.ID == api.OverseerID, Plan: plan,
+			Saves: true}
 		events, err := w.m.runner.Run(ctx, turn)
 		var unavail *engine.UnavailableError
 		if errors.As(err, &unavail) {
@@ -275,10 +279,15 @@ func (w *worker) handle(ev engine.Event) {
 	case engine.KindText:
 		w.reply = ev.Text
 		w.emit(api.Event{Kind: api.KindText, Text: ev.Text})
-	case engine.KindToolCall:
-		w.emit(api.Event{Kind: api.KindToolCall, Tool: toolOf(ev.Tool)})
-	case engine.KindToolResult:
-		w.emit(api.Event{Kind: api.KindToolResult, Tool: toolOf(ev.Tool)})
+	case engine.KindToolCall, engine.KindToolResult:
+		kind := api.KindToolCall
+		if ev.Kind == engine.KindToolResult {
+			kind = api.KindToolResult
+		}
+		err := w.emit(api.Event{Kind: kind, Tool: toolOf(ev.Tool)})
+		if ev.Saved != nil {
+			ev.Saved <- err // the engine runs the tool (or goes on) only once it is saved
+		}
 	case engine.KindLimitHit:
 		text := "usage limit hit"
 		if ev.Outage {
@@ -329,18 +338,49 @@ func toolOf(t *engine.ToolCall) *api.ToolCall {
 }
 
 // emit saves an event (except live text deltas), then publishes it.
-// Save first: a client never sees an event that a crash could lose.
-func (w *worker) emit(ev api.Event) {
+// Save first: a client never sees an event that a crash could lose. A failed
+// save is handled here (lost); the error is returned for the engine waiting
+// on it.
+func (w *worker) emit(ev api.Event) error {
 	ev.SessionID = w.sess.ID
 	ev.Time = time.Now()
 	if ev.Kind != api.KindTextDelta {
 		w.seq++
 		ev.Seq = w.seq
 		if err := w.m.store.CreateEvent(context.Background(), ev); err != nil {
-			slog.Error("save event", "session", w.sess.ID, "err", err)
+			w.seq-- // not saved: the next event takes its number, no gap
+			w.lose(ev, err)
+			return err
 		}
 	}
 	w.m.hub.publish(ev)
+	return nil
+}
+
+// lose handles an event that could not be saved (a full disk, a broken
+// database; issue #25). It is not shown as saved: only the end of the turn
+// and errors still go out, live (Seq 0), so watchers know the turn ended.
+// The turn stops, and the user is told once.
+func (w *worker) lose(ev api.Event, err error) {
+	slog.Error("save event", "session", w.sess.ID, "kind", ev.Kind, "err", err)
+	live := func(ev api.Event) {
+		ev.Seq = 0
+		w.m.hub.publish(ev)
+	}
+	w.mu.Lock()
+	first, cancel := !w.lost, w.cancel
+	w.lost = true
+	w.mu.Unlock()
+	if first {
+		live(api.Event{SessionID: w.sess.ID, Time: time.Now(), Kind: api.KindError,
+			Text: fmt.Sprintf("could not save the conversation (%v), so the turn stopped; what follows is not kept. Free disk space or run `germes doctor`.", err)})
+	}
+	if ev.Kind == api.KindTurnDone || ev.Kind == api.KindError {
+		live(ev)
+	}
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // setStatus saves the status and the fields the worker owns. It reads the

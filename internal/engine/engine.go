@@ -28,6 +28,10 @@ type Turn struct {
 	Extra      string // added to the system prompt (handoff, memory, skills)
 	Overseer   bool   // the overseer's turn: its role and its tools
 	Plan       bool   // a plan turn: change nothing, reply with a plan
+	// Saves: the receiver saves tool calls and results and answers each
+	// one's Event.Saved, so a tool runs only after its call is saved (issue
+	// #25). The session sets it; a subagent's events are not saved.
+	Saves bool
 }
 
 // Kind says what an Event is.
@@ -55,13 +59,14 @@ type Event struct {
 	Text     string
 	Tool     *ToolCall
 	Usage    *Usage
-	ResetAt  time.Time // limit_hit
-	Outage   bool      // limit_hit: the provider is down for now, not a usage limit; Err says why
-	ResumeID string    // done
-	Context  *Context  // done: how full the model's context was at the end; nil = unknown
-	Engine   string    // done, switched: the engine that ran (or now runs) the turn
-	KeepFrom int64     // compacted: events from this seq on are kept as they are
-	Err      error     // error
+	ResetAt  time.Time    // limit_hit
+	Outage   bool         // limit_hit: the provider is down for now, not a usage limit; Err says why
+	ResumeID string       // done
+	Context  *Context     // done: how full the model's context was at the end; nil = unknown
+	Engine   string       // done, switched: the engine that ran (or now runs) the turn
+	KeepFrom int64        // compacted: events from this seq on are kept as they are
+	Err      error        // error
+	Saved    chan<- error // tool_call, tool_result with Turn.Saves: the receiver sends whether it saved the event
 }
 
 // Context is how full a model's context is.

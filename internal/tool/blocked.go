@@ -112,17 +112,30 @@ func protectedArgument(raw json.RawMessage, arg string) (string, error) {
 	return value, nil
 }
 
-// candidates are the strings a pattern is checked against. A shell command is
-// split at &&, ||, ; and | so `cd x && sudo y` is caught. A path is checked
-// as given, by its base name, and as a lexical absolute and project-relative path.
-// ponytail: plain splitting, not a shell parser; quoted separators and
-// subshells like $(sudo x) slip through. Upgrade to a real parser if needed.
+var (
+	shellUnquote = strings.NewReplacer(`"`, "", "'", "", `\`, "")
+	shellSplit   = regexp.MustCompile("[;|&\n()`{}<>]")
+	shellWord    = regexp.MustCompile(`\S+`)
+)
+
+// candidates are the strings a pattern is checked against. A shell command,
+// as written and without its quotes and escapes (so `"su"do` and
+// `bash -c 'sudo y'` read as sudo, and a rule with quotes still matches), is
+// split at every separator, line, subshell and substitution, and each part is
+// checked from every word on, so `if sudo y` and `env sudo y` are caught.
+// A path is checked as given, by its base name, and as a lexical absolute and
+// project-relative path.
+// ponytail: text splitting, not a shell parser. It errs toward blocking
+// (`git commit -m "drop sudo use"` is blocked) and cannot see commands built
+// at run time ($(echo sudo) y). Use a real parser if that matters.
 func candidates(arg, value, dir string) []string {
 	if arg == "command" {
 		var parts []string
-		for _, p := range regexp.MustCompile(`&&|\|\||;|\|`).Split(value, -1) {
-			if p = strings.TrimSpace(p); p != "" {
-				parts = append(parts, p)
+		for _, v := range []string{value, shellUnquote.Replace(value)} {
+			for _, p := range shellSplit.Split(v, -1) {
+				for _, loc := range shellWord.FindAllStringIndex(p, -1) {
+					parts = append(parts, strings.TrimSpace(p[loc[0]:]))
+				}
 			}
 		}
 		return parts

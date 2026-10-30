@@ -83,6 +83,16 @@ func TestTemporaryStreamErrorIsSentAgain(t *testing.T) {
 	}
 }
 
+func TestStatusReadsWell(t *testing.T) {
+	// The real message ends with a period; the status adds no second one.
+	first := `data: {"type":"error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}` + "\n\n"
+	_, chunks, _ := runStreams(first, answer)
+	want := "codex: server_is_overloaded: Our servers are currently overloaded. Please try again later. Trying again in 0s (retry 1 of 2)."
+	if chunks[0].Text != want {
+		t.Fatalf("status %q\nwant   %q", chunks[0].Text, want)
+	}
+}
+
 func TestCutStreamIsSentAgain(t *testing.T) {
 	ok, _, resends := runStreams(`data: {"type":"response.created"}`+"\n\n", answer) // ends without completing
 	if !ok || resends != 1 {

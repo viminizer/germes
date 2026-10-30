@@ -150,7 +150,7 @@ func (c *Client) run(ctx context.Context, body io.ReadCloser, resend func() (io.
 		// A wait can be long (up to maxRetryAfter): say so, as Hermes shows a
 		// countdown (hermes/agent/turn_recovery_autorecover.py).
 		stream.Send(ctx, out, llm.Chunk{Kind: llm.KindStatus,
-			Text: fmt.Sprintf("%v. Trying again in %s (retry %d of %d).", end.chunk.Err, wait.Round(time.Second), attempt, streamRetries)})
+			Text: fmt.Sprintf("%s. Trying again in %s (retry %d of %d).", strings.TrimRight(end.chunk.Err.Error(), ". "), wait.Round(time.Second), attempt, streamRetries)})
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():

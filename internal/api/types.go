@@ -62,6 +62,10 @@ const (
 	KindError          EventKind = "error"
 )
 
+// TextInterrupted is the error event of a turn a daemon restart cut. Jobs
+// read it: such a round is not counted as a failure.
+const TextInterrupted = "interrupted: the daemon stopped during this turn"
+
 // Event is one entry in a session's log.
 type Event struct {
 	SessionID string    `json:"session_id"`

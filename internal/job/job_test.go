@@ -16,7 +16,8 @@ import (
 )
 
 // scriptRunner answers round n with replies[n-1] (the last one repeats). A
-// reply of "" fails the turn with an error.
+// reply of "" fails the turn with an error; "!interrupted" ends it as a
+// daemon restart does.
 type scriptRunner struct {
 	mu      sync.Mutex
 	replies []string
@@ -29,9 +30,12 @@ func (r *scriptRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Ev
 	reply := r.replies[min(len(r.turns), len(r.replies))-1]
 	r.mu.Unlock()
 	out := make(chan engine.Event, 2)
-	if reply == "" {
+	switch reply {
+	case "":
 		out <- engine.Event{Kind: engine.KindError, Err: errors.New("engine broke")}
-	} else {
+	case "!interrupted":
+		out <- engine.Event{Kind: engine.KindError, Err: errors.New(api.TextInterrupted)}
+	default:
 		out <- engine.Event{Kind: engine.KindText, Text: reply}
 	}
 	out <- engine.Event{Kind: engine.KindDone, Engine: "fake"}
@@ -181,6 +185,79 @@ func TestRoundThatEndedDuringAHandOverIsRead(t *testing.T) {
 	}
 }
 
+// A round the user steered has more than one turn: its last reply counts.
+func TestHandOverReadsTheRoundsLastTurn(t *testing.T) {
+	s, r := newTestScheduler(t, "working on it", "all finished [DONE]", "an extra round")
+	ctx := context.Background()
+	dir := t.TempDir()
+	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: dir, Text: "round 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitIdleSession(t, s, res.SessionID)
+	if _, err := s.sessions.SendMessage(ctx, api.MessageRequest{SessionID: res.SessionID, Text: "finish it"}); err != nil {
+		t.Fatal(err)
+	}
+	waitTurns(t, s, res.SessionID, 2)
+	j := api.Job{ID: "steered", Name: "steered", Dir: dir, Prompt: "build it", Status: api.JobStopped, Runs: 1,
+		SessionID: res.SessionID, NextRunAt: time.Now()}
+	if err := s.store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartJob(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobDone || j.Runs != 1 || len(r.turns) != 2 {
+		t.Fatalf("job %s after %d runs and %d turns; want done from the last turn's [DONE]", j.Status, j.Runs, len(r.turns))
+	}
+}
+
+// A round a daemon restart cut is not a failed round: the job runs on.
+func TestRoundCutByARestartIsNotAFailure(t *testing.T) {
+	s, _ := newTestScheduler(t, "!interrupted", "all finished [DONE]")
+	ctx := context.Background()
+	dir := t.TempDir()
+	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: dir, Text: "round 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitIdleSession(t, s, res.SessionID)
+	// Two failures already: one more would fail the job.
+	j := api.Job{ID: "cut", Name: "cut", Dir: dir, Prompt: "build it", Status: api.JobRunning, Runs: 1, Failures: 2,
+		SessionID: res.SessionID, NextRunAt: time.Now()}
+	if err := s.store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	s.Stop(ctx)
+	if err := s.Start(ctx); err != nil { // a new daemon resumes its running jobs
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobDone || j.Runs != 2 {
+		t.Fatalf("job %s after %d runs (%s); want round 2 to run and finish", j.Status, j.Runs, j.Error)
+	}
+}
+
+// waitTurns waits until the session has n finished turns and is idle.
+func waitTurns(t *testing.T, s *Scheduler, id string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		page, _ := s.sessions.ListEvents(ctx, api.EventFilter{SessionID: id})
+		done := 0
+		for _, ev := range page.Items {
+			if ev.Kind == api.KindTurnDone {
+				done++
+			}
+		}
+		if sess, err := s.sessions.GetSession(ctx, id); done >= n && err == nil && sess.Status == api.StatusIdle {
+			return
+		}
+	}
+	t.Fatalf("the session never finished %d turns", n)
+}
+
 // A round whose result was recorded is not read again.
 func TestRecordedRoundIsNotReadAgain(t *testing.T) {
 	s, r := newTestScheduler(t, "all finished [DONE]", "round 2 [DONE]")
@@ -207,12 +284,17 @@ func TestRecordedRoundIsNotReadAgain(t *testing.T) {
 	}
 }
 
+// waitIdleSession waits until the session's turn is done and it is idle
+// (a new session shows idle before its first turn starts).
 func waitIdleSession(t *testing.T, s *Scheduler, id string) {
 	t.Helper()
+	ctx := context.Background()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if sess, err := s.sessions.GetSession(context.Background(), id); err == nil && sess.Status == api.StatusIdle {
+		page, err := s.sessions.ListEvents(ctx, api.EventFilter{SessionID: id})
+		done := err == nil && len(page.Items) > 0 && page.Items[len(page.Items)-1].Kind == api.KindTurnDone
+		if sess, err := s.sessions.GetSession(ctx, id); done && err == nil && sess.Status == api.StatusIdle {
 			return
 		}
 	}
-	t.Fatal("the round's session never went idle")
+	t.Fatal("the round's turn never ended")
 }

@@ -321,13 +321,58 @@ func (s *Scheduler) finishRunningRound(ctx context.Context, id string) bool {
 		res = s.runWorkflow(ctx, j)
 	case working || (j.Workflow == "" && j.SessionID != "" && j.Runs > j.Finished):
 		// Still working, or it ended while no scheduler watched (a hand-over
-		// cut in before its result was recorded): read its reply. An idle
-		// session's saved events are read at once.
-		res = s.plainRound(s.waitIdle(ctx, j.SessionID, 0))
+		// cut in before its result was recorded): read its reply.
+		var reply, failure string
+		if working {
+			reply, failure = s.waitIdle(ctx, j.SessionID, 0)
+		} else {
+			reply, failure = s.lastTurn(ctx, j.SessionID)
+		}
+		if failure == api.TextInterrupted {
+			return ctx.Err() == nil && s.dropRound(ctx, id)
+		}
+		res = s.plainRound(reply, failure)
 	default:
 		return true
 	}
 	return ctx.Err() == nil && s.finish(ctx, id, res)
+}
+
+// lastTurn reads the reply and error of an idle session's last turn. A
+// replay with waitIdle would stop at its first turn: the session is idle
+// already.
+func (s *Scheduler) lastTurn(ctx context.Context, sessionID string) (reply, failure string) {
+	events, err := api.ListAllEvents(ctx, s.sessions, api.EventFilter{SessionID: sessionID})
+	if err != nil {
+		return "", err.Error()
+	}
+	for _, ev := range events {
+		switch ev.Kind {
+		case api.KindUserMessage:
+			reply, failure = "", "" // a new turn
+		case api.KindText:
+			reply = ev.Text
+		case api.KindError:
+			failure = ev.Text
+		}
+	}
+	return reply, failure
+}
+
+// dropRound records a round a daemon restart cut: it is not counted as a
+// failed round, as Hermes's cron does not count a run its restart cut
+// (hermes/cron/jobs_oneshot_diagnostics.py); the job says so and runs on.
+func (s *Scheduler) dropRound(ctx context.Context, id string) bool {
+	j, err := s.update(ctx, id, func(j *api.Job) error {
+		j.Finished = j.Runs
+		j.Error = fmt.Sprintf("round %d was cut by a daemon restart; not counted as a failure", j.Runs)
+		return nil
+	})
+	if err != nil {
+		slog.Error("job round", "job", id, "err", err)
+		return false
+	}
+	return j.Status == api.JobRunning
 }
 
 // advance waits for the next round, then counts it and sets the time of the

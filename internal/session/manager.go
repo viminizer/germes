@@ -107,7 +107,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			slog.Error("recover session", "session", s.ID, "err", err)
 			continue
 		}
-		w.emit(api.Event{Kind: api.KindError, Text: "interrupted: the daemon stopped during this turn"})
+		w.emit(api.Event{Kind: api.KindError, Text: api.TextInterrupted})
 		w.setStatus(api.StatusIdle)
 		w.emit(api.Event{Kind: api.KindTurnDone})
 	}

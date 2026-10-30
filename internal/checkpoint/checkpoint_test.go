@@ -2,9 +2,12 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -86,6 +89,178 @@ func TestRollbackRestoresFiles(t *testing.T) {
 	}
 }
 
+func TestPrunePreservesUncertainSnapshots(t *testing.T) {
+	for _, scenario := range []string{"folder stat failure", "missing index", "index stat failure", "index directory", "empty folder", "relative folder", "mismatched folder", "folder metadata failure", "cutoff equality", "whitespace in folder"} {
+		t.Run(scenario, func(t *testing.T) {
+			store, dir := t.TempDir(), filepath.Join(t.TempDir(), "project")
+			if scenario == "whitespace in folder" {
+				dir += " "
+			}
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(dir, "a.txt"), "saved")
+			if _, err := Create(context.Background(), store, dir, "turn"); err != nil {
+				t.Fatal(err)
+			}
+			repo := repoPath(store, dir)
+			index := filepath.Join(repo, "index")
+			cutoff := time.Unix(1700000000, 0)
+			ageRepo(t, repo, cutoff)
+			wantError := true
+			switch scenario {
+			case "folder stat failure":
+				if err := os.RemoveAll(dir); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(dir, dir); err != nil {
+					t.Fatal(err)
+				}
+			case "index directory":
+				if err := os.Remove(index); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(index, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "missing index", "index stat failure":
+				if err := os.Remove(index); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "index stat failure" {
+					if err := os.Symlink(index, index); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "empty folder":
+				write(t, filepath.Join(repo, "folder"), "\n")
+			case "relative folder":
+				write(t, filepath.Join(repo, "folder"), "missing-relative-project\n")
+			case "mismatched folder":
+				write(t, filepath.Join(repo, "folder"), filepath.Join(t.TempDir(), "gone")+"\n")
+			case "folder metadata failure":
+				if err := os.Remove(filepath.Join(repo, "folder")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(repo, "folder"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "cutoff equality", "whitespace in folder":
+				wantError = false
+			}
+			n, err := Prune(store, cutoff)
+			if n != 0 || (err != nil) != wantError {
+				t.Errorf("pruned %d, error %v; want 0, error present %v", n, err, wantError)
+			}
+			if scenario == "missing index" && !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("missing index error = %v, want os.ErrNotExist", err)
+			}
+			if got := read(filepath.Join(repo, "HEAD")); got == "<gone>" {
+				t.Error("snapshot history was deleted")
+			}
+		})
+	}
+}
+
+func ageRepo(t *testing.T, repo string, stamp time.Time) {
+	t.Helper()
+	if err := filepath.WalkDir(repo, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() {
+			return os.Chtimes(path, stamp, stamp)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPruneSkipsLockedRepo(t *testing.T) {
+	store, dir := t.TempDir(), t.TempDir()
+	if _, err := Create(context.Background(), store, dir, "saved"); err != nil {
+		t.Fatal(err)
+	}
+	repo := repoPath(store, dir)
+	cutoff := time.Unix(1700000000, 0)
+	ageRepo(t, repo, cutoff.Add(-time.Hour))
+	// A distinct file descriptor models another daemon holding the sidecar.
+	lock, err := os.OpenFile(repo+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Prune(store, cutoff); n != 0 || err != nil {
+		t.Fatalf("locked prune = %d, %v", n, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Create(ctx, store, dir, "cancelled"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled create = %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Prune(store, cutoff); n != 1 || err != nil {
+		t.Fatalf("unlocked prune = %d, %v", n, err)
+	}
+}
+
+func TestPruneRetainsRecentCommitWithOldIndex(t *testing.T) {
+	for _, packed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "loose", true: "packed"}[packed], func(t *testing.T) {
+			store, dir := t.TempDir(), t.TempDir()
+			ctx := context.Background()
+			if _, err := Create(ctx, store, dir, "first"); err != nil {
+				t.Fatal(err)
+			}
+			repo := repoPath(store, dir)
+			cutoff := time.Unix(1700000000, 0)
+			ageRepo(t, repo, cutoff.Add(-time.Hour))
+			if _, err := Create(ctx, store, dir, "unchanged"); err != nil {
+				t.Fatal(err)
+			}
+			if packed {
+				if _, err := git(ctx, repo, dir, "pack-refs", "--all"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Isolate the case where Git does not rewrite the index.
+			if err := os.Chtimes(filepath.Join(repo, "index"), cutoff.Add(-time.Hour), cutoff.Add(-time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := Prune(store, cutoff); n != 0 || err != nil {
+				t.Fatalf("recent commit prune = %d, %v", n, err)
+			}
+		})
+	}
+}
+
+func TestPruneContinuesAfterInvalidRecord(t *testing.T) {
+	store := t.TempDir()
+	bad := filepath.Join(store, "a-invalid")
+	write(t, filepath.Join(bad, "folder"), "invalid\n")
+	dir := filepath.Join(t.TempDir(), "z-project")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(context.Background(), store, dir, "saved"); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Unix(1700000000, 0)
+	ageRepo(t, repoPath(store, dir), cutoff.Add(-time.Hour))
+	if n, err := Prune(store, cutoff); n != 1 || err == nil {
+		t.Fatalf("partial cleanup = %d, %v; want 1 and metadata error", n, err)
+	}
+	if _, err := os.Stat(bad); err != nil {
+		t.Fatalf("invalid entry removed: %v", err)
+	}
+}
+
 func TestPruneDropsUnusedAndOrphaned(t *testing.T) {
 	ctx, store := context.Background(), t.TempDir()
 	fresh, old, gone := t.TempDir(), t.TempDir(), t.TempDir()
@@ -95,12 +270,18 @@ func TestPruneDropsUnusedAndOrphaned(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	long := time.Now().Add(-60 * 24 * time.Hour)
-	os.Chtimes(filepath.Join(repoPath(store, old), "index"), long, long)
-	os.RemoveAll(gone)
-	os.MkdirAll(filepath.Join(store, "not-a-repo"), 0o700)
+	cutoff := time.Unix(1700000000, 0)
+	for dir, modified := range map[string]time.Time{fresh: cutoff.Add(time.Hour), old: cutoff.Add(-time.Hour)} {
+		ageRepo(t, repoPath(store, dir), modified)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(store, "not-a-repo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
-	n, err := Prune(store, time.Now().Add(-30*24*time.Hour))
+	n, err := Prune(store, cutoff)
 	if err != nil || n != 2 {
 		t.Fatalf("pruned %d, %v", n, err)
 	}

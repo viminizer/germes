@@ -58,6 +58,11 @@ Initial paths are not a permission boundary: include directly necessary owner/wi
 - Separate read-only consistency audit completed with **no verified actionable findings**, confirming R2/R5/R8/R46 and saving-caller compatibility. Evidence `/tmp/germes-round5-consistency.jdlEtO/`: focused tests passed independently; installed `staticcheck` was absent (127), recovered via `go run honnef.co/go/tools/cmd/staticcheck@latest ./...` (exit 0, Go 1.26.10); `go run github.com/mibk/dupl@latest -t 40 ./internal ./cmd` completed (exit 0), 11 unrelated clone groups and none in selected source/tests. Supplied full-check/race provenance inspected.
 - Verified unchanged tracked diff against the review snapshot and current HEAD/status; no implementation change after checks or reviews. Only this observed-result ledger entry was added afterward. The three verified original defects are fixed. Delivery/rebase gates remain for the workflow; no PR or merge performed by this fix step.
 
+### Round 5 post-fix check step
+
+- Verified isolated cwd, clean branch `germes/1owd9a`, and commit `84ef503664c66408634cece02fce663fd1afb13f`. The previous fix made substantive production/test changes and both post-fix reviews recorded no actionable findings; NEEDS_FIX's unchanged-open-findings shortcut does not apply.
+- Ran `make check`: PASS, exit 0 (`go build ./...`, `go vet ./...`, `test -z "$(gofmt -l .)"`, `go test -count=1 ./...`). All tests passed, including file, Telegram and architecture tests. Ran `git diff --check` and `git diff origin/main...HEAD --check`: both PASS, exit 0. No blocked command, missing prerequisite or incomplete required check. Only this observed verification record changed afterward; no implementation change or delivery claim.
+
 ### Round 5 initial check
 
 - Verified isolated cwd/branch and HEAD `b3de252a9e87a8c249e6ff0fe889bffc60dd3add`; only PROGRESS.md modified. No prior round-5 fix or completed review exists, so the unchanged-findings retry shortcut does not apply. Historical round findings below are not current open findings.

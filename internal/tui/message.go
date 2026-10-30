@@ -89,6 +89,9 @@ func toolView(t *api.ToolCall, dir string, width int) string {
 	if t.Output == "" {
 		return head
 	}
+	if t.Name == "todo_list" && !t.IsError {
+		return head + "\n" + taskList(t.Output, width)
+	}
 	result := strings.Join(strings.Fields(firstLine(shortPaths(t.Output, dir))), " ") // tabs and runs of spaces
 	if n := strings.Count(strings.TrimSpace(t.Output), "\n"); n > 0 {
 		result += fmt.Sprintf(" (+%d lines)", n)
@@ -111,6 +114,30 @@ func toolLabel(t *api.ToolCall, dir string) string {
 		return t.Name
 	}
 	return fmt.Sprintf("%s(%q)", t.Name, ansi.Truncate(firstLine(shortPaths(preview, dir)), 64, "…"))
+}
+
+// maxTaskLines is how much of a task list the transcript shows.
+const maxTaskLines = 20
+
+// taskList shows the model's task list under its call: open items plain,
+// finished ones dim.
+func taskList(list string, width int) string {
+	lines := strings.Split(strings.TrimSpace(list), "\n")
+	more := len(lines) - maxTaskLines
+	if more > 0 {
+		lines = lines[:maxTaskLines]
+	}
+	for i, l := range lines {
+		style := styleText
+		if strings.Contains(l, "[x]") || strings.Contains(l, "[-]") {
+			style = styleDim
+		}
+		lines[i] = style.Render(ansi.Truncate("  "+l, max(width, 10), "…"))
+	}
+	if more > 0 {
+		lines = append(lines, styleDim.Render(fmt.Sprintf("  (+%d more)", more)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func firstLine(s string) string {

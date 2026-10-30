@@ -46,6 +46,7 @@ import (
 	sessionstool "github.com/viminizer/germes/internal/tools/sessions"
 	"github.com/viminizer/germes/internal/tools/shell"
 	"github.com/viminizer/germes/internal/tools/skills"
+	"github.com/viminizer/germes/internal/tools/todo"
 	worktreetool "github.com/viminizer/germes/internal/tools/worktree"
 	"github.com/viminizer/germes/internal/tui"
 )
@@ -494,6 +495,8 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 	tools := append(files.New(), shell.New(env.NewLocal())...)
 	tools = append(tools, memorytool.New(mem)...)
 	tools = append(tools, skills.New(skillStore)...)
+	todos := todo.NewLists(filepath.Join(p.home, "todos"))
+	tools = append(tools, todo.New(todos)...)
 	tools = append(tools, search.New(st)...)
 	// These reach the daemon through its socket, like any client.
 	daemonClient := api.NewClient(p.socket)
@@ -505,10 +508,10 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 	toolsets := map[string]tool.Toolset{
 		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
 		"learn":   {Tools: []string{"memory", "skill_view", "skill_save"}},
-		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit"}, Includes: []string{"core", "learn"}},
+		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit", "todo_list"}, Includes: []string{"core", "learn"}},
 		"review":  {Includes: []string{"learn"}},
 		// The overseer controls Germes too; it has no worktree to leave.
-		"overseer": {Tools: append([]string{"session_search"}, control...), Includes: []string{"core", "learn"}},
+		"overseer": {Tools: append([]string{"session_search", "todo_list"}, control...), Includes: []string{"core", "learn"}},
 		// Claude gets only what it lacks through MCP: it has its own files and
 		// shell, and edits memory and skills as files.
 		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_enter", "worktree_exit"}},
@@ -533,7 +536,7 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 		}
 		client := codex.New(codex.Options{Model: ec.Model, Effort: ec.Effort, Version: version, GermesDir: p.home, CodexDir: codexDir()})
 		engines = append(engines, loop.New(client, reg, prompts, st, loop.Options{
-			Name: name, Toolsets: []string{"project"}, OverseerToolsets: []string{"overseer"}, ReviewToolsets: []string{"review"}}))
+			Name: name, Toolsets: []string{"project"}, OverseerToolsets: []string{"overseer"}, ReviewToolsets: []string{"review"}, Todos: todos}))
 	}
 	rt, err := router.New(engines, cfg.Engines, st, time.Now)
 	return rt, reg, err

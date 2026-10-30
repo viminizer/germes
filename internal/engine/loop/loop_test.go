@@ -145,3 +145,31 @@ func TestCompactionKeepsTailAndLoadsSummary(t *testing.T) {
 		t.Fatalf("compacted a small history")
 	}
 }
+
+// planOf is a task list with fixed open items.
+type planOf string
+
+func (p planOf) GetActive(sessionID string) string { return string(p) }
+
+func TestOpenTasksFollowTheSummary(t *testing.T) {
+	reg, err := tool.NewRegistry([]tool.Tool{{Name: "echo", Run: func(ctx context.Context, c tool.Call) (string, error) { return "pong", nil }}},
+		map[string]tool.Toolset{"core": {Tools: []string{"echo"}}}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeModel{}
+	history := fakeHistory{
+		{Seq: 1, Kind: api.KindUserMessage, Text: "old"},
+		{Seq: 2, Kind: api.KindCompacted, Text: "we fixed the parser", KeepFrom: 3},
+		{Seq: 3, Kind: api.KindUserMessage, Text: "go on"},
+	}
+	l := New(model, reg, prompt.NewBuilder(t.TempDir(), noMemory{}, noSkills{}), history,
+		Options{Name: "fake", Toolsets: []string{"core"}, Todos: planOf("- [ ] 2. Write the docs")})
+	events, _ := l.Run(context.Background(), engine.Turn{SessionID: "s", Dir: t.TempDir()})
+	for range events {
+	}
+	first := model.requests[0].Messages[0].Text
+	if !strings.Contains(first, "we fixed the parser") || !strings.HasSuffix(first, "- [ ] 2. Write the docs") {
+		t.Fatalf("first message:\n%s", first)
+	}
+}

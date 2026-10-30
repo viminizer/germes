@@ -68,6 +68,7 @@ engines               engine/loop                          → engine, llm, tool
 
 tools                 tools/files, tools/shell             → tool, env
                       tools/memory                         → tool, memory
+                      tools/todo                           → tool, file
                       tools/skills                         → tool, skill
                       tools/search                         → tool, api
                       tools/sessions, tools/jobs,          → tool, api
@@ -1293,7 +1294,8 @@ Ported from Hermes' agent loop (`agent/coding_context.py`, `prompt_builder.py`, 
 - Compaction: the summary has fixed sections; the handoff says the latest message is the task and tools stay in use.
 - A tool output over 50,000 characters is saved in `~/.germes/tool-output/<session>/` and the model gets the head, the tail and the file's path.
 - Checked live (Codex): asked to add a function with a test, the loop read the files first, edited, ran `go build`, `go vet` and `go test`, then answered.
-- Later, one at a time: a todo list, subagents, folder rules (AGENTS.md) on the way, a clarify tool, plan mode, rollback snapshots.
+- Todo list (`internal/tools/todo`, tool `todo_list`, Germes loop only; Claude has its own): items `{id, content, status, parent}`, statuses pending, in_progress, completed, cancelled. A call updates the given items by id and adds new ones (`replace: true` starts a new plan; Hermes replaces by default, but models then sent only the changed item and lost the rest). No items reads the list. Saved per session in `~/.germes/todos/<session>.json`, so it survives restarts; after a compaction the loop adds the open items (and the parents of open subtasks) right after the summary. The TUI shows the list under the call, finished items dim. Checked live (Codex): a three-step task kept its plan and ended with all items completed.
+- Later, one at a time: subagents, folder rules (AGENTS.md) on the way, a clarify tool, plan mode, rollback snapshots.
 
 ## Open items
 

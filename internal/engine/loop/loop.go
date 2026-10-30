@@ -33,9 +33,17 @@ type Options struct {
 	// ContextWindow is the model's context size in tokens; history is
 	// compacted at half of it. 0 = 200k.
 	ContextWindow int
+	// Todos gives the model its open task items again after a compaction;
+	// nil = none.
+	Todos TaskLists
 	// ReviewToolsets are the tools of the background self-learning review
 	// (memory and skills). Empty: no review.
 	ReviewToolsets []string
+}
+
+// TaskLists reads a session's open task items (the todo_list tool).
+type TaskLists interface {
+	GetActive(sessionID string) string
 }
 
 // Loop is the engine.
@@ -98,7 +106,14 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindCompacted, Text: summary, KeepFrom: keepFrom})
 			events = append(events, api.Event{Kind: api.KindCompacted, Text: summary, KeepFrom: keepFrom})
 		}
-		l.turn(ctx, t, system, messages(events), out)
+		msgs := messages(events)
+		if summary, _ := effective(events); summary != "" && l.opts.Todos != nil {
+			// The summary may blur the plan: the open items go right after it.
+			if plan := l.opts.Todos.GetActive(t.SessionID); plan != "" {
+				msgs[0].Text += "\n\n" + plan
+			}
+		}
+		l.turn(ctx, t, system, msgs, out)
 	}()
 	return out, nil
 }

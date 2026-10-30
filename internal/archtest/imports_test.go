@@ -48,6 +48,7 @@ var allowed = map[string][]string{
 	"internal/skill":          {"internal/file"},
 	"internal/tools/memory":   {"internal/tool", "internal/memory"},
 	"internal/tools/skills":   {"internal/tool", "internal/skill"},
+	"internal/tools/todo":     {"internal/tool", "internal/file"},
 	"internal/tools/search":   {"internal/tool", "internal/api", "internal/text"},
 }
 

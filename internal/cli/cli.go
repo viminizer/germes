@@ -25,7 +25,7 @@ func ListSessions(ctx context.Context, svc api.Service, out io.Writer) error {
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATUS\tUPDATED\tPROJECT\tBRANCH\tTITLE")
 	for _, s := range page.Items {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, s.Status, ago(s.UpdatedAt), s.Project, orDash(s.Branch), s.Title)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, s.Status, api.FormatAge(time.Since(s.UpdatedAt)), s.Project, orDash(s.Branch), s.Title)
 	}
 	return tw.Flush()
 }
@@ -126,20 +126,6 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
-}
-
-func ago(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	}
 }
 
 // GetInsights prints how Germes was used since a time: sessions, turns, the

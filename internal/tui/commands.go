@@ -16,6 +16,7 @@ var commands = []struct{ Name, Args, Help string }{
 	{"plan", "<task>", "plan first: change nothing, save the plan"},
 	{"clear", "", "keep this session saved and start a new one"},
 	{"sessions", "", "list sessions in this project"},
+	{"resume", "", "pick a session of this project from a list"},
 	{"switch", "<id>", "open another session"},
 	{"overseer", "", "open the overseer (controls sessions and jobs)"},
 	{"rename", "<text>", "rename this session"},
@@ -78,6 +79,8 @@ func (m *model) command(text string) tea.Cmd {
 		return m.send(api.MessageRequest{Text: arg, Plan: true})
 	case "overseer":
 		return func() tea.Msg { return switchMsg{id: api.OverseerID} }
+	case "resume":
+		return m.openPicker()
 	case "switch":
 		if arg == "" {
 			return notice("usage: /switch <id>")
@@ -125,7 +128,7 @@ func (m *model) command(text string) tea.Cmd {
 			for _, s := range page.Items {
 				fmt.Fprintf(&b, "%s  %-8s %s\n", s.ID, s.Status, s.Title)
 			}
-			b.WriteString("open one with /switch <id>")
+			b.WriteString("open one with /resume (pick from a list) or /switch <id>")
 			return printMsg{[]message{{Kind: kindNotice, Text: b.String()}}}
 		}
 	}

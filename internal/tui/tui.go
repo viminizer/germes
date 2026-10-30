@@ -20,6 +20,7 @@ type Options struct {
 	JobID        string // attached to a job: follow its new rounds
 	First        string // a message sent as soon as the TUI opens
 	Worktree     bool   // a new session gets its own git worktree
+	Pick         bool   // open the session picker first (germes resume)
 	Version      string
 	Engine       string
 	EnsureDaemon func(context.Context) error // starts the daemon if it is gone
@@ -54,6 +55,6 @@ func (t *TUI) Run(ctx context.Context) error {
 		}
 		// Home, clear the screen, clear the scrollback.
 		fmt.Fprint(os.Stdout, "\x1b[H\x1b[2J\x1b[3J")
-		opts.SessionID, opts.JobID, opts.First, notice = "", "", "", done.restartNotice
+		opts.SessionID, opts.JobID, opts.First, opts.Pick, notice = "", "", "", false, done.restartNotice
 	}
 }

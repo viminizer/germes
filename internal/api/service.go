@@ -92,3 +92,18 @@ func RunRollback(ctx context.Context, svc Service, sessionID, arg string) (strin
 	// The newest snapshots now: 1 the rollback, 2 the files just before it.
 	return "files are back as they were " + list[n-1].Label + " (undo: /rollback 2)", nil
 }
+
+// FormatAge says how long ago something happened, for people: "just now",
+// "5m ago", "3h ago", "2d ago". The CLI's and the TUI's session lists use it.
+func FormatAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}

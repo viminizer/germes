@@ -70,18 +70,29 @@ func (s suggestBox) view(width int) string {
 	if len(s.items) == 0 {
 		return ""
 	}
-	start := max(0, min(s.selected-maxSuggestRows/2, len(s.items)-maxSuggestRows))
-	end := min(len(s.items), start+maxSuggestRows)
+	rows := listRows(s.items, s.selected, width)
+	if len(s.items) > maxSuggestRows {
+		rows = append(rows, styleDim.Render("  ↑↓ more · Tab complete · Esc close"))
+	}
+	return strings.Join(rows, "\n")
+}
+
+// listRows renders up to maxSuggestRows items around the selected one, the
+// selected one marked, help in one column: the suggestion list and the
+// session picker look the same.
+func listRows(items []suggestion, selected, width int) []string {
+	start := max(0, min(selected-maxSuggestRows/2, len(items)-maxSuggestRows))
+	end := min(len(items), start+maxSuggestRows)
 	labelWidth := 0 // help text lines up in one column
-	for _, it := range s.items[start:end] {
+	for _, it := range items[start:end] {
 		labelWidth = max(labelWidth, len([]rune(it.Label)))
 	}
 	var rows []string
 	for i := start; i < end; i++ {
-		it := s.items[i]
+		it := items[i]
 		padded := it.Label + strings.Repeat(" ", labelWidth-len([]rune(it.Label)))
 		mark, label := "  ", styleText.Render(padded)
-		if i == s.selected {
+		if i == selected {
 			mark, label = styleAccent.Render("› "), styleAccent.Bold(true).Render(padded)
 		}
 		row := mark + label
@@ -90,10 +101,7 @@ func (s suggestBox) view(width int) string {
 		}
 		rows = append(rows, ansi.Truncate(row, max(width, 10), "…"))
 	}
-	if len(s.items) > maxSuggestRows {
-		rows = append(rows, styleDim.Render("  ↑↓ more · Tab complete · Esc close"))
-	}
-	return strings.Join(rows, "\n")
+	return rows
 }
 
 // suggestionsFor returns the completions for the end of input.

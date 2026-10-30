@@ -60,6 +60,7 @@ var version = "dev"
 const usage = `usage:
   germes                start a new session in this folder
   germes -c             continue the last session in this folder
+  germes resume         pick a session of this folder from a list (↑↓, Enter; type to filter)
   germes --worktree     start a session in its own git worktree (default: in this folder)
   germes attach <id>    open any session, or a job's latest round (follows new rounds)
   germes setup telegram talk to Germes from a Telegram group (topics bound to projects)
@@ -169,6 +170,8 @@ func run(args []string) error {
 		return setupTelegram(p)
 	case "overseer":
 		return runTUI(ctx, p, client, tuiStart{sessionID: api.OverseerID})
+	case "resume":
+		return runTUI(ctx, p, client, tuiStart{pick: true})
 	case "hook":
 		// Claude's PreToolUse hook (issue #42). Exit 2 blocks the call; the
 		// reason on stderr goes to claude. No daemon: blocked, not started.
@@ -227,6 +230,7 @@ func run(args []string) error {
 type tuiStart struct {
 	sessionID string // a session or job to open; "" = a new session
 	cont      bool   // open the last session in this folder
+	pick      bool   // open the session picker (germes resume)
 	worktree  bool   // a new session gets its own git worktree
 	first     string // a message to send right away
 }
@@ -281,7 +285,7 @@ func runTUI(ctx context.Context, p paths, client *api.Client, start tuiStart) er
 		dir, project = s.Dir, s.Project
 	}
 	t := tui.New(client, tui.Options{
-		Dir: dir, Project: project, SessionID: sessionID, JobID: jobID, Version: version, Engine: engineName, Worktree: start.worktree, First: start.first,
+		Dir: dir, Project: project, SessionID: sessionID, JobID: jobID, Version: version, Engine: engineName, Worktree: start.worktree, First: start.first, Pick: start.pick,
 		EnsureDaemon: func(ctx context.Context) error { return ensureDaemon(ctx, p, client) },
 	})
 	return t.Run(ctx)

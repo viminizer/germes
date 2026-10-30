@@ -38,7 +38,12 @@ type (
 	escTimeoutMsg struct{ gen int }
 	reconnectMsg  struct{ gen int }
 	jobMsg        struct{ job api.Job }
-	flushMsg      struct{}
+	sessionsMsg   struct {
+		gen  int
+		page api.Page[api.Session]
+		err  error
+	}
+	flushMsg struct{}
 )
 
 // printDelay gathers the messages of one burst into one print.
@@ -79,6 +84,7 @@ type model struct {
 	transcript transcript
 	queue      queueView
 	suggest    suggestBox
+	picker     sessionPicker
 	rule       titleRule
 	status     statusBar
 	composer   composer
@@ -102,6 +108,9 @@ func (m *model) Init() tea.Cmd {
 	if m.opts.First != "" {
 		cmds = append(cmds, m.send(api.MessageRequest{Text: m.opts.First}))
 	}
+	if m.opts.Pick {
+		cmds = append(cmds, m.openPicker())
+	}
 	return tea.Batch(append(cmds, m.loadSkills())...)
 }
 
@@ -118,6 +127,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.key(msg)
+
+	case tea.PasteMsg:
+		if m.picker.open {
+			// A paste filters the list; the hidden input stays empty.
+			m.picker.setFilter(m.picker.filter + strings.TrimSpace(msg.Content))
+			return m, m.loadMoreSessions()
+		}
 
 	case sentMsg:
 		if msg.err != nil {
@@ -144,6 +160,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case printMsg:
 		return m, m.print(msg.msgs...)
+
+	case sessionsMsg:
+		if msg.gen != m.picker.gen || !m.picker.open {
+			return m, nil
+		}
+		m.picker.add(msg.page, msg.err)
+		return m, m.loadMoreSessions()
 
 	case switchMsg:
 		m.opts.JobID = "" // picked a session by hand: stop following the job
@@ -219,6 +242,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.picker.open {
+		return m, m.pickerKey(msg)
+	}
 	if len(m.suggest.items) > 0 {
 		switch msg.String() {
 		case "up":
@@ -444,9 +470,14 @@ func (m *model) View() tea.View {
 	}
 	// A blank line, the input between a rule with the title and a plain
 	// rule, then a blank line and the footer close the app.
-	parts = append(parts, "", m.rule.view(m.width), m.composer.view(), m.rule.bottom(m.width))
-	if sug := m.suggest.view(m.width); sug != "" {
-		parts = append(parts, sug)
+	parts = append(parts, "", m.rule.view(m.width))
+	if m.picker.open {
+		parts = append(parts, m.picker.view(m.width, time.Now()), m.rule.bottom(m.width))
+	} else {
+		parts = append(parts, m.composer.view(), m.rule.bottom(m.width))
+		if sug := m.suggest.view(m.width); sug != "" {
+			parts = append(parts, sug)
+		}
 	}
 	parts = append(parts, "", m.status.view(m.width))
 	return tea.NewView(strings.Join(parts, "\n"))
@@ -496,4 +527,65 @@ func eventTime(ev api.Event) time.Time {
 		return time.Now()
 	}
 	return ev.Time
+}
+
+// openPicker shows the session picker and loads its first page (/resume,
+// `germes resume`).
+func (m *model) openPicker() tea.Cmd {
+	m.picker.start()
+	return m.loadSessions("")
+}
+
+// loadMoreSessions loads the picker's next page when it needs one.
+func (m *model) loadMoreSessions() tea.Cmd {
+	if !m.picker.hasPageToLoad() {
+		return nil
+	}
+	m.picker.loading = true
+	return m.loadSessions(m.picker.next)
+}
+
+func (m *model) loadSessions(cursor string) tea.Cmd {
+	gen, f := m.picker.gen, api.SessionFilter{Project: m.opts.Project, Limit: pickerPage, Cursor: cursor}
+	return func() tea.Msg {
+		page, err := m.svc.ListSessions(m.ctx, f)
+		return sessionsMsg{gen: gen, page: page, err: err}
+	}
+}
+
+// pickerKey handles a key while the session picker is open.
+func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
+	p := &m.picker
+	switch msg.String() {
+	case "ctrl+c":
+		m.stopWatch()
+		return tea.Quit
+	case "up":
+		p.move(-1)
+	case "down":
+		p.move(1)
+	case "enter":
+		s, ok := p.current()
+		if !ok {
+			return nil
+		}
+		p.open = false
+		return func() tea.Msg { return switchMsg{id: s.ID} }
+	case "esc":
+		if p.filter == "" {
+			p.open = false
+			return nil
+		}
+		p.setFilter("")
+	case "backspace":
+		if r := []rune(p.filter); len(r) > 0 {
+			p.setFilter(string(r[:len(r)-1]))
+		}
+	default:
+		if msg.Text == "" {
+			return nil
+		}
+		p.setFilter(p.filter + msg.Text)
+	}
+	return m.loadMoreSessions()
 }

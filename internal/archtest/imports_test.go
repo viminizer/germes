@@ -51,6 +51,7 @@ var allowed = map[string][]string{
 	"internal/tools/skills":   {"internal/tool", "internal/skill"},
 	"internal/tools/todo":     {"internal/tool", "internal/file"},
 	"internal/tools/search":   {"internal/tool", "internal/api", "internal/text"},
+	"internal/tools/web":      {"internal/tool", "internal/text"},
 }
 
 func TestImports(t *testing.T) {

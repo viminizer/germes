@@ -18,9 +18,10 @@ func newTestRegistry(t *testing.T) *Registry {
 	r, err := NewRegistry(
 		[]Tool{{Name: "Bash", MatchArg: "command", Run: echo}, {Name: "Read", MatchArg: "file_path", Run: echo},
 			{Name: "send_file", MatchArg: "file_path", BlockedAs: "Read", Run: echo},
+			{Name: "WebFetch", MatchArg: "url", Run: echo},
 			{Name: "Boom", Run: func(ctx context.Context, c Call) (string, error) { panic("boom") }}},
 		map[string]Toolset{"core": {Tools: []string{"Bash", "Read"}}, "all": {Tools: []string{"Boom"}, Includes: []string{"core"}}},
-		[]string{"Bash(sudo *)", "Bash(rm -rf /*)", "Read(.env)", "Read(**/.env*)"}, "",
+		[]string{"Bash(sudo *)", "Bash(rm -rf /*)", "Read(.env)", "Read(**/.env*)", "WebFetch(domain:evil.example)"}, "",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +44,8 @@ func TestBlockList(t *testing.T) {
 		{"Read", `{"file_path":"/proj/.env"}`},
 		{"Read", `{"file_path":"config/.env.local"}`},
 		{"Read", `{"file_path":"/elsewhere/app/.env.prod"}`},
-		{"send_file", `{"file_path":"config/.env.local"}`}, // what cannot be read cannot be sent
+		{"send_file", `{"file_path":"config/.env.local"}`},  // what cannot be read cannot be sent
+		{"WebFetch", `{"url":"https://evil.example/page"}`}, // Claude Code's domain: rule
 	}
 	for _, b := range blocked {
 		if res := run(r, b.tool, b.args); !res.IsError || !strings.Contains(res.Output, "blocked") {
@@ -56,6 +58,7 @@ func TestBlockList(t *testing.T) {
 		{"Read", `{"file_path":"main.go"}`},
 		{"Read", `{"file_path":"docs/env.md"}`},
 		{"send_file", `{"file_path":"main.go"}`},
+		{"WebFetch", `{"url":"https://go.dev/doc"}`},
 	}
 	for _, a := range allowed {
 		if res := run(r, a.tool, a.args); res.IsError {

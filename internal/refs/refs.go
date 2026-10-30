@@ -8,12 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/viminizer/germes/internal/text"
 	"github.com/viminizer/germes/internal/tool"
@@ -63,12 +60,11 @@ func List(msg string) []Ref {
 // Expander expands references with the tool registry.
 type Expander struct {
 	tools *tool.Registry
-	http  *http.Client
 }
 
 // New creates an expander.
 func New(tools *tool.Registry) *Expander {
-	return &Expander{tools: tools, http: &http.Client{Timeout: 20 * time.Second}}
+	return &Expander{tools: tools}
 }
 
 // Expand returns the text of every reference in msg, each under a
@@ -121,42 +117,11 @@ func (e *Expander) expand(ctx context.Context, r Ref, sessionID, dir string) str
 	case "git":
 		return run("Bash", map[string]any{"command": "git " + r.Value})
 	case "url":
-		return e.fetch(ctx, r.Value)
+		url := r.Value
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			url = "https://" + url
+		}
+		return run("WebFetch", map[string]any{"url": url})
 	}
 	return "[error: unknown reference]"
-}
-
-var (
-	scriptRe = regexp.MustCompile(`(?is)<(script|style)[^>]*>.*?</(script|style)>`)
-	tagRe    = regexp.MustCompile(`<[^>]+>`)
-	spaceRe  = regexp.MustCompile(`[ \t]*\n[ \t\n]*`)
-)
-
-// fetch reads a web page as plain text.
-// ponytail: tags stripped with regexps, no HTML parser; good enough to read a page.
-func (e *Expander) fetch(ctx context.Context, url string) string {
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		url = "https://" + url
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "[error: " + err.Error() + "]"
-	}
-	req.Header.Set("User-Agent", "germes")
-	resp, err := e.http.Do(req)
-	if err != nil {
-		return "[error: " + err.Error() + "]"
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "[error: " + resp.Status + "]"
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return "[error: " + err.Error() + "]"
-	}
-	page := scriptRe.ReplaceAllString(string(b), "")
-	page = tagRe.ReplaceAllString(page, " ")
-	page = spaceRe.ReplaceAllString(page, "\n")
-	return text.Shorten(strings.TrimSpace(page), maxPerRef)
 }

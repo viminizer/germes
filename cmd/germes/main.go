@@ -49,6 +49,7 @@ import (
 	"github.com/viminizer/germes/internal/tools/shell"
 	"github.com/viminizer/germes/internal/tools/skills"
 	"github.com/viminizer/germes/internal/tools/todo"
+	"github.com/viminizer/germes/internal/tools/web"
 	worktreetool "github.com/viminizer/germes/internal/tools/worktree"
 	"github.com/viminizer/germes/internal/tui"
 )
@@ -538,6 +539,7 @@ func newRouter(p paths, cfg config.Config, st *store.Store, reviews *engine.Revi
 	todos := todo.NewLists(filepath.Join(p.home, "todos"))
 	tools = append(tools, todo.New(todos)...)
 	tools = append(tools, search.New(st)...)
+	tools = append(tools, web.New()...)
 	// These reach the daemon through its socket, like any client.
 	daemonClient := api.NewClient(p.socket)
 	tools = append(tools, worktreetool.New(daemonClient)...)
@@ -548,14 +550,15 @@ func newRouter(p paths, cfg config.Config, st *store.Store, reviews *engine.Revi
 	toolsets := map[string]tool.Toolset{
 		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
 		"learn":   {Tools: []string{"memory", "skill_view", "skill_save", "skill_patch"}},
-		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit", "todo_list", api.ToolSendFile}, Includes: []string{"core", "learn"}},
+		"web":     {Tools: []string{"WebSearch", "WebFetch"}}, // not in the MCP toolsets: Claude has its own
+		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit", "todo_list", api.ToolSendFile}, Includes: []string{"core", "learn", "web"}},
 		"review":  {Includes: []string{"learn"}},
 		// A plan turn reads and searches; it changes nothing.
-		"plan": {Tools: []string{"Read", "Glob", "Grep", "session_search"}},
-		// Subagents work on one task: files, shell and search; no memory.
-		"subagent": {Tools: []string{"session_search"}, Includes: []string{"core"}},
+		"plan": {Tools: []string{"Read", "Glob", "Grep", "session_search"}, Includes: []string{"web"}},
+		// Subagents work on one task: files, shell, search and the web; no memory.
+		"subagent": {Tools: []string{"session_search"}, Includes: []string{"core", "web"}},
 		// The overseer controls Germes too; it has no worktree to leave.
-		"overseer": {Tools: append([]string{"session_search", "todo_list", api.ToolSendFile}, control...), Includes: []string{"core", "learn"}},
+		"overseer": {Tools: append([]string{"session_search", "todo_list", api.ToolSendFile}, control...), Includes: []string{"core", "learn", "web"}},
 		// Claude gets only what it lacks through MCP: it has its own files and
 		// shell, and edits memory and skills as files.
 		daemon.ToolsetMCP:         {Tools: []string{"session_search", "worktree_enter", "worktree_exit", api.ToolSendFile}},

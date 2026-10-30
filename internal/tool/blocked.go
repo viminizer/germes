@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -110,6 +111,13 @@ func candidates(arg, value, dir string) []string {
 			}
 		}
 		return parts
+	}
+	if arg == "url" {
+		// Claude Code's WebFetch(domain:example.com) works here too.
+		if u, err := url.Parse(value); err == nil && u.Hostname() != "" {
+			return []string{value, "domain:" + u.Hostname()}
+		}
+		return []string{value}
 	}
 	out := []string{value, filepath.Base(value)}
 	// Mirror tools/files.resolve here: tool is a leaf and cannot import its

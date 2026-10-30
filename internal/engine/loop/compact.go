@@ -3,11 +3,12 @@ package loop
 import (
 	"context"
 	"fmt"
-	"github.com/viminizer/germes/internal/text"
 	"strings"
 
 	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/llm"
+	"github.com/viminizer/germes/internal/prompt"
+	"github.com/viminizer/germes/internal/text"
 	"github.com/viminizer/germes/internal/tool"
 )
 
@@ -108,6 +109,11 @@ func pruneOutput(s string) string {
 		note = prunedNote + "; the full output is in " + path
 	}
 	return string(r[:prunedHead]) + "\n…\n" + note + "\n…\n" + string(r[len(r)-prunedTail:])
+}
+
+// CreateTitle names a session with the session's model (engine.Titler).
+func (l *Loop) CreateTitle(ctx context.Context, message string) (string, error) {
+	return l.ask(ctx, prompt.Title, message)
 }
 
 // ask makes one model call without tools and returns its text.

@@ -281,7 +281,7 @@ type Runner interface {   // the router satisfies this
 ### Names
 
 - ID: random, 6 characters (`k3f9a2`), never changes.
-- Title: from the first message, cut to about 40 characters (`add dark mode`). Later, maybe a model-written title after the first turn.
+- Title, in two steps like Hermes (`hermes/agent/title_generator.py`): first the first message cut to about 40 characters, set when the session is made; then, in the background while the first turn runs, a model writes a short one (`Add dark mode to settings`) with Hermes' prompt (`prompt/title.md`: 3 to 7 words, sentence case, JSON). The router asks the engine the turn runs on (`Router.CreateTitle`; the first engine that is not limited or reserved and can name): the Codex loop with the session's model, Claude with a one-off `claude -p --model haiku` without tools or a saved session. An answer that is not JSON, longer than 12 words or one of the prompt's examples is refused and the cut title stays; so does a title renamed meanwhile. `Friendly greeting` (a bare "hi") is a placeholder: the next message names the session again. Clients see the new title when they next read the session (the TUI after each turn).
 - The project is shown next to the title, not in it: `todo-app · add dark mode`.
 - `germes attach <id>` takes an ID or a unique start of one. `germes --resume` shows project, title and time to pick from.
 - Rename with `/rename <text>` in the TUI (`UpdateSession`).
@@ -389,6 +389,11 @@ type Engine interface {
     Name() string
     Run(ctx context.Context, t Turn) (<-chan Event, error)
 }
+
+// Titler: an engine that can name a session (both engines can).
+type Titler interface {
+    CreateTitle(ctx context.Context, message string) (string, error)
+}
 // Event: Text, ToolCall, Done{ResumeID}, LimitHit{ResetAt}
 ```
 
@@ -446,6 +451,7 @@ func New(engines []engine.Engine, store Store) *Router   // order = config order
 
 func (r *Router) Run(ctx, engine.Turn) (<-chan engine.Event, error)  // satisfies session.Runner
 func (r *Router) ListEngines(ctx) ([]api.Engine, error)              // header: "codex limited until 14:00"
+func (r *Router) CreateTitle(ctx, message string) (string, error)    // a short session title (session.Titler)
 ```
 
 ### How Run works
@@ -519,6 +525,11 @@ internal/engine/claude/   wraps the claude CLI
 type Engine interface {
     Name() string
     Run(ctx context.Context, t Turn) (<-chan Event, error)
+}
+
+// Titler: an engine that can name a session (both engines can).
+type Titler interface {
+    CreateTitle(ctx context.Context, message string) (string, error)
 }
 
 // Event is one of:

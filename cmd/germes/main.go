@@ -349,7 +349,7 @@ func runDaemon(p paths) error {
 	}
 	old := daemon.NewOldDaemons(filepath.Join(p.home, "old"))
 	sessions = session.NewManager(st, rt, session.Options{Worktrees: filepath.Join(p.home, "worktrees"), Refs: refs.New(reg), Elsewhere: old,
-		Checkpoints: filepath.Join(p.home, "checkpoints")})
+		Checkpoints: filepath.Join(p.home, "checkpoints"), Titles: rt})
 	tools := registryTools{reg: reg, sessions: sessions}
 	jobs := job.NewScheduler(st, sessions, job.Options{Tools: tools, Workflows: filepath.Join(p.home, "workflows")})
 	return daemon.New(sessions, jobs, old, daemon.Options{

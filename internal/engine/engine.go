@@ -16,6 +16,12 @@ type Engine interface {
 	Run(ctx context.Context, t Turn) (<-chan Event, error)
 }
 
+// Titler is an engine that can name a session: one model call with
+// prompt.Title and the message, no tools. It returns the answer as is.
+type Titler interface {
+	CreateTitle(ctx context.Context, message string) (string, error)
+}
+
 // Turn is one user message to run.
 type Turn struct {
 	SessionID  string

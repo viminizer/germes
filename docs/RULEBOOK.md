@@ -116,7 +116,8 @@ Check errors with `errors.Is` or `errors.As`, never by comparing strings.
 
 - From: Kevin, 2026-10-29, chat (approved Go practices)
 - Check: no `err.Error() ==` or `strings.Contains(err.Error(), ...)`.
-- Example: none yet
+- Exception: a test may read an error's text when the text itself is the behavior under test: a message shown to the user (`germes workflow check` output), or a check that a secret is not in it. (Kevin, 2026-10-30, audit.)
+- Example: `internal/skill/skill_test.go` (`errors.Is`); exceptions: `internal/job/workflow_test.go`, `internal/telegram/telegram_test.go`
 
 ## R31. Panic only for bugs
 

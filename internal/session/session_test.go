@@ -22,6 +22,7 @@ type fakeRunner struct {
 	prompts chan string
 	turns   chan engine.Turn
 	status  string
+	context *engine.Context // on the done event
 }
 
 func (f fakeRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
@@ -46,7 +47,7 @@ func (f fakeRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event
 		}
 		out <- engine.Event{Kind: engine.KindTextDelta, Text: "o"}
 		out <- engine.Event{Kind: engine.KindText, Text: "ok"}
-		out <- engine.Event{Kind: engine.KindDone, Engine: "fake", ResumeID: "r1"}
+		out <- engine.Event{Kind: engine.KindDone, Engine: "fake", ResumeID: "r1", Context: f.context}
 	}()
 	return out, nil
 }
@@ -440,5 +441,19 @@ func TestStartRecoversCutAndPausedTurns(t *testing.T) {
 		if (id == "cut" || id == "paused") != (got == interrupted) {
 			t.Errorf("%s: events %q", id, got)
 		}
+	}
+}
+
+func TestTurnDoneSaysHowFullTheContextIs(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t, fakeRunner{context: &engine.Context{Model: "gpt-5.5", Used: 1234, Window: 200_000}})
+	res, err := m.SendMessage(ctx, api.MessageRequest{Dir: t.TempDir(), Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	done := next(t, ch, api.KindTurnDone)
+	if done.Context == nil || *done.Context != (api.Context{Model: "gpt-5.5", Used: 1234, Window: 200_000}) {
+		t.Fatalf("turn_done context %+v", done.Context)
 	}
 }

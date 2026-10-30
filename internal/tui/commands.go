@@ -137,7 +137,8 @@ func (m *model) open(id string) tea.Cmd {
 	m.sessionID = id
 	m.transcript = transcript{dir: m.opts.Dir}
 	m.queue = queueView{}
-	m.status.SessionID, m.status.Busy, m.status.Note = id, false, ""
+	m.status = statusBar{Engine: m.status.Engine} // a new session's own title, start, context and branch come with it
+	m.rule.Title = ""
 	if id == "" {
 		return nil
 	}

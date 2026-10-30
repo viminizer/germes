@@ -400,6 +400,21 @@ var transientCodes = map[string]bool{"server_error": true, "server_is_overloaded
 // hermes/agent/turn_recovery_autorecover.py).
 const maxRetryAfter = 120 * time.Second
 
+// contextOf reads how full the context was from a finished response: its
+// model and input tokens. nil when the response does not say.
+func contextOf(raw json.RawMessage) *llm.Context {
+	var r struct {
+		Model string `json:"model"`
+		Usage struct {
+			InputTokens int `json:"input_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.Usage.InputTokens <= 0 {
+		return nil
+	}
+	return &llm.Context{Model: r.Model, Tokens: r.Usage.InputTokens}
+}
+
 // streamEnd is how a stream ended without completing.
 type streamEnd struct {
 	chunk llm.Chunk     // the error or limit hit to send
@@ -503,6 +518,9 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 				sent = stream.Send(ctx, out, ch) || sent
 			}
 		case "response.completed", "response.incomplete":
+			if c := contextOf(ev.Response); c != nil {
+				stream.Send(ctx, out, llm.Chunk{Kind: llm.KindContext, Context: c})
+			}
 			return nil, sent
 		case "response.failed":
 			if limit := parseLimit(ev.Response, nil); limit != nil {

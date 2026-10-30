@@ -20,14 +20,14 @@ type (
 		warning   string
 		err       error
 	}
-	branchMsg struct{ branch string }
-	printMsg  struct{ msgs []message }
-	watchMsg  struct {
-		gen    int
-		ch     <-chan api.Event
-		queue  []string // what was waiting when the watch started
-		branch string   // the session's worktree branch
-		err    error
+	sessionMsg struct{ sess api.Session }
+	printMsg   struct{ msgs []message }
+	watchMsg   struct {
+		gen   int
+		ch    <-chan api.Event
+		queue []string    // what was waiting when the watch started
+		sess  api.Session // the session when the watch started
+		err   error
 	}
 	eventMsg struct {
 		gen int
@@ -79,6 +79,7 @@ type model struct {
 	transcript transcript
 	queue      queueView
 	suggest    suggestBox
+	rule       titleRule
 	status     statusBar
 	composer   composer
 }
@@ -87,7 +88,8 @@ func newModel(ctx context.Context, svc api.Service, opts Options) *model {
 	return &model{
 		ctx: ctx, svc: svc, opts: opts, sessionID: opts.SessionID,
 		transcript: transcript{dir: opts.Dir},
-		status:     statusBar{Engine: opts.Engine, SessionID: opts.SessionID, Project: opts.Project},
+		rule:       titleRule{Project: opts.Project},
+		status:     statusBar{Engine: opts.Engine},
 		composer:   newComposer(),
 	}
 }
@@ -127,13 +129,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.sessionID == "" {
 			m.sessionID = msg.sessionID
-			m.status.SessionID = msg.sessionID
+			m.status.Started = time.Now()
 			return m, tea.Batch(warn, m.watch())
 		}
 		return m, warn
 
-	case branchMsg:
-		m.status.Branch = msg.branch
+	case sessionMsg:
+		m.showSession(msg.sess)
 		return m, nil
 
 	case printMsg:
@@ -150,7 +152,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.retryWatch(msg.gen)
 		}
-		m.queue.items, m.status.Branch = msg.queue, msg.branch
+		m.queue.items = msg.queue
+		m.showSession(msg.sess)
 		return m, next(msg.gen, msg.ch)
 
 	case eventMsg:
@@ -277,16 +280,23 @@ func (m *model) track(ev api.Event) tea.Cmd {
 	switch ev.Kind {
 	case api.KindUserMessage:
 		if !m.status.Busy {
-			m.status.Busy, m.status.Since, m.status.Note = true, time.Now(), ""
+			// The event's time, not now: a replayed turn keeps its real length.
+			m.status.Busy, m.status.Since, m.status.Note = true, eventTime(ev), ""
 			m.composer.setPlaceholder("Esc Esc to stop…")
 			return tick()
 		}
 	case api.KindQueue:
 		m.queue.items = ev.Queue
 	case api.KindTurnDone:
+		if m.status.Busy {
+			m.status.LastTurn = eventTime(ev).Sub(m.status.Since)
+		}
+		if ev.Context != nil {
+			m.status.Context = ev.Context
+		}
 		m.status.Busy = false
 		m.composer.setPlaceholder("Ask me anything…")
-		return m.loadBranch() // the turn may have left its worktree
+		return m.loadSession() // the turn may have left its worktree, or got a title
 	case api.KindError:
 		if ev.Text == "stopped" {
 			m.status.Note = "interrupted"
@@ -330,7 +340,7 @@ func (m *model) watch() tea.Cmd {
 			return watchMsg{gen: gen, err: err}
 		}
 		s, err := m.svc.GetSession(ctx, id)
-		return watchMsg{gen: gen, ch: ch, queue: s.Queued, branch: s.Branch, err: err}
+		return watchMsg{gen: gen, ch: ch, queue: s.Queued, sess: s, err: err}
 	}
 }
 
@@ -428,24 +438,33 @@ func (m *model) View() tea.View {
 	if q := m.queue.view(m.width); q != "" {
 		parts = append(parts, q)
 	}
-	// A rule under the input closes the app at the bottom.
-	parts = append(parts, m.status.view(m.width), m.composer.view())
+	// A thin rule with the title, the input, then the footer closes the app.
+	parts = append(parts, m.rule.view(m.width), m.composer.view())
 	if sug := m.suggest.view(m.width); sug != "" {
 		parts = append(parts, sug)
 	}
-	parts = append(parts, styleBorder.Render(strings.Repeat("─", max(m.width, 1))))
+	parts = append(parts, m.status.view(m.width))
 	return tea.NewView(strings.Join(parts, "\n"))
 }
 
-// loadBranch reads the session's worktree branch for the status bar.
-func (m *model) loadBranch() tea.Cmd {
+// showSession puts the session's title, start and branch in the rule and
+// footer.
+func (m *model) showSession(s api.Session) {
+	m.rule.Title, m.status.Branch = s.Title, s.Branch
+	if !s.CreatedAt.IsZero() {
+		m.status.Started = s.CreatedAt
+	}
+}
+
+// loadSession reads the session for the rule and footer.
+func (m *model) loadSession() tea.Cmd {
 	id := m.sessionID
 	return func() tea.Msg {
 		s, err := m.svc.GetSession(m.ctx, id)
 		if err != nil {
 			return nil
 		}
-		return branchMsg{branch: s.Branch}
+		return sessionMsg{sess: s}
 	}
 }
 
@@ -464,4 +483,12 @@ func (m *model) printBanner() tea.Cmd {
 		out += strings.Repeat("\n", pad)
 	}
 	return tea.Batch(tea.Println(out), m.scheduleFlush())
+}
+
+// eventTime is when ev happened; now for an event without a time.
+func eventTime(ev api.Event) time.Time {
+	if ev.Time.IsZero() {
+		return time.Now()
+	}
+	return ev.Time
 }

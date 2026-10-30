@@ -967,14 +967,14 @@ func (t *TUI) Run(ctx) error
 ```
 
 - Look: like the Hermes TUI for now (`hermes/ui-tui`). Copy its layout and style in Bubble Tea.
-- Components: each UI element (banner, message, transcript, status bar, composer) is its own component in its own file, with its own state and a `view(width)` that fits any width (R43).
-- Inline mode: finished messages are printed into the terminal scrollback; only the live part (running tools, streaming text, status bar, input) is redrawn.
+- Components: each UI element (banner, message, transcript, title rule, composer, status bar) is its own component in its own file, with its own state and a `view(width)` that fits any width (R43).
+- Inline mode: finished messages are printed into the terminal scrollback; only the live part (running tools, streaming text, title rule, input, footer) is redrawn.
 - `text_delta` events are live only (Seq 0, never saved); the finished text block is saved as one `text` event.
 - `status` events are live only too: what a turn is waiting on, such as a Codex retry ("codex: server_is_overloaded: …. Trying again in 6s (retry 1 of 2)."). The TUI shows a dim line. They come from the engine (`engine.KindStatus`, from `llm.KindStatus`).
 - `queue` events are live only too. `GetSession` returns the current queue (`Queued`) for clients that attach later.
-- A rule line under the input closes the app at the bottom.
+- Under the transcript (issue #30, like Hermes): a thin rule with the session title (the project before there is one) on the right, the input with no empty lines around it (an empty one takes 1 line), and the footer, which closes the app: state, model (the engine until a turn says which model), context used (`57K/200K ██░░░░░░ 28%`), session length, last turn time, branch, and `/ commands · @ files` on the right. On a narrow terminal it stays one line: the key hints drop first, then branch, last turn and session length; state, model and context stay. Context comes with `turn_done` (`api.Event.Context`, live only, not saved): Codex reports the request's input tokens when a response completes and the loop adds its context window; Claude reports each call's input and cached tokens (the last call counts) and the model's `contextWindow`. After the TUI attaches, context shows again after the next turn. Turn times come from the events' times, so a replayed turn keeps its real length.
 - UI work is checked with screenshots: run the TUI in tmux, capture with colors, render with `freeze`, check 50, 80 and 100+ columns.
-- Screen: header (project, session title, engine status), chat (text + one compact line per tool call), input box, footer with keys.
+- Screen: header (project, session title, engine status), chat (text + one compact line per tool call), title rule, input, footer with keys.
 - Events: `Watch` channel → a Bubble Tea command reads one event → `Update` adds it → `View` draws it. Watch drops: reconnect with `afterSeq`.
 
 Keys (I use Ctrl for other things, so almost none):
@@ -1223,7 +1223,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - `Watch` stream drops: reconnect with `afterSeq`; nothing is missed.
 - Client too slow: its stream is closed; it reconnects and catches up.
 - Daemon dies while the TUI is open: show "daemon stopped", start it again, reconnect.
-- Message while busy: waits in the session's queue (max 100), shown above the status bar (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). One Esc never interrupts: it only shows "Esc again to stop". Esc Esc (within 800 ms) stops the turn, and queued messages then run right away (`StopSession` with `SendQueue`). `germes stop <id>` stops and drops the queue.
+- Message while busy: waits in the session's queue (max 100), shown above the input (`↳ text`). When the turn ends, everything queued runs as one turn (messages joined with a blank line). One Esc never interrupts: it only shows "Esc again to stop". Esc Esc (within 800 ms) stops the turn, and queued messages then run right away (`StopSession` with `SendQueue`). `germes stop <id>` stops and drops the queue.
 - Daemon stops with messages still queued: the queue lives in memory, so they are lost. Later: save the queue, if this happens in practice.
 
 ### Engines and models

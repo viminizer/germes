@@ -173,3 +173,14 @@ func TestFailedRequestKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestCompletedResponseSaysHowFullTheContextIs(t *testing.T) {
+	_, chunks, _ := runStreams(`data: {"type":"response.completed","response":{"model":"gpt-5.5","usage":{"input_tokens":57257,"output_tokens":9}}}` + "\n\n")
+	if len(chunks) != 1 || chunks[0].Kind != llm.KindContext || *chunks[0].Context != (llm.Context{Model: "gpt-5.5", Tokens: 57257}) {
+		t.Fatalf("chunks %+v", chunks)
+	}
+	// No usage in the response: nothing to report.
+	if _, chunks, _ := runStreams(answer); len(chunks) != 1 || chunks[0].Kind != llm.KindTextDelta {
+		t.Fatalf("without usage: %+v", chunks)
+	}
+}

@@ -60,3 +60,23 @@ func TestFailedResultKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSaysHowFullTheContextIs(t *testing.T) {
+	var p parser
+	for _, l := range []string{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"a"}],"usage":{"input_tokens":5,"cache_creation_input_tokens":1000,"cache_read_input_tokens":40000}}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"b"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":6749,"cache_read_input_tokens":50506}}}`,
+	} {
+		p.parse([]byte(l))
+	}
+	// The result's usage adds up all calls; the last call is how full the context is.
+	evs := p.parse([]byte(`{"type":"result","subtype":"success","result":"b","usage":{"input_tokens":7},` +
+		`"modelUsage":{"claude-haiku":{"contextWindow":200000},"claude-opus-5-5":{"contextWindow":1000000}}}`))
+	if len(evs) != 1 || evs[0].Context == nil || *evs[0].Context != (engine.Context{Model: "claude-opus-5-5", Used: 57257, Window: 1000000}) {
+		t.Fatalf("done %+v", evs)
+	}
+	var none parser
+	if evs := none.parse([]byte(`{"type":"result","subtype":"success","result":"ok"}`)); evs[0].Context != nil {
+		t.Fatalf("context without usage: %+v", evs[0].Context)
+	}
+}

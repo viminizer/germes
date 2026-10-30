@@ -24,6 +24,7 @@ type worker struct {
 	sess  api.Session
 	seq   int64
 	reply string        // the turn's last text (a plan turn saves it)
+	used  *api.Context  // how full the model's context was at the turn's end; nil = unknown
 	wake  chan struct{} // a message was queued
 
 	mu      sync.Mutex
@@ -205,11 +206,11 @@ func (w *worker) runTurn(text string, plan bool) {
 		}
 		// Status first: a client that sees turn_done must read idle.
 		w.setStatus(api.StatusIdle)
-		w.emit(api.Event{Kind: api.KindTurnDone, Engine: w.sess.Engine})
+		w.emit(api.Event{Kind: api.KindTurnDone, Engine: w.sess.Engine, Context: w.used})
 	}()
 
 	w.emit(api.Event{Kind: api.KindUserMessage, Text: text})
-	w.reply = ""
+	w.reply, w.used = "", nil
 	w.setStatus(api.StatusWorking)
 	w.refresh()
 	w.snapshot(ctx, text)
@@ -308,6 +309,9 @@ func (w *worker) handle(ev engine.Event) {
 		w.m.SendEvent(api.Event{SessionID: w.sess.ID, Time: time.Now(), Kind: api.KindStatus, Text: ev.Text})
 	case engine.KindDone:
 		w.sess.Engine = ev.Engine
+		if c := ev.Context; c != nil {
+			w.used = &api.Context{Model: c.Model, Used: c.Used, Window: c.Window}
+		}
 		if ev.ResumeID != "" {
 			if w.sess.ResumeIDs == nil {
 				w.sess.ResumeIDs = map[string]string{}

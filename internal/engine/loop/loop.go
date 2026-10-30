@@ -179,7 +179,11 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
 	g := newGuard(t.Dir)
-	askedWhy := false // the model sent a final answer with tool calls once
+	askedWhy := false        // the model sent a final answer with tool calls once
+	var used *engine.Context // how full the context was for the last response
+	done := func() {
+		stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name, Context: used})
+	}
 	defer func() {
 		if spec.review && l.reviews() && l.opts.Reviews.IsDue(t.SessionID) {
 			l.opts.Reviews.Run(t.SessionID, func(ctx context.Context) { l.review(ctx, t) })
@@ -226,6 +230,8 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 				return
 			case llm.KindStatus:
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindStatus, Text: ch.Text})
+			case llm.KindContext:
+				used = &engine.Context{Model: ch.Context.Model, Used: ch.Context.Tokens, Window: l.opts.ContextWindow}
 			}
 		}
 		if ctx.Err() != nil {
@@ -250,7 +256,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: nudge})
 				continue
 			}
-			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
+			done()
 			return
 		}
 		if spec.review && l.reviews() {
@@ -291,11 +297,11 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		if asked != "" {
 			// The questions end the turn: the user's next message answers.
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindText, Text: asked})
-			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
+			done()
 			return
 		}
 	}
-	stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
+	done()
 }
 
 func (l *Loop) fail(ctx context.Context, out chan<- engine.Event, err error) {

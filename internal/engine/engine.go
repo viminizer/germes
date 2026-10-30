@@ -58,9 +58,17 @@ type Event struct {
 	ResetAt  time.Time // limit_hit
 	Outage   bool      // limit_hit: the provider is down for now, not a usage limit; Err says why
 	ResumeID string    // done
+	Context  *Context  // done: how full the model's context was at the end; nil = unknown
 	Engine   string    // done, switched: the engine that ran (or now runs) the turn
 	KeepFrom int64     // compacted: events from this seq on are kept as they are
 	Err      error     // error
+}
+
+// Context is how full a model's context is.
+type Context struct {
+	Model  string
+	Used   int // tokens
+	Window int // tokens the model takes; 0 = unknown
 }
 
 // ToolCall is a tool call or its result.

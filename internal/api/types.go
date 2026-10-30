@@ -78,6 +78,14 @@ type Event struct {
 	Queue     []string  `json:"queue,omitempty"`     // queue: the waiting messages
 	Engine    string    `json:"engine,omitempty"`    // engine_switched, turn_done: the engine running the session
 	KeepFrom  int64     `json:"keep_from,omitempty"` // compacted: events from this seq on are kept
+	Context   *Context  `json:"context,omitempty"`   // turn_done: how full the model's context was; live only, not saved
+}
+
+// Context is how full a model's context is, in tokens.
+type Context struct {
+	Model  string `json:"model,omitempty"`
+	Used   int    `json:"used"`
+	Window int    `json:"window,omitempty"` // 0 = unknown
 }
 
 // ToolCall is set on tool_call and tool_result events.

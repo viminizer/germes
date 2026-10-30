@@ -70,7 +70,8 @@ const (
 	KindLimitHit  Kind = "limit_hit"
 	KindDone      Kind = "done"
 	KindError     Kind = "error"
-	KindStatus    Kind = "status" // a status line for the user, live only (Text)
+	KindStatus    Kind = "status"  // a status line for the user, live only (Text)
+	KindContext   Kind = "context" // how full the context was for this response (Context), before Done
 )
 
 // Phase says what an assistant text is: progress while the model works,
@@ -94,7 +95,14 @@ type Chunk struct {
 	Usage    *Usage
 	ResetAt  time.Time // limit_hit; zero when unknown
 	Outage   bool      // limit_hit: the provider is down for now (retries ran out), not a usage limit
+	Context  *Context  // context
 	Err      error
+}
+
+// Context is how full the model's context was for one response.
+type Context struct {
+	Model  string
+	Tokens int // input tokens of the request, cached ones included
 }
 
 // Usage is how much of a usage window is used.

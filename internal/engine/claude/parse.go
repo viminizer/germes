@@ -23,6 +23,7 @@ const (
 type parser struct {
 	sessionID string
 	denied    []string // paths of tool calls Claude was not allowed to make
+	used      int      // context tokens of the last model call
 }
 
 type line struct {
@@ -37,6 +38,9 @@ type line struct {
 	Denials   []struct {
 		Input map[string]any `json:"tool_input"`
 	} `json:"permission_denials"`
+	ModelUsage map[string]struct {
+		ContextWindow int `json:"contextWindow"`
+	} `json:"modelUsage"`
 }
 
 type streamEvent struct {
@@ -49,6 +53,11 @@ type streamEvent struct {
 
 type message struct {
 	Content []block `json:"content"`
+	Usage   *struct {
+		Input         int `json:"input_tokens"`
+		CacheCreation int `json:"cache_creation_input_tokens"`
+		CacheRead     int `json:"cache_read_input_tokens"`
+	} `json:"usage"`
 }
 
 type block struct {
@@ -87,6 +96,11 @@ func (p *parser) parse(raw []byte) []engine.Event {
 			return []engine.Event{{Kind: engine.KindTextDelta, Text: l.Event.Delta.Text}}
 		}
 	case "assistant":
+		if u := l.Message; u != nil && u.Usage != nil {
+			// Each model call reports its whole input: the last one is how
+			// full the context is (the result's usage adds up all calls).
+			p.used = u.Usage.Input + u.Usage.CacheCreation + u.Usage.CacheRead
+		}
 		return p.assistant(l.Message)
 	case "user":
 		return p.toolResults(l.Message)
@@ -109,9 +123,24 @@ func (p *parser) parse(raw []byte) []engine.Event {
 				}
 			}
 		}
-		return []engine.Event{{Kind: engine.KindDone, ResumeID: p.sessionID, Engine: Name}}
+		return []engine.Event{{Kind: engine.KindDone, ResumeID: p.sessionID, Engine: Name, Context: p.context(l)}}
 	}
 	return nil
+}
+
+// context is how full the context was at the end of the turn, from the
+// last model call and the result's model; nil when Claude did not say.
+func (p *parser) context(l line) *engine.Context {
+	if p.used == 0 {
+		return nil
+	}
+	c := &engine.Context{Used: p.used}
+	for model, u := range l.ModelUsage {
+		if u.ContextWindow > c.Window {
+			c.Model, c.Window = model, u.ContextWindow // a background model can be listed too
+		}
+	}
+	return c
 }
 
 func (p *parser) assistant(m *message) []engine.Event {

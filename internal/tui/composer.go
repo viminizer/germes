@@ -65,6 +65,5 @@ func (c *composer) setWidth(w int) { c.area.SetWidth(max(w, 10)) }
 // setPlaceholder changes the hint shown when empty.
 func (c *composer) setPlaceholder(s string) { c.area.Placeholder = s }
 
-// view renders the input with an empty line above and below, so it does not
-// feel cramped between the status bar and the bottom rule.
-func (c composer) view() string { return "\n" + c.area.View() + "\n" }
+// view renders the input: an empty one takes one line (issue #30).
+func (c composer) view() string { return c.area.View() }

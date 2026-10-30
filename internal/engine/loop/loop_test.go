@@ -247,3 +247,31 @@ func TestHistoryRebuildsPhases(t *testing.T) {
 		t.Fatalf("phases %v, want %v", phases, want)
 	}
 }
+
+// contextModel answers once and says how full the context was.
+type contextModel struct{}
+
+func (contextModel) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, error) {
+	out := make(chan llm.Chunk, 3)
+	out <- llm.Chunk{Kind: llm.KindText, Text: "done"}
+	out <- llm.Chunk{Kind: llm.KindContext, Context: &llm.Context{Model: "gpt-5.5", Tokens: 1234}}
+	out <- llm.Chunk{Kind: llm.KindDone}
+	close(out)
+	return out, nil
+}
+
+func TestDoneSaysHowFullTheContextIs(t *testing.T) {
+	history := fakeHistory{{Seq: 1, Kind: api.KindUserMessage, Text: "hi"}}
+	l := New(contextModel{}, newEchoRegistry(t), prompt.NewBuilder(t.TempDir(), noMemory{}, noSkills{}), history, Options{Name: "fake", Toolsets: []string{"core"}})
+	events, err := l.Run(context.Background(), engine.Turn{SessionID: "s", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done engine.Event
+	for ev := range events {
+		done = ev
+	}
+	if done.Kind != engine.KindDone || done.Context == nil || *done.Context != (engine.Context{Model: "gpt-5.5", Used: 1234, Window: 200_000}) {
+		t.Fatalf("done %+v", done)
+	}
+}

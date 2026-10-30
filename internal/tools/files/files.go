@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -207,10 +208,8 @@ func edit(ctx context.Context, c tool.Call, a editArgs) (string, error) {
 	return fmt.Sprintf("edited %s (%d replacement(s))", a.FilePath, count), nil
 }
 
-// skipDir is folders searches never enter.
-func skipDir(name string) bool {
-	return name == ".git" || name == "node_modules" || name == ".claude"
-}
+// skipDirs are folders searches never enter.
+var skipDirs = []string{".git", "node_modules", ".claude"}
 
 type globArgs struct{ Pattern, Path string }
 
@@ -221,19 +220,50 @@ func glob(ctx context.Context, c tool.Call, a globArgs) (string, error) {
 		return "", err
 	}
 	var out []string
-	err = walk(ctx, root, func(path, rel string) bool {
+	total := 0
+	add := func(rel string) {
 		if re.MatchString(rel) {
-			out = append(out, rel)
+			total++
+			if len(out) < maxMatches {
+				out = append(out, rel)
+			}
 		}
-		return len(out) < maxMatches
-	})
+	}
+	rg := rgPath()
+	if rg != "" {
+		var files []string
+		if files, err = rgFiles(ctx, rg, root); err == nil {
+			for _, f := range files {
+				add(f)
+			}
+		}
+	} else {
+		err = walk(ctx, root, func(path, rel string) bool {
+			add(rel)
+			return total <= maxMatches // one more tells there are more
+		})
+	}
 	if err != nil {
 		return "", err
 	}
 	if len(out) == 0 {
 		return "no files match", nil
 	}
-	return strings.Join(out, "\n"), nil
+	return strings.Join(out, "\n") + moreNote(len(out), total, rg != "", "files"), nil
+}
+
+// moreNote says when results were cut, so the model does not take a part
+// for the whole. exact: total is the real count (ripgrep); a walk stops
+// early and only knows there are more.
+func moreNote(shown, total int, exact bool, what string) string {
+	if total <= shown {
+		return ""
+	}
+	all := fmt.Sprint(total)
+	if !exact {
+		all = fmt.Sprintf("more than %d", shown)
+	}
+	return fmt.Sprintf("\n[showing %d of %s %s; narrow it with path, glob or a stricter pattern]", shown, all, what)
 }
 
 type grepArgs struct{ Pattern, Path, Glob string }
@@ -251,39 +281,48 @@ func grep(ctx context.Context, c tool.Call, a grepArgs) (string, error) {
 	}
 	root := resolve(c.Dir, a.Path)
 	var out []string
-	// ponytail: Go walk and regexp, no ripgrep; fine for project-sized trees.
-	err = walk(ctx, root, func(path, rel string) bool {
-		if only != nil && !only.MatchString(rel) {
-			return true
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return true
-		}
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
-		for n := 1; sc.Scan(); n++ {
-			line := sc.Text()
-			if strings.IndexByte(line, 0) >= 0 {
-				return true // binary file
+	total := 0
+	rg := rgPath()
+	if rg != "" {
+		out, total, err = rgGrep(ctx, rg, root, a, maxMatches)
+	} else {
+		// Without ripgrep: one folder walk, .gitignore not read (issue #15).
+		err = walk(ctx, root, func(path, rel string) bool {
+			if only != nil && !only.MatchString(rel) {
+				return true
 			}
-			if re.MatchString(line) {
-				out = append(out, fmt.Sprintf("%s:%d: %s", rel, n, strings.TrimSpace(line)))
-				if len(out) >= maxMatches {
-					return false
+			f, err := os.Open(path)
+			if err != nil {
+				return true
+			}
+			defer f.Close()
+			sc := bufio.NewScanner(f)
+			sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+			for n := 1; sc.Scan(); n++ {
+				line := sc.Text()
+				if strings.IndexByte(line, 0) >= 0 {
+					return true // binary file
+				}
+				if re.MatchString(line) {
+					total++
+					if len(out) < maxMatches {
+						out = append(out, fmt.Sprintf("%s:%d: %s", rel, n, text.Shorten(strings.TrimSpace(line), maxColumns)))
+					}
+					if total > maxMatches {
+						return false // one more tells there are more
+					}
 				}
 			}
-		}
-		return true
-	})
+			return true
+		})
+	}
 	if err != nil {
 		return "", err
 	}
 	if len(out) == 0 {
 		return "no matches", nil
 	}
-	return strings.Join(out, "\n"), nil
+	return strings.Join(out, "\n") + moreNote(len(out), total, rg != "", "matches"), nil
 }
 
 // walk calls fn for every file under root (with its path relative to root)
@@ -298,7 +337,7 @@ func walk(ctx context.Context, root string, fn func(path, rel string) bool) erro
 			return ctx.Err()
 		}
 		if d.IsDir() {
-			if path != root && skipDir(d.Name()) {
+			if path != root && slices.Contains(skipDirs, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

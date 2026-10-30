@@ -631,6 +631,9 @@ internal/tools/worktree/  worktree_exit (project sessions; calls UpdateSession, 
 internal/tools/jobs/      job_create, job_list, job_stop (overseer)
 ```
 
+File search (`Glob`, `Grep`; Germes' loop only, Claude has its own): with ripgrep (`rg`) on `PATH`, both run it: files git ignores are skipped (build output, dependencies), hidden files are searched (`.github`), `.git`, `node_modules` and `.claude` never, every core is used, and a long line is cut at 300 characters. Glob lists files with `rg --files` and filters them with Germes' own glob, so a pattern means the same with or without `rg`. Without `rg`, a Go walk does the same job but reads no `.gitignore` (issue #15: download a pinned ripgrep when it is missing). Both print `file:line: text` and stop at 200 results; when there are more, the result says so (`[showing 200 of 1834 matches; narrow it ...]`, "more than 200" for the walk). Measured in a real project: a search went from 5.7 s to 0.2 s, and a `TODO` search from 200 lines of build output to the 4 real matches.
+
+
 - Each package has one constructor, for example `files.New(env) []tool.Tool`.
 - `delegate` lives in `engine/loop`: it starts a child loop, so anywhere else would be an import cycle.
 

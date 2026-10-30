@@ -29,6 +29,111 @@ func newRepo(t *testing.T) string {
 	return dir
 }
 
+func TestDeleteDetachedWork(t *testing.T) {
+	ctx := context.Background()
+	project := newRepo(t)
+	wt, err := Create(ctx, t.TempDir(), project, "detached")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, wt.Dir, "git", "checkout", "--detach", "-q")
+	run(t, wt.Dir, "git", "commit", "--allow-empty", "-q", "-m", "detached work")
+	if err := Delete(ctx, project, wt); !errors.Is(err, ErrHasWork) {
+		t.Fatalf("detached work must stay: %v", err)
+	}
+	if _, err := os.Stat(wt.Dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteStaleUpstream(t *testing.T) {
+	ctx := context.Background()
+	project := newRepo(t)
+	run(t, project, "git", "branch", "stale")
+	wt, err := Create(ctx, t.TempDir(), project, "upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, wt.Dir, "git", "branch", "--set-upstream-to=stale")
+	run(t, wt.Dir, "git", "commit", "--allow-empty", "-q", "-m", "merged work")
+	run(t, project, "git", "merge", "--ff-only", wt.Branch)
+	if err := Delete(ctx, project, wt); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(ctx, project, wt); err != nil {
+		t.Fatalf("completed cleanup must be retryable: %v", err)
+	}
+}
+
+func TestDeleteAfterDirectoryRemoval(t *testing.T) {
+	ctx := context.Background()
+	project := newRepo(t)
+	wt, err := Create(ctx, t.TempDir(), project, "partial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, project, "git", "worktree", "remove", wt.Dir)
+	if err := Delete(ctx, project, wt); err != nil {
+		t.Fatalf("retry branch cleanup: %v", err)
+	}
+	if _, err := RunGit(ctx, project, "show-ref", "--verify", "refs/heads/"+wt.Branch); err == nil {
+		t.Fatal("owned branch remains")
+	}
+}
+
+func TestDeletePreservesUncertainCheckout(t *testing.T) {
+	for _, scenario := range []string{"switched branch", "unregistered directory", "missing registered directory", "wrong repository", "branch used elsewhere", "unmerged branch after removal"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			project := newRepo(t)
+			wt, err := Create(ctx, t.TempDir(), project, "identity")
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "switched branch":
+				run(t, wt.Dir, "git", "checkout", "-q", "-b", "other")
+			case "unregistered directory":
+				wt.Dir = newRepo(t)
+			case "missing registered directory":
+				if err := os.RemoveAll(wt.Dir); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong repository":
+				project = newRepo(t)
+			case "branch used elsewhere":
+				run(t, project, "git", "worktree", "remove", wt.Dir)
+				run(t, project, "git", "worktree", "add", filepath.Join(t.TempDir(), "other"), wt.Branch)
+			case "unmerged branch after removal":
+				run(t, wt.Dir, "git", "commit", "--allow-empty", "-q", "-m", "unmerged")
+				run(t, project, "git", "worktree", "remove", wt.Dir)
+			}
+			if err := Delete(ctx, project, wt); err == nil {
+				t.Fatal("unsafe cleanup accepted")
+			}
+		})
+	}
+}
+
+func TestDeleteMergedDetachedCheckout(t *testing.T) {
+	ctx := context.Background()
+	project := newRepo(t)
+	wt, err := Create(ctx, t.TempDir(), project, "merged-detached")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, wt.Dir, "git", "checkout", "--detach", "-q")
+	run(t, wt.Dir, "git", "commit", "--allow-empty", "-q", "-m", "detached work")
+	head, err := RunGit(ctx, wt.Dir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, project, "git", "merge", "--ff-only", head)
+	if err := Delete(ctx, project, wt); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorktreeNeverLosesWork(t *testing.T) {
 	ctx := context.Background()
 	project := newRepo(t)

@@ -1,5 +1,69 @@
 # Germes quality-loop ledger
 
+## Active: germes-continuous-quality-loop / round 3 / preparation
+
+### Identity, base and coordination
+
+- Repository verified by remote, module and GitHub metadata: `https://github.com/viminizer/germes.git`, `github.com/viminizer/germes`, `viminizer/germes`; default branch `main`, configured tracking target `origin/main`.
+- Job `pn9q9i`, session `yjzp4y`, isolated worktree `/Users/mac/.germes/worktrees/germes-1aca4ad9/yjzp4y`, branch `germes/yjzp4y`. Shell tools still default to shared checkout despite worktree creation: explicitly cd to the isolated path for EVERY command and use absolute isolated paths for file tools. Shared checkout `/Users/mac/dev/github/germes/germes` is not an edit target.
+- Initial isolated tree clean. `git fetch origin`, `git merge --ff-only origin/main`, and subsequent `git fetch origin && git rebase origin/main` succeeded, already current. Base/HEAD `d963a6af90711e82af9b2456414136952de47042`. Git log confirms round 2 checkpoint repair merged through PR #20; earlier active labels below are historical and do not require reopening that completed responsibility.
+- Other worktree: `.claude/worktrees/codex-error`, branch `codex-error`, open PR #19 (Codex stream error messages). No file ownership overlap with this selection; do not modify it. Shared checkout clean on main at discovery. Job list shows no other active Germes coding job. Recheck ownership/status before integration or expansion.
+
+### Selected responsibility and exact paths
+
+ONE responsibility: safe and complete removal of a session's Git worktree and owned branch, refusing to lose actual checkout commits or uncommitted work, while allowing fully merged cleanup independently of stale upstream configuration. Inspect the ENTIRE selected implementation, including pre-existing defects, not only eventual diff.
+
+1. `internal/worktree/worktree.go` — full leaf module; focus HasWork/Delete and the Git operations they use, with Create/IsRepo/RunGit as lifecycle context.
+2. `internal/worktree/worktree_test.go` — public behavior safety regressions and existing lifecycle coverage.
+3. `docs/PLAN.md` — only Worktrees, related failure handling and implementation contracts if behavior needs clarification.
+4. `PROGRESS.md` — durable scope, findings, authorization and verification ledger.
+
+Reason: this module promises never to delete work. HasWork currently checks the saved branch, not the checkout's actual HEAD (which shell users/agents can detach or switch). Delete removes the directory before `git branch -d`, whose upstream-based merge decision can reject a branch already merged into the project; a partial cleanup leaves session metadata pointing at a removed folder. These are code-evidenced review candidates, NOT reproduced findings or a clean review. Reproduce safely using temporary local repositories before production fixes. Inspect both refusal and successful cleanup paths, metadata/checkout identity and partial failures within this responsibility. No production/test repair in preparation.
+
+Initial paths are not an authorization boundary: minimally add directly necessary owner files/contracts after checking compatibility/ownership and record why. Do not redesign session scheduling, workflow merge, snapshot retention, Git execution globally, or unrelated Codex authentication/errors. No repository-wide rewrite, new dependency or generalized abstraction is justified by preparation.
+
+### Applicable instructions, contracts and peers
+
+- Read root `AGENTS.md` (points to docs), full `docs/RULEBOOK.md`, `docs/PLAN.md` module map, Worktrees (1177–1190), Failure handling (1192–1260), Implementation and Answer quality context; `Makefile`, `go.mod`, `.github/workflows/ci.yml`. The whole PLAN read was truncated; the relevant Worktrees/failure contracts were subsequently read explicitly. No nested AGENTS/CLAUDE, CODEOWNERS, contribution guide, standalone verification policy or postponed-feature contract found. No scope prerequisite or owner conflict found.
+- Worktree is a leaf with no internal imports. Consumers own their interfaces; avoid upward dependencies. Relevant read-only callers/peers: `internal/session/manager.go` UpdateSession/deleteWorktree/DeleteSession (errors keep metadata until Delete succeeds); `internal/job/steps.go` cleanup/merge (cleanup delegates through UpdateSession); `internal/file/file.go` DeleteOld (conservative removal); `internal/checkpoint/checkpoint.go` (retention/locking safety peer, use for comparison in audit). Read complete affected callers if a fix reaches them. No identical Git cleanup peer exists.
+- Loaded skills: `verify-germes-worktree-isolation`, `consistency-audit`. Actual rulebook is `docs/RULEBOOK.md`, not the skill's default root path. Separate audit stays read-only; explicit user/workflow authorization permits subsequent fixes without routine approval. Load recovery/branch-cleanup skills if their concrete recovery circumstances arise.
+- Important rules: R1–R4 boundaries; R6–R16 simplicity, reuse, typed errors, no lost work/secrets; R19/R20 checks/latest base; R23/R26 behavior docs and graceful failures; R30 typed error checks; R35/R37–R41 important safety tests via public APIs, standard testing, isolated temporary repos; R45 independent consistency audit before merge.
+
+### Exact verification and delivery gates
+
+- Tests ARE allowed and required for this data-loss/silent-wrong-action risk (R35); standard Go tests, local temporary repositories, no external network/credentials/user work. No new test library or real-clock dependence.
+- Required: `make check` = `go build ./...`, `go vet ./...`, `test -z "$(gofmt -l .)"`, `go test -count=1 ./...`. Focused: `go test ./internal/worktree ./internal/session ./internal/archtest -count=1`. Diff checks: `git diff --check` and `git diff origin/main...HEAD --check`. No separate typecheck command. CI runs `make check` using go.mod's Go version. Rulebook audit also names `staticcheck ./...` and `go run github.com/mibk/dupl@latest -t 40 ./internal ./cmd`; do not claim either ran unless recorded.
+- Workflow `/Users/mac/.germes/workflows/germes-review-loop.yaml` read, unchanged: checks -> independent Codex review of ENTIRE scope and every job change -> separate consistency-audit, repeat BOTH after fixes or integration changes until clean. Failed/truncated/incomplete review output never clears gates. Use permitted tooling recovery, never weaken read-only permissions/protections or substitute the parent audit for Codex.
+- Full delivery authorized: commit on `germes/yjzp4y` only after checks and both reviews; draft-first PR with visible reviewed commit/check summary, read published state back, mark ready and merge after required checks/protections; verify remote merge, safely reconcile local main, built-in merge/cleanup only for verified merged job branches/worktrees. Fetch/rebase before integration; rerun checks and BOTH reviews if base/code changes. No force push, hard reset, protection bypass, edits to others' worktrees or removal of unmerged work. Do not prematurely commit preparation before review gates.
+- This job repeats until explicitly stopped. Round completion is not continuous-goal completion; report genuine blockers/no useful work and back off. Recover SCOPE here if missing/truncated. No workflow gates changed.
+
+### Round 3 preparation status
+
+- Only this ledger changed; no implementation fix, regression reproduction, independent review, consistency verdict, commit or delivery claimed. `make check` PASSED (build, vet, formatting, uncached full tests), `git diff --check` PASSED and `git diff origin/main...HEAD --check` PASSED at base `d963a6af90711e82af9b2456414136952de47042`. Only this result-recording sentence changed afterward. Next workflow checks and BOTH full-scope reviews remain mandatory.
+
+### Round 3 check gate
+
+- Recovered current scope and candidate issues above. No prior round-3 fix or completed review exists; these are investigation candidates, not unresolved findings from an unchanged failed repair, so NEEDS_FIX's no-progress condition does not apply.
+- Verified isolated cwd, branch `germes/yjzp4y`, HEAD `d963a6af90711e82af9b2456414136952de47042`; only `PROGRESS.md` modified. Ran `make check`: PASS (`go build ./...`, `go vet ./...`, `test -z "$(gofmt -l .)"`, `go test -count=1 ./...`). Ran `git diff --check`: PASS. Ran `git diff origin/main...HEAD --check`: PASS. No blocked command or missing prerequisite observed. Only this result record changed afterward. This clears checks only; independent full-scope Codex review and separate consistency audit remain required.
+
+### Round 3 verified review repairs
+
+- Independent Codex review completed at `d963a6af90711e82af9b2456414136952de47042`, verdict NEEDS_FIX, artifacts `/tmp/germes-worktree-review.3DAkpf/` (full initial/resume transcripts, exit 0 after same-session read-only resume, unchanged HEAD/status/diff). Separate consistency audit independently confirmed both findings: unchecked detached HEAD commits and stale-upstream refusal after directory removal. Neither finding rejected; prior checks did not clear either gate.
+- Before production changes, public `Delete` regressions failed for all three scenarios: detached unmerged commits were accepted and their checkout removed; stale upstream caused branch deletion failure after checkout removal; retry after completed directory removal failed at status in the missing directory. All fixtures were isolated temporary local repositories; no user work or unrelated worktree touched.
+- Shared worktree inspection now verifies the registered root and common Git directory, rejects other checked-out branches/ownership mismatches, and checks both actual checkout HEAD and the exact owned local branch against project HEAD. Nonexistence is accepted only when both directory and registration are absent; invalid or uncertain state remains an error. HasWork uses the same inspection as Delete. Existing uncommitted-work refusal remains intact.
+- Cleanup follows the proven stale-upstream recovery pattern: only after ancestry verification/removal, unset the owned branch's upstream when present, then ordinary `git branch -d` rechecks against project HEAD and guards branches checked out elsewhere. No force deletion or direct ref-file surgery. Retry finishes branch cleanup after directory removal and also accepts already-completed cleanup, so existing session persistence error handling can recover without a migration or caller API change. No scope additions were needed.
+- Added public regressions for detached unmerged and merged HEADs, stale upstreams, retry after directory/branch removal, switched branches, unregistered or missing-registered directories, wrong repositories, branches checked out elsewhere and unmerged branches after partial removal. Focused `go test ./internal/worktree ./internal/session ./internal/archtest -count=1` passed after the initial repair; final verification below supersedes it.
+- PLAN Worktrees/failure handling now describes the conservative inspection, retry protocol and normal Git guards; arbitrary external concurrent checkout mutation is explicitly not transactional. Existing R12/R14/R23/R26/R35 already require these shared safety and recovery patterns, so no redundant rule, abstraction, dependency, instruction pointer or new global Git policy was added. Loaded `repair-merged-branch-cleanup` for the existing unset-upstream recovery precedent. Both reviews must repeat after repairs; no commit or delivery yet.
+
+- Final repair verification at unchanged HEAD `d963a6af90711e82af9b2456414136952de47042`: `make check` PASS (build, vet, gofmt cleanliness, uncached full tests), `git diff --check` PASS, `git diff origin/main...HEAD --check` PASS. Only this observed-result ledger sentence changed afterward. Staticcheck/dupl were not rerun in this fix step. These are substantive repairs, not another build of unchanged failed code; workflow must obtain BOTH fresh full-scope reviews before commit/delivery.
+
+### Round 3 post-repair check gate
+
+- Confirmed substantive production/test/contract repairs for both open findings above; NEEDS_FIX's unchanged-failed-repair condition does not apply. HEAD remains `d963a6af90711e82af9b2456414136952de47042`, branch `germes/yjzp4y`; exactly the four selected files are modified.
+- Ran `make check`: PASS (`go build ./...`, `go vet ./...`, `test -z "$(gofmt -l .)"`, `go test -count=1 ./...`). Ran `go test ./internal/worktree ./internal/session ./internal/archtest -count=1`: PASS. Ran `git diff --check`: PASS. Ran `git diff origin/main...HEAD --check`: PASS. All commands exited 0; no blocked commands, missing prerequisites or incomplete verification. Only this result record changed afterward. Fresh independent Codex full-scope review and separate consistency audit remain mandatory before commit/delivery.
+
+## Historical round 2 (merged through PR #20)
+
 ## Active: germes-continuous-quality-loop / round 2 / preparation
 
 ### Current scope and recovered work

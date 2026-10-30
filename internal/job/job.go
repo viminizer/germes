@@ -170,7 +170,7 @@ func (s *Scheduler) StartJob(ctx context.Context, id string) error {
 		if j.MaxRuns > 0 && j.Runs >= j.MaxRuns {
 			return api.NewError(api.CodeInvalid, "job %s already ran all %d rounds", j.Name, j.MaxRuns)
 		}
-		j.Status, j.Failures, j.Error = api.JobRunning, 0, ""
+		j.Status, j.Failures, j.Cuts, j.Error = api.JobRunning, 0, 0, ""
 		if j.Idle > 0 {
 			j.Idle, j.NextRunAt = 0, time.Now()
 		}
@@ -362,10 +362,17 @@ func (s *Scheduler) lastTurn(ctx context.Context, sessionID string) (reply, fail
 // dropRound records a round a daemon restart cut: it is not counted as a
 // failed round, as Hermes's cron does not count a run its restart cut
 // (hermes/cron/jobs_oneshot_diagnostics.py); the job says so and runs on.
+// maxFailures cuts in a row fail it: a round that kills the daemon every
+// time must not run forever.
 func (s *Scheduler) dropRound(ctx context.Context, id string) bool {
 	j, err := s.update(ctx, id, func(j *api.Job) error {
 		j.Finished = j.Runs
+		j.Cuts++
 		j.Error = fmt.Sprintf("round %d was cut by a daemon restart; not counted as a failure", j.Runs)
+		if j.Cuts >= maxFailures {
+			j.Status = api.JobFailed
+			j.Error = fmt.Sprintf("rounds were cut by a daemon restart %d times in a row; does a round crash Germes?", j.Cuts)
+		}
 		return nil
 	})
 	if err != nil {
@@ -415,6 +422,7 @@ func (s *Scheduler) advance(ctx context.Context, id string) (api.Job, bool) {
 func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 	j, err := s.update(ctx, id, func(j *api.Job) error {
 		j.Finished = j.Runs // recorded: a restart does not read it again
+		j.Cuts = 0          // a round ended on its own
 		if j.Status != api.JobRunning {
 			return nil
 		}

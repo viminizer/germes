@@ -239,6 +239,32 @@ func TestRoundCutByARestartIsNotAFailure(t *testing.T) {
 	}
 }
 
+// A round that kills the daemon every time must not run forever: the third
+// cut in a row fails the job.
+func TestThreeCutRoundsInARowFailTheJob(t *testing.T) {
+	s, r := newTestScheduler(t, "!interrupted", "an extra round")
+	ctx := context.Background()
+	dir := t.TempDir()
+	res, err := s.sessions.SendMessage(ctx, api.MessageRequest{Dir: dir, Text: "round 3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitIdleSession(t, s, res.SessionID)
+	j := api.Job{ID: "crashy", Name: "crashy", Dir: dir, Prompt: "build it", Status: api.JobRunning, Runs: 3, Finished: 2, Cuts: 2,
+		SessionID: res.SessionID, NextRunAt: time.Now()}
+	if err := s.store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	s.Stop(ctx)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobFailed || j.Runs != 3 || len(r.turns) != 1 || !strings.Contains(j.Error, "3 times in a row") {
+		t.Fatalf("job %s after %d runs and %d turns (%s); want failed after the third cut", j.Status, j.Runs, len(r.turns), j.Error)
+	}
+}
+
 // waitTurns waits until the session has n finished turns and is idle.
 func waitTurns(t *testing.T, s *Scheduler, id string, n int) {
 	t.Helper()

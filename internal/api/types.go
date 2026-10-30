@@ -184,6 +184,7 @@ type Job struct {
 	Runs       int               `json:"runs"`
 	Finished   int               `json:"finished"` // rounds whose result was recorded; Runs > Finished: one ended unrecorded (a hand-over cut in)
 	Failures   int               `json:"failures"` // failed rounds in a row
+	Cuts       int               `json:"cuts"`     // rounds in a row a daemon restart cut
 	NextRunAt  time.Time         `json:"next_run_at"`
 	Status     JobStatus         `json:"status"`
 	SessionID  string            `json:"session_id,omitempty"` // the latest round's session

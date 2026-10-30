@@ -243,6 +243,29 @@
 - PLAN: gap check on any stored event with the watermark; regression name added.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix9-path` -> `/tmp/germes-r6-fix9.*`. Both review gates must run again on the new commit.
 
+### Round 6 tenth check
+
+- HEAD `7876294a9dd651573b9302e64f28652265a3b64a`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check10.log`), focused tests (`/tmp/germes-r6-focused10.log`), race tests (`/tmp/germes-r6-race10.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 tenth independent Codex review (HEAD `7876294`)
+
+- Evidence `/tmp/germes-r6-review10.wHmc4A/` (transcript.log, verdict.txt, exit 0, session `01a18ea5-6f9b-7a92-8d71-a8465699a674`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections; peers, wiring, file.Save callers, check logs. R1-R48 unique. VERDICT: Actionable findings: 1.
+- Open finding for the fix step:
+  1. P2 `telegram.go:458` (known-session registration) and `telegram.go:281` (last-turn fallback): `Answered` is set only when the watcher sees a `user_message`. While a subscription is failing/retrying, the poller can send A and queued B to an existing session and both can finish before watching resumes; recovery then has no boundary, falls back to the last turn, sends B and loses A. Suggested: capture and persist a reliable pre-request boundary at registration; regression: register an existing session while watching is unavailable, finish two turns, reconnect.
+
+### Round 6 tenth consistency audit (read-only, HEAD `7876294`)
+
+- Finding CONFIRMED, uncommon: `sendMessage` (`telegram.go:452-458`) registers `ReplyTo` for a known session without an `answered` boundary; `markAnswered` only runs when the watcher sees the `user_message`. Realistic path: the watcher waits on a Telegram 429 while other sessions stream, the hub drops it (dropping A's `user_message` too), the poller meanwhile sends A and a queued B, and both finish before the resubscribe. `catchUp` (no cursor) calls `settle`, which has no boundary and falls back to the last turn (`telegram.go:281`, `storedEvents(-1)`): B is sent, A is lost.
+- No cheap exact boundary exists in the API (`MessageResult` and `Session` carry no sequence; a full `ListEvents` scan per message is too costly). Suggested bounded fix: keep the last stored sequence this bot handled per session in memory beyond cleanup (`output.seq` is deleted at cleanup today), and when `sendMessage` registers a session that has no saved boundary, seed `answered` from it and save. This covers every session the bot already talked to in its lifetime. Remaining limit to document in PLAN: the first message to a session in a bot's lifetime whose `user_message` the bot never sees, with two turns finishing before it does, recovers only the last answer. Regression: an earlier finished turn seen, cleanup, then register again while the watch is down, two turns finish, reconnect: both answers sent.
+- Nothing else: R1-R48 unique. Result: FINDINGS.
+
+### Round 6 tenth fix (seed the answered boundary at registration)
+
+- `internal/telegram/telegram.go`: new `handled` map (under `t.mu`, kept after a topic is forgotten): the last stored non-notice event handled per session. `sendMessage`, when it registers a known session with no saved `answered` boundary, seeds it from `handled` (saved with the existing `t.save()` at the end; a failed send of a new registration still removes it). `out.go` `sendReplyEvent` updates `handled` where it advances the reply cursor. No extra API call, poller does not take `outputMu`.
+- Remaining limit documented in PLAN: the first request to a session in a bot's lifetime, if the bot never sees its user message and two turns finish first, recovers only the last answer (no cheap exact boundary in the API).
+- New regression `TestRunRegistrationSeedsAnsweredBoundary` (one answered turn, drop, new request A, A and queued B finish, reconnect). BEFORE (HEAD code via `-overlay`): failed, exit 1 (answer A lost). AFTER: pass. No existing test changed.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix10-path` -> `/tmp/germes-r6-fix10.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

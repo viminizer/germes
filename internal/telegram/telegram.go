@@ -71,6 +71,9 @@ type Telegram struct {
 	replyGeneration map[string]uint64
 	replySending    map[string]int
 	replyDone       map[string]int64 // turn_done seq seen while a send was in flight
+	// handled is the last stored event handled per session, kept after its
+	// topic is forgotten: a new request starts its answered boundary there.
+	handled map[string]int64
 
 	outputMu sync.Mutex // serializes stored creation replay with the live watcher
 	output   replyOutput
@@ -103,7 +106,7 @@ func New(svc api.Service, opts Options) *Telegram {
 	}
 	b := &bot{base: base + "/bot" + opts.Token, files: base + "/file/bot" + opts.Token, http: &http.Client{}}
 	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}},
-		replyGeneration: map[string]uint64{}, replySending: map[string]int{}, replyDone: map[string]int64{},
+		replyGeneration: map[string]uint64{}, replySending: map[string]int{}, replyDone: map[string]int64{}, handled: map[string]int64{},
 		output: replyOutput{last: map[string]string{}, sending: map[string]bool{}, limited: map[string]bool{}, seq: map[string]int64{}, noticeSeq: map[string]int64{}, replaying: map[string]bool{}, held: map[string][]api.Event{}}}
 	if b, err := os.ReadFile(opts.StatePath); err == nil {
 		if err := json.Unmarshal(b, &t.state); err != nil {
@@ -456,6 +459,16 @@ func (t *Telegram) sendMessage(ctx context.Context, thread int64, r api.MessageR
 		t.replyGeneration[id]++
 		t.replySending[id]++
 		t.state.ReplyTo[id] = thread
+		if _, known := t.state.Answered[id]; !known {
+			// Without it, a restart or a dropped watch before this bot sees
+			// the new user message would recover only the last turn.
+			if seq, ok := t.handled[id]; ok {
+				if t.state.Answered == nil {
+					t.state.Answered = map[string]int64{}
+				}
+				t.state.Answered[id] = seq
+			}
+		}
 	}
 	t.mu.Unlock()
 

@@ -145,6 +145,11 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 			return
 		}
 		seq[ev.SessionID] = ev.Seq
+		if ev.Kind != api.KindNotice {
+			t.mu.Lock()
+			t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
+			t.mu.Unlock()
+		}
 	}
 	switch {
 	case ev.Kind == api.KindNotice:

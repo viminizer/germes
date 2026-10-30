@@ -56,15 +56,15 @@ func (m message) view(width int) string {
 	case kindError:
 		return "\n" + gutter(styleError.Render("✗ "), styleError, m.Text, width)
 	case kindSwitch:
-		return gutter(styleAccent.Render("⇄ "), styleAccent, m.Text, width)
+		return "\n" + gutter(styleAccent.Render("⇄ "), styleAccent, m.Text, width)
 	case kindAlert:
-		return gutter(styleAccent.Render("◆ "), styleAccent, m.Text, width)
+		return "\n" + gutter(styleAccent.Render("◆ "), styleAccent, m.Text, width)
 	case kindRound:
 		return "\n" + styleAccent.Render("── "+m.Text+" ──")
 	case kindTurnEnd:
 		return "\n" + styleBorder.Render("───")
 	default:
-		return gutter(styleMuted.Render("· "), styleMuted, m.Text, width)
+		return "\n" + gutter(styleMuted.Render("· "), styleMuted, m.Text, width)
 	}
 }
 
@@ -92,45 +92,50 @@ func gutter(mark string, style lipgloss.Style, text string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// treeView draws a step's tool calls like Hermes: `└─ ▾ Tool calls (3)`,
-// then one `├─ ● Read("main.go") (0.2s)` row per call. A running call has
-// the spinner and its time so far. maxRows > 0 keeps only the last rows
-// (the live area); a task list or subagent reports show under their call.
+// treeView draws a step's tool calls like Hermes (hermes/ui-tui/src/
+// components/thinking.tsx): `└─ ▾ Tool calls (3)`, then one
+// `├─ ● Read("main.go") (0.2s)` row per call. A running call has the
+// spinner and its time so far; a failed one is red with its error under
+// it. maxRows > 0 keeps only the last rows (the live area); a task list or
+// subagent reports show under their call.
 func treeView(runs []toolRun, dir string, width int, spin string, now time.Time, maxRows int) string {
-	head := styleBorder.Render("└─ ") + styleAccent.Render(fmt.Sprintf("▾ Tool calls (%d)", len(runs)))
+	stem := styleMuted.Faint(true)
+	head := stem.Render("└─ ") + styleAccent.Faint(true).Render("▾ ") + stem.Render(fmt.Sprintf("Tool calls (%d)", len(runs)))
 	lines := []string{head}
 	shown := runs
 	if maxRows > 0 && len(runs) > maxRows {
 		shown = runs[len(runs)-maxRows:]
-		lines = append(lines, styleDim.Render(fmt.Sprintf("   │ … %d earlier", len(runs)-maxRows)))
+		lines = append(lines, stem.Render(fmt.Sprintf("  │ … %d earlier", len(runs)-maxRows)))
 	}
 	for i, r := range shown {
-		branch, rail := "├─ ", "│  "
+		branch, rail := "  ├─ ", "  │  "
 		if i == len(shown)-1 {
-			branch, rail = "└─ ", "   "
+			branch, rail = "  └─ ", "     "
 		}
-		dot, label := toolMark(r.Call)
+		dot, label := styleAccent.Render("● "), toolStyle(r.Call)
 		took := r.Took
 		if !r.Done {
 			dot += styleAccent.Render(spin + " ")
 			took = now.Sub(r.Start)
 		}
-		row := "   " + styleBorder.Render(branch) + dot + label.Render(toolLabel(r.Call, dir))
+		row := stem.Render(branch) + dot + label.Render(toolLabel(r.Call, dir))
 		if r.Done || !now.IsZero() {
 			row += styleStatus.Faint(true).Render(" (" + tookText(took) + ")")
 		}
 		lines = append(lines, ansi.Truncate(row, max(width, 10), "…"))
 		var sub string
 		switch {
-		case !r.Done || r.Call.IsError:
+		case !r.Done:
+		case r.Call.IsError:
+			sub = styleError.Render(ansi.Truncate("└─ "+firstLine(shortPaths(r.Call.Output, dir)), max(width-5, 10), "…"))
 		case r.Call.Name == "todo_list":
-			sub = taskList(r.Call.Output, width-6)
+			sub = taskList(r.Call.Output, width-5)
 		case r.Call.Name == "delegate_task":
-			sub = subagentList(r.Call.Output, width-6)
+			sub = subagentList(r.Call.Output, width-5)
 		}
 		if sub != "" {
 			for _, l := range strings.Split(sub, "\n") {
-				lines = append(lines, "   "+styleBorder.Render(rail)+l)
+				lines = append(lines, stem.Render(rail)+l)
 			}
 		}
 	}
@@ -145,12 +150,12 @@ func tookText(d time.Duration) string {
 	return shortDuration(d)
 }
 
-// toolMark is a call's dot and label style: a red cross for a failure.
-func toolMark(t *api.ToolCall) (string, lipgloss.Style) {
+// toolStyle is a call's label style, like Hermes: red for a failure.
+func toolStyle(t *api.ToolCall) lipgloss.Style {
 	if t.IsError {
-		return styleError.Render("✗ "), styleError
+		return styleError
 	}
-	return styleAccent.Render("● "), styleText
+	return styleText
 }
 
 // toolLabel is Name("preview"), with the most telling argument as preview.

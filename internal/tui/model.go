@@ -115,8 +115,8 @@ func (m *model) Init() tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.composer.setWidth(msg.Width)
+		m.width, m.height = msg.Width-marginWidth, msg.Height
+		m.composer.setWidth(m.width)
 		if !m.started {
 			m.started = true
 			return m, m.printBanner()
@@ -323,8 +323,8 @@ func (m *model) track(ev api.Event) tea.Cmd {
 			m.status.Context = ev.Context
 		}
 		m.status.Busy = false
-		m.composer.setPlaceholder("Ask me anything…")
-		return m.loadSession() // the turn may have left its worktree, or got a title
+		m.composer.setPlaceholder("") // like Hermes: the hint is only for a fresh session
+		return m.loadSession()        // the turn may have left its worktree, or got a title
 	case api.KindError:
 		if ev.Text == "stopped" {
 			m.status.Note = "interrupted"
@@ -449,7 +449,7 @@ func (m *model) scheduleFlush() tea.Cmd {
 // of the screen: a print taller than the screen loses lines.
 func (m *model) flush() string {
 	for _, msg := range m.pending {
-		m.unprinted = append(m.unprinted, strings.Split(msg.view(m.width), "\n")...)
+		m.unprinted = append(m.unprinted, strings.Split(margin(msg.view(m.width)), "\n")...)
 	}
 	m.pending = nil
 	n := min(len(m.unprinted), max(m.height-lipgloss.Height(m.View().Content), 1))
@@ -480,8 +480,15 @@ func (m *model) View() tea.View {
 	} else {
 		parts = append(parts, m.composer.view())
 	}
-	return tea.NewView(strings.Join(parts, "\n"))
+	return tea.NewView(margin(strings.Join(parts, "\n")))
 }
+
+// marginWidth is what the app leaves free, like Hermes: one column on the
+// left and one on the right (Hermes' scrollbar).
+const marginWidth = 2
+
+// margin moves every line one column right.
+func margin(s string) string { return " " + strings.ReplaceAll(s, "\n", "\n ") }
 
 // showSession puts the session's title, start and branch in the status
 // line.
@@ -512,6 +519,7 @@ func (m *model) printBanner() tea.Cmd {
 	if m.startNotice != "" {
 		out += "\n" + message{Kind: kindNotice, Text: m.startNotice}.view(m.width) + "\n"
 	}
+	out = margin(out)
 	// Blank lines put the live area at the bottom of the screen. Bubble
 	// Tea prints above it as if it were there; higher up, lines land on the
 	// wrong rows and get lost.

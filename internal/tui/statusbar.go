@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,10 +15,16 @@ import (
 // (hermes/ui-tui/src/content/verbs.ts, i18n/en/content.ts).
 var (
 	spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	busyFaces     = []string{"(◔_◔)", "( •_•)>⌐■-■", "(⌐■_■)", "(´･_･`)", "◉_◉", "(⊙_⊙)", "(¬‿¬)", "ಠ_ಠ"}
-	busyVerbs     = []string{"pondering", "contemplating", "musing", "cogitating", "ruminating", "deliberating",
-		"mulling", "reflecting", "processing", "reasoning", "analyzing", "computing", "synthesizing", "formulating"}
+	busyFaces     = []string{"(｡•́︿•̀｡)", "(◔_◔)", "(¬‿¬)", "( •_•)>⌐■-■", "(⌐■_■)", "(´･_･`)", "◉_◉", "(°ロ°)",
+		"( ˘⌣˘)♡", "ヽ(>∀<☆)☆", "٩(๑❛ᴗ❛๑)۶", "(⊙_⊙)", "(¬_¬)", "( ͡° ͜ʖ ͡°)", "ಠ_ಠ"}
+	busyVerbs = []string{"pondering", "contemplating", "musing", "cogitating", "ruminating", "deliberating",
+		"mulling", "reflecting", "processing", "reasoning", "analyzing", "computing", "synthesizing", "formulating",
+		"brainstorming"}
 )
+
+// verbWidth keeps the status line still while the verb changes: the
+// longest verb and its "…".
+const verbWidth = len("brainstorming…")
 
 // statusBar is the line over the input, like the Hermes status rule:
 // state, model, context used, session length and last turn time on the
@@ -53,9 +60,10 @@ func (s statusBar) view(width int) string {
 	case s.Hint != "":
 		state = styleAccent.Bold(true).Render(s.Hint)
 	case s.Busy:
-		n := s.Frame / 25 // about every 2.5s
-		state = styleMuted.Render(fmt.Sprintf("%s %s… · %s", busyFaces[n%len(busyFaces)], busyVerbs[n%len(busyVerbs)],
-			time.Since(s.Since).Round(time.Second)))
+		n := s.Frame / 25 // about every 2.5s, like Hermes
+		verb := busyVerbs[n%len(busyVerbs)] + "…"
+		state = styleMuted.Render(fmt.Sprintf("%s %s · %s", busyFaces[n%len(busyFaces)],
+			verb+strings.Repeat(" ", verbWidth-len([]rune(verb))), shortDuration(time.Since(s.Since))))
 	case s.Note != "":
 		state = styleWarn.Render(s.Note)
 	default:
@@ -64,7 +72,7 @@ func (s statusBar) view(width int) string {
 	// Most important first; drop from the end until it fits.
 	parts := []string{state}
 	if model := s.model(); model != "" {
-		parts = append(parts, styleStatus.Render(model))
+		parts = append(parts, styleMuted.Render(modelLabel(model)))
 	}
 	if s.Context != nil {
 		parts = append(parts, contextUse(*s.Context))
@@ -76,9 +84,10 @@ func (s statusBar) view(width int) string {
 	if s.LastTurn > 0 {
 		parts = append(parts, styleMuted.Render("✓ "+shortDuration(s.LastTurn)))
 	}
-	right := s.Title
+	// The title bold in accent; before there is one, the project.
+	right, rightStyle := s.Title, styleAccent.Bold(true)
 	if right == "" {
-		right = s.Project
+		right, rightStyle = s.Project, styleLabel
 	}
 	if s.Branch != "" {
 		right += " (" + s.Branch + ")"
@@ -88,7 +97,7 @@ func (s statusBar) view(width int) string {
 		left := lead + strings.Join(parts, styleMuted.Render(" │ "))
 		room := width - lipgloss.Width(left) - 3 - 2 // a gap of 3, then "─ "
 		if right != "" && room >= min(minRight, lipgloss.Width(right)) {
-			r := lead + styleLabel.Render(truncateLeft(right, room))
+			r := lead + rightStyle.Render(truncateLeft(right, room))
 			return left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(r)) + r
 		}
 		if len(parts) <= keep {
@@ -98,6 +107,16 @@ func (s statusBar) view(width int) string {
 	}
 }
 
+// modelLabel writes a model name short, like Hermes: claude-opus-5-5 is
+// "opus 5.5", gpt-6.1-sol is "gpt 6.1 sol".
+func modelLabel(model string) string {
+	model = strings.TrimPrefix(model[strings.LastIndex(model, "/")+1:], "claude-")
+	model = strings.NewReplacer("-", " ", "_", " ").Replace(model)
+	return reVersionPair.ReplaceAllString(model, "$1.$2")
+}
+
+var reVersionPair = regexp.MustCompile(`\b(\d+) (\d+)\b`)
+
 // model is the model of the last turn, or the engine before one ends.
 func (s statusBar) model() string {
 	if s.Context != nil && s.Context.Model != "" {
@@ -106,40 +125,52 @@ func (s statusBar) model() string {
 	return s.Engine
 }
 
-// contextUse renders "57K/200K │ [██░░░░░░░░] 28%", or only the used
-// tokens when the window is unknown.
+// contextUse renders "57.3k/200k │ [███░░░░░░░] 28%", the bar colored
+// by how full it is like Hermes, or only the used tokens when the window
+// is unknown.
 func contextUse(c api.Context) string {
 	if c.Window <= 0 {
-		return styleStatus.Render(shortCount(c.Used))
+		return styleMuted.Render(shortCount(c.Used))
 	}
 	pct := min(100*c.Used/c.Window, 100)
-	full := pct * 10 / 100
+	full := (pct*10 + 50) / 100
 	bar := strings.Repeat("█", full) + strings.Repeat("░", 10-full)
-	style := styleStatus
-	if pct >= 50 {
-		style = styleWarn // compaction starts at half the window
+	color := colorStatusGood
+	switch {
+	case pct >= 95:
+		color = colorStatusCritical
+	case pct > 80:
+		color = colorStatusBad
+	case pct >= 50:
+		color = colorStatusWarn // compaction starts at half the window
 	}
-	return styleStatus.Render(shortCount(c.Used)+"/"+shortCount(c.Window)) + styleMuted.Render(" │ ") +
-		style.Render(fmt.Sprintf("[%s] %d%%", bar, pct))
+	return styleMuted.Render(shortCount(c.Used)+"/"+shortCount(c.Window)+" │ ") +
+		lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("[%s] %d%%", bar, pct))
 }
 
-// shortCount writes a token count as 950, 57K or 1.2M.
+// shortCount writes a token count like Hermes: 950, 57.3k or 1.2M.
 func shortCount(n int) string {
+	scaled := func(v float64, unit string) string {
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", v), ".0") + unit
+	}
 	switch {
-	case n >= 1_000_000:
-		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "M"
+	case n >= 999_950:
+		return scaled(float64(n)/1_000_000, "M")
 	case n >= 1000:
-		return fmt.Sprintf("%dK", n/1000)
+		return scaled(float64(n)/1000, "k")
 	}
 	return fmt.Sprint(n)
 }
 
-// shortDuration writes a duration as 45s, 12m, 3h 5m or 2d 3h.
+// shortDuration writes a duration as 45s, 12m 5s, 3h 5m or 2d 3h.
 func shortDuration(d time.Duration) string {
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	case d < time.Hour:
+		if sec := int(d.Seconds()) % 60; sec > 0 {
+			return fmt.Sprintf("%dm %ds", int(d.Minutes()), sec)
+		}
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)

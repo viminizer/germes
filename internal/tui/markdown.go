@@ -35,7 +35,7 @@ func renderMarkdown(text string, width int) string {
 				out = append(out, styleMuted.Render("  ─ "+m[2]))
 			}
 			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), m[1]); i++ {
-				out = append(out, styleText.Render("  "+strings.ReplaceAll(lines[i], "\t", "    ")))
+				out = append(out, "  "+highlight(strings.ReplaceAll(lines[i], "\t", "    "), m[2]))
 			}
 			continue
 		}
@@ -89,7 +89,7 @@ func inline(text string, base lipgloss.Style) string {
 		part := func(n int) string { return text[m[2*n]:m[2*n+1]] }
 		switch {
 		case m[2] >= 0:
-			b.WriteString(styleAccent.Faint(true).Render(part(1)))
+			b.WriteString(styleAccent.Render(part(1)))
 		case m[4] >= 0:
 			b.WriteString(base.Bold(true).Render(part(2)))
 		case m[6] >= 0:
@@ -209,4 +209,76 @@ func readyBlocks(text string) (ready, held string) {
 		return text, ""
 	}
 	return strings.Join(lines[:hold], ""), strings.Join(lines[hold:], "")
+}
+
+// Code colors, like Hermes (hermes/ui-tui/src/lib/syntax.ts): strings in
+// accent, keywords in the border color, comments muted, the rest plain.
+type codeLang struct {
+	comment  string
+	keywords map[string]bool
+}
+
+func words(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		m[w] = true
+	}
+	return m
+}
+
+var codeLangs = map[string]codeLang{
+	"go": {"//", words(`break case chan const continue default defer else fallthrough for func go goto if import
+		interface map package range return select struct switch type var nil true false`)},
+	"json": {"", words("true false null")},
+	"py": {"#", words(`False None True and as assert async await break class continue def del elif else except
+		finally for from global if import in is lambda nonlocal not or pass raise return try while with yield`)},
+	"rust": {"//", words(`as async await break const continue crate dyn else enum extern false fn for if impl in let
+		loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while yield`)},
+	"sh": {"#", words(`if then else elif fi for in do done while until case esac function return break continue
+		local export readonly declare typeset`)},
+	"sql": {"--", words(`select from where and or not in is null as by group order limit offset insert into values
+		update set delete create table drop alter add column primary key foreign references join left right inner outer on`)},
+	"ts": {"//", words(`abstract as async await break case catch class const continue debugger default delete do
+		else enum export extends false finally for from function get if implements import in instanceof interface is
+		let new null of package private protected public readonly return set static super switch this throw true try
+		type typeof undefined var void while with yield`)},
+	"yaml": {"#", words("true false null yes no on off")},
+}
+
+var codeAliases = map[string]string{"bash": "sh", "javascript": "ts", "js": "ts", "jsx": "ts", "python": "py",
+	"rs": "rust", "shell": "sh", "tsx": "ts", "typescript": "ts", "yml": "yaml", "zsh": "sh"}
+
+var reCodeToken = regexp.MustCompile("'(?:[^'\\\\]|\\\\.)*'|\"(?:[^\"\\\\]|\\\\.)*\"|`(?:[^`\\\\]|\\\\.)*`|\\b\\d+(?:\\.\\d+)?\\b|[A-Za-z_$][\\w$]*")
+
+// highlight colors one line of code; a language it does not know stays
+// plain.
+func highlight(line, lang string) string {
+	if a, ok := codeAliases[lang]; ok {
+		lang = a
+	}
+	spec, ok := codeLangs[lang]
+	if !ok {
+		return line
+	}
+	if spec.comment != "" && strings.HasPrefix(strings.TrimSpace(line), spec.comment) {
+		return styleMuted.Render(line)
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range reCodeToken.FindAllStringIndex(line, -1) {
+		b.WriteString(line[last:m[0]])
+		tok := line[m[0]:m[1]]
+		switch c := tok[0]; {
+		case c == '"' || c == '\'' || c == '`':
+			b.WriteString(styleAccent.Render(tok))
+		case c >= '0' && c <= '9':
+			b.WriteString(styleText.Render(tok))
+		case spec.keywords[tok]:
+			b.WriteString(styleBorder.Render(tok))
+		default:
+			b.WriteString(tok)
+		}
+		last = m[1]
+	}
+	return b.String() + line[last:]
 }

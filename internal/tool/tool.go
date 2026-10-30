@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Tool is one thing the model can call.
@@ -16,6 +17,7 @@ type Tool struct {
 	Schema      json.RawMessage // JSON Schema of the arguments
 	MatchArg    string          // the argument the block list checks ("command" for Bash)
 	BlockedAs   string          // another tool whose block rules apply too (send_file: Read's)
+	Timeout     time.Duration   // how long one call may run; 0 = the registry's default
 	Run         func(ctx context.Context, c Call) (string, error)
 }
 

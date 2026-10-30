@@ -21,6 +21,8 @@ const (
 func New(e env.Environment) []tool.Tool {
 	return []tool.Tool{{
 		Name: "Bash", Toolset: "shell", MatchArg: "command",
+		// Past the longest command, so its own timeout ends it and says so.
+		Timeout:     maxTimeout + time.Minute,
 		Description: "Run a bash command in the project folder. Each call is a fresh shell: cd and export do not carry over. Default timeout 2 minutes, max 10.",
 		Schema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer"}},` +
 			`"required":["command"],"additionalProperties":false}`),

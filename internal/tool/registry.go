@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -110,13 +111,14 @@ func (r *Registry) Run(ctx context.Context, name string, c Call) (res Result) {
 			res = Result{IsError: true, Output: fmt.Sprintf("internal error in %s: %v", name, p)}
 		}
 	}()
-	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	limit := cmp.Or(t.Timeout, defaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	c.IsReadBlocked = func(path string) bool { return r.isReadBlocked(path, c.Dir) }
 	out, err := t.Run(ctx, c)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return Result{IsError: true, Output: fmt.Sprintf("%s timed out after %s", name, defaultTimeout)}
+			err = fmt.Errorf("%w\n[%s timed out after %s]", err, name, limit)
 		}
 		return Result{IsError: true, Output: r.shorten(c.SessionID, name, err.Error())}
 	}

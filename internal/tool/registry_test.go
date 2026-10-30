@@ -219,6 +219,37 @@ func TestRunErrors(t *testing.T) {
 	}
 }
 
+func TestToolTimeoutIsTheToolsOwn(t *testing.T) {
+	left := func(ctx context.Context, c Call) (string, error) {
+		d, _ := ctx.Deadline()
+		return time.Until(d).Round(time.Minute).String(), nil
+	}
+	r, err := NewRegistry([]Tool{{Name: "Long", Timeout: 11 * time.Minute, Run: left}, {Name: "Short", Run: left}}, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"Long": "11m0s", "Short": "2m0s"} {
+		if res := r.Run(context.Background(), name, Call{}); res.Output != want {
+			t.Errorf("%s may run %s, want %s", name, res.Output, want)
+		}
+	}
+}
+
+func TestTimeoutKeepsTheOutput(t *testing.T) {
+	slow := func(ctx context.Context, c Call) (string, error) {
+		<-ctx.Done()
+		return "", fmt.Errorf("half the build log")
+	}
+	r, err := NewRegistry([]Tool{{Name: "Slow", Timeout: time.Millisecond, Run: slow}}, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Run(context.Background(), "Slow", Call{})
+	if !res.IsError || res.Output != "half the build log\n[Slow timed out after 1ms]" {
+		t.Errorf("got %+v", res)
+	}
+}
+
 func TestLongOutputIsSaved(t *testing.T) {
 	long := strings.Repeat("x", maxOutput) + "THE END"
 	r, err := NewRegistry([]Tool{{Name: "Big", Run: func(ctx context.Context, c Call) (string, error) { return long, nil }}},

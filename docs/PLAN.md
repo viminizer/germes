@@ -596,7 +596,7 @@ func (r *Registry) Run(ctx, name string, c Call) Result
 ```
 
 - No `Register` method. `main.go` passes the full list to `NewRegistry`; every tool is visible in one place.
-- `Run` is the one place for: unknown name (error result listing valid names), blocked (error result, tool never runs), timeout (default 2 minutes), tool errors (error result, not a crash), big output (cut to about 50k characters with a note).
+- `Run` is the one place for: unknown name (error result listing valid names), blocked (error result, tool never runs), timeout (2 minutes unless the tool sets `Timeout`; Bash sets its 10-minute maximum plus a minute, so its own timeout ends a command and says so, #26), tool errors (error result, not a crash), big output (cut to about 50k characters with a note).
 - Tools run one after another. Parallel tool calls: later, if turns feel slow.
 
 ### Toolsets
@@ -1242,7 +1242,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 
 ### Tools
 - Blocked tool call: error result identifying the configured rule; the handler never runs. File-path normalization and newline wildcard matching follow the Permissions contract above.
-- Timeout: kill the whole process group, error result.
+- Timeout: kill the whole process group, error result that keeps the output so far and says the time limit.
 - Huge output: cut to about 50k characters with a note.
 - Non-zero exit code: an error result with the output and `[exit code N]`; the model sees all of it. A long one is saved to a file like any long output. The loop guard forgets failed calls once files change.
 - Memory file full: error asking the model to merge entries first.

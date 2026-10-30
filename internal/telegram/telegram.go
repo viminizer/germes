@@ -128,14 +128,24 @@ func (t *Telegram) Run(ctx context.Context) error {
 	}()
 	t.setCommands(ctx)
 	children.Add(2)
+	// The start check waits for the first subscription: a turn that ends
+	// after it arrives live, one that ended before it is idle when the
+	// start looks. All-session watches replay no history.
+	attached := make(chan struct{})
+	ready := sync.OnceFunc(func() { close(attached) })
 	go func() {
 		defer children.Done()
-		recovered("telegram watch", func() { t.watch(ctx) })
+		defer ready()
+		recovered("telegram watch", func() { t.watch(ctx, ready) })
 	}()
 	go func() {
 		defer children.Done()
 		recovered("telegram typing", func() { t.showTyping(ctx) })
 	}()
+	select {
+	case <-attached:
+	case <-ctx.Done():
+	}
 	t.tellLostAnswers(ctx)
 	for ctx.Err() == nil {
 		var updates []update

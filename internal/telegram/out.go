@@ -19,12 +19,14 @@ const scanDepth = 3
 
 // watch follows every session: answers and files from send_file go back to
 // the topic that asked, job notices to the project's topic (or General). A
-// dropped watch comes back after a short wait.
-func (t *Telegram) watch(ctx context.Context) {
+// dropped watch comes back after a short wait. ready is called after the
+// first subscription attempt.
+func (t *Telegram) watch(ctx context.Context, ready func()) {
 	// The first subscription needs no catch-up: the start settles every
-	// waiting session itself (tellLostAnswers).
+	// waiting session itself (tellLostAnswers), after it.
 	for attached := false; ctx.Err() == nil; attached = true {
 		events, err := t.svc.Watch(ctx, api.WatchFilter{})
+		ready()
 		if err != nil {
 			slog.Warn("telegram watch", "err", err)
 			wait(ctx, retryWait)

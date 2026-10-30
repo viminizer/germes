@@ -1300,9 +1300,9 @@ func TestRunWatchCatchesUpAfterDrop(t *testing.T) {
 				defer cancel()
 				done := make(chan error, 1)
 				go func() { done <- tg.Run(ctx) }()
-				<-tr.polls
 				first := make(chan api.Event, 2)
-				svc.streams <- first
+				svc.streams <- first // the start waits for this first subscription
+				<-tr.polls
 				if name == "partly-seen" {
 					first <- svc.history[0]
 					first <- svc.history[1]
@@ -1328,4 +1328,57 @@ func TestRunWatchCatchesUpAfterDrop(t *testing.T) {
 			})
 		})
 	}
+}
+
+// The start check must come after the first subscription: all-session
+// watches replay no history, so a turn the start sees working and that ends
+// before the subscription would never be answered.
+func TestRunStartWaitsForFirstSubscription(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := savedState(t, "s1", 7)
+		svc := &dropService{streams: make(chan chan api.Event)}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "the answer"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+		}
+		var looked atomic.Int32
+		var finished atomic.Bool
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			looked.Add(1)
+			if finished.Load() {
+				return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+			}
+			return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		synctest.Wait() // the first subscription is still on its way
+		if n := looked.Load(); n != 0 {
+			t.Errorf("the start checked %d sessions before the watcher subscribed", n)
+		}
+		stream := make(chan api.Event, 2)
+		svc.streams <- stream
+		<-tr.polls
+		finished.Store(true)
+		stream <- svc.history[1]
+		stream <- svc.history[2]
+		synctest.Wait()
+		if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" || tr.sent[0]["message_thread_id"] != float64(7) {
+			t.Errorf("sent = %v, want the answer once in topic 7", tr.sent)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Error("the finished turn is still waiting")
+		}
+		cancel()
+		close(stream)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
 }

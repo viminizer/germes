@@ -171,6 +171,29 @@
 - PLAN catch-up sentence updated (not on the first subscription; a session with no cursor is settled like at start).
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix6-path` -> `/tmp/germes-r6-fix6.*`. Known small limit: on a re-subscription the recheck for an idle session with no stored `turn_done` holds the watcher for up to one second (only after a save failure). Both review gates must run again on the new commit.
 
+### Round 6 seventh check
+
+- HEAD `58db30b39917c6f92831c5dc21b360856f062f69`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check7.log`), focused tests (`/tmp/germes-r6-focused7.log`), race tests (`/tmp/germes-r6-race7.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 seventh independent Codex review (HEAD `58db30b`)
+
+- Evidence `/tmp/germes-r6-review7.O1RPNw/` (transcript.log, verdict.txt, exit 0, session `01a18e65-e3c1-7a43-b612-1e2d2e5da67d`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files, RULEBOOK and PROGRESS through EOF in reads of at most 160 lines; PLAN scope sections; peers. R1-R48 unique. VERDICT: Actionable findings: 1.
+- Open finding for the fix step:
+  1. P2 `internal/telegram/out.go:34` + `telegram.go:133-141`: `Run` starts the watcher goroutine, then runs startup settle without waiting for the first subscription. Startup can keep a working session; if its turn ends before the first `Watch` subscribes, nothing replays it (no catch-up on the first subscription) and the topic types until a reconnect or restart. Suggested: subscribe first, then run startup reconciliation, while the watcher consumes events; barrier regression for completion between startup lookup and subscription; fix the PLAN/PROGRESS first-subscription wording.
+
+### Round 6 seventh consistency audit (read-only, HEAD `58db30b`)
+
+- Finding CONFIRMED: `Run` (`telegram.go:130-139`) starts the watcher goroutine, then calls `tellLostAnswers` without waiting for its first `Watch`. All-session `Watch` replays no history (`internal/session/watch.go:69-80`), and `watch` skips `catchUp` on the first subscription (`out.go:34`, from the round 6 sixth fix). A session that startup reads as working and whose turn ends before the first subscription gets no events: the topic types until a reconnect or restart. Same order on main (`90e12a7` telegram.go:112-114), so the window is pre-existing; the sixth fix's "the start covers the first subscription" assumption is only true if the subscription comes first.
+- Suggested smallest fix: `watch` signals after its first `Watch` attempt (a channel closed once, success or failure); `Run` waits for it (or ctx) before `tellLostAnswers`. Then a turn ending after the subscription arrives live (gap replay covers missing text), and one ending before it is idle when startup looks. A failed first attempt still counts as attached, so the next subscription runs `catchUp`. Regression: hold the first `Watch` and check startup waits; or end the turn between the startup lookup and the subscription. Update PLAN (first subscription is made before the start check) and the PROGRESS sixth-fix wording.
+- Nothing else found: R1-R48 unique, other PLAN Telegram contracts match the code. Result: FINDINGS.
+
+### Round 6 seventh fix (start waits for first subscription)
+
+- `internal/telegram/telegram.go` `Run`: a `sync.OnceFunc` closes `attached` after the watcher's first `Watch` attempt (success or failure) or when the watch goroutine ends; `Run` waits for it (or ctx) before `tellLostAnswers`. `out.go` `watch` takes the `ready` callback. This makes the sixth fix's assumption true: the start check, not catch-up, covers the first subscription, because it now runs after it. A failed first attempt still counts as attached, so the next subscription runs `catchUp`.
+- `TestRunWatchCatchesUpAfterDrop` now hands over its first stream before waiting for the first poll (the start now waits for that subscription). New `TestRunStartWaitsForFirstSubscription`: no startup lookup before the first subscription, then the turn ends live and its answer is delivered and cleaned up. BEFORE (HEAD code via `-overlay`): failed, exit 1 ("the start checked 1 sessions before the watcher subscribed"). AFTER: pass.
+- PLAN: start check runs after the first subscription attempt; regression name added.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix7-path` -> `/tmp/germes-r6-fix7.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

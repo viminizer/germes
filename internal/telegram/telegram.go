@@ -71,8 +71,9 @@ type Telegram struct {
 	replyGeneration map[string]uint64
 	replySending    map[string]int
 	replyDone       map[string]int64 // turn_done seq seen while a send was in flight
-	// handled is the last stored event handled per session, kept after its
-	// topic is forgotten: a new request starts its answered boundary there.
+	// handled is the last stored event seen per session this bot has
+	// answered before, also while nobody waits for it: a new request
+	// starts its answered boundary there.
 	handled map[string]int64
 
 	outputMu sync.Mutex // serializes stored creation replay with the live watcher

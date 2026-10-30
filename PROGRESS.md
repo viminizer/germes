@@ -266,6 +266,30 @@
 - New regression `TestRunRegistrationSeedsAnsweredBoundary` (one answered turn, drop, new request A, A and queued B finish, reconnect). BEFORE (HEAD code via `-overlay`): failed, exit 1 (answer A lost). AFTER: pass. No existing test changed.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix10-path` -> `/tmp/germes-r6-fix10.*`. Both review gates must run again on the new commit.
 
+### Round 6 eleventh check
+
+- HEAD `56843bb2e7174226e73a10a77906ca94909c15c8`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check11.log`), focused tests (`/tmp/germes-r6-focused11.log`), race tests (`/tmp/germes-r6-race11.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 eleventh independent Codex review (HEAD `56843bb`)
+
+- Evidence `/tmp/germes-r6-review11.gnQ0rt/` (transcript.log, verdict.txt, exit 0, session `01a18eba-0e37-7de2-9b4f-639d1259a781`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files, RULEBOOK and PROGRESS through EOF in reads of at most 160 lines; PLAN scope sections; peers, wiring, file.Save callers, check logs. R1-R48 unique. VERDICT: Actionable findings: 2.
+- Open findings for the fix step:
+  1. P2 regression from the tenth fix: `telegram.go:465` seeds `answered` from `handled`, but `out.go:143` advances `handled` only while a destination is registered. Telegram answers through 3, cleanup; a TUI turn on the same session (4-6) is ignored without moving `handled`; the next Telegram request seeds 3, its `user_message` 7 is a gap and replays 4-6: the TUI answer (and any `send_file` upload) is posted to the group. Happens reliably when a session (including the overseer) is used from both Telegram and the TUI. Suggested: advance `handled` for known sessions even while unregistered, without sending; Telegram -> TUI -> Telegram regression with text and files.
+  2. P2 `internal/daemon/old.go:149`: the old-owner relay re-watches all sessions live-only and does not reconcile stored events on reconnect or owner exit. During hand-over the old owner can publish `turn_done` and exit, and private-server shutdown (`daemon.go:289`, `session/watch.go:98`) can cancel the relay watch before it forwards that event. The replacement's Telegram watch stays connected, so no catch-up runs; the topic types until a gateway restart. Uncommon hand-over race. Suggested: per-session relay cursors and stored-event reconciliation on reconnect and owner exit.
+
+### Round 6 eleventh consistency audit (read-only, HEAD `56843bb`)
+
+- Finding 1 CONFIRMED, frequent, a regression of the tenth fix: `sendReplyEvent` (`out.go:126-150`) only advances `handled` inside `if asked && ev.Seq != 0`, so events of a session nobody waits for in Telegram (a TUI turn, the shared overseer) leave it behind; `sendMessage` (`telegram.go:458-470`) then seeds a stale boundary and the next user message triggers a gap replay of the TUI turn into the group, files included. Must be fixed: advance `handled` for every stored non-notice event of a session already in `handled`, also when not asked, without sending anything. Regression: Telegram turn, then a TUI turn (text plus `send_file` result) on the same session, then a Telegram turn: only the two Telegram answers go out.
+- Finding 2 VERIFIED as behavior, NOT fixed in this round, with evidence: the relay loop in `internal/daemon/old.go:147-153` (live-only `c.Watch(ctx, api.WatchFilter{})` then `sessions.SendEvent`) is unchanged from main (`90e12a7` old.go:113-117; this job only re-indented it). Fixing it needs a relay redesign (per-session cursors plus a way to find sessions whose whole turn fell into the gap, which the relay never saw) in the daemon hand-over path, not Telegram reply bookkeeping; it is an uncommon shutdown race, and the topic recovers at the next gateway start (`settle` sends the stored turn). Required instead: record it in PLAN Telegram failures as a known limit (an old owner's final events can be lost from the hand-over relay; the waiting topic is settled at the next bot start) and tell the user it needs a separate task.
+- Scope note: 11 review cycles this round; each fix found new Telegram delivery edge cases, one of them self-inflicted. After finding 1 is fixed and finding 2 documented, the open items are documented limits only. R1-R48 unique. Result: FINDINGS.
+
+### Round 6 eleventh fix (handled while nobody waits; relay limit documented)
+
+- `internal/telegram/out.go` `sendReplyEvent`: `handled` now advances, under the existing `t.mu` read, for every stored non-notice event of a session that is waiting or already in `handled`, also when nobody waits in Telegram (a TUI turn, the overseer); the old update inside the reply-cursor block is removed. `telegram.go` comment updated.
+- Finding 2 (old-owner relay) documented, not fixed, as the audit decided: PLAN Telegram failures now records that an old daemon's final events can be lost from the live-only relay and the topic is settled at the next bot start; a replaying relay needs its own design. Needs the user's decision as a separate task.
+- New regression `TestRunTUITurnBetweenTelegramRequests` (Telegram turn, TUI turn with text and `send_file`, Telegram turn). BEFORE (HEAD code via `-overlay`): failed, exit 1 (the TUI file error and "TUI answer" were posted to the group). AFTER: pass. No existing test changed.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix11-path` -> `/tmp/germes-r6-fix11.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

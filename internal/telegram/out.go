@@ -122,6 +122,11 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 	t.mu.Lock()
 	thread, asked := t.state.ReplyTo[ev.SessionID]
 	generation := t.replyGeneration[ev.SessionID]
+	if _, known := t.handled[ev.SessionID]; ev.Seq != 0 && ev.Kind != api.KindNotice && (asked || known) {
+		// Also while nobody waits here (a TUI turn), so the next request's
+		// boundary does not replay those turns into Telegram.
+		t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
+	}
 	t.mu.Unlock()
 	if !asked {
 		delete(t.output.seq, ev.SessionID)
@@ -145,11 +150,6 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 			return
 		}
 		seq[ev.SessionID] = ev.Seq
-		if ev.Kind != api.KindNotice {
-			t.mu.Lock()
-			t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
-			t.mu.Unlock()
-		}
 	}
 	switch {
 	case ev.Kind == api.KindNotice:

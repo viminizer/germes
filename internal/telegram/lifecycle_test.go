@@ -1627,3 +1627,67 @@ func TestRunRegistrationSeedsAnsweredBoundary(t *testing.T) {
 		}
 	})
 }
+
+// A session used from Telegram, then from the TUI, then from Telegram again:
+// the TUI turn (its text and its send_file) must not be replayed into the
+// group when the second Telegram request starts its boundary.
+func TestRunTUITurnBetweenTelegramRequests(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project","session_id":"s1"}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 5)}}}}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			return api.MessageResult{SessionID: "s1"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		turn := func(events ...api.Event) {
+			svc.history = append(svc.history, events...)
+			for _, ev := range events {
+				svc.events <- ev
+			}
+			synctest.Wait()
+		}
+		tr.updates <- []update{msg(1, 8, kevin, "first")}
+		<-tr.polls
+		turn(api.Event{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "first"},
+			api.Event{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "answer 1"},
+			api.Event{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone})
+		// A TUI turn: nobody waits in Telegram.
+		turn(api.Event{SessionID: "s1", Seq: 4, Kind: api.KindUserMessage, Text: "from the TUI"},
+			api.Event{SessionID: "s1", Seq: 5, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "c1", Name: api.ToolSendFile}},
+			api.Event{SessionID: "s1", Seq: 6, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "c1", Output: "/no/such/report.txt"}},
+			api.Event{SessionID: "s1", Seq: 7, Kind: api.KindText, Text: "TUI answer"},
+			api.Event{SessionID: "s1", Seq: 8, Kind: api.KindTurnDone})
+		tr.updates <- []update{msg(2, 8, kevin, "second")}
+		<-tr.polls
+		turn(api.Event{SessionID: "s1", Seq: 9, Kind: api.KindUserMessage, Text: "second"},
+			api.Event{SessionID: "s1", Seq: 10, Kind: api.KindText, Text: "answer 2"},
+			api.Event{SessionID: "s1", Seq: 11, Kind: api.KindTurnDone})
+		want := []string{"answer 1", "answer 2"}
+		if len(tr.sent) != len(want) {
+			t.Errorf("sent = %v, want only %q", tr.sent, want)
+		} else {
+			for i, text := range want {
+				if p := tr.sent[i]; p["text"] != text {
+					t.Errorf("reply %d = %v, want %q", i, p, text)
+				}
+			}
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

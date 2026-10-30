@@ -1223,7 +1223,7 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Usage limit: `LimitHit`, switch engines with a handoff. No reset time given: blocked 30 minutes.
 - All engines blocked: the session pauses, continues at the earliest reset.
 - Codex token about to expire: take the Codex CLI's fresh token. Both expiring: refresh, and write the new token back to `~/.codex/auth.json`. Refresh fails for good: the engine cannot start, the router moves the turn on, and I am told to run `codex login`.
-- Codex stream error (`error` or `response.failed` event): an `error` event with the code and message, read from the top level or from a nested `error` (like Hermes, `hermes/agent/codex_runtime.py`). Neither given: "the stream sent an error with no message", never an empty error. The raw event goes to the log, so the cause can be found.
+- Codex stream error (`error` or `response.failed` event): an `error` event with the code and message, read from the top level or from a nested `error` (like Hermes, `hermes/agent/codex_runtime.py`). Neither given: "the stream sent an error with no message", never an empty error. The raw event goes to the log, so the cause can be found. A `usage_limit_reached` error, in either event, is a usage limit, not an error: the session waits for the reset (`resets_at`, `reset_at` or `resets_in_seconds`, read like the HTTP 429 body) or moves to another engine, instead of failing the round.
 - Codex usage call fails: logged only; usage is a hint, the turn goes on.
 - Compaction fails: logged; the turn runs with the full history (the model may refuse a too-long input, which shows as an error).
 - Background review fails, or is cancelled because the daemon exits: logged; nothing is saved, the user sees nothing.

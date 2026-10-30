@@ -182,7 +182,8 @@ func (c *Client) post(ctx context.Context, body []byte, cacheKey string) (*http.
 	return nil, tokens{}, lastErr
 }
 
-// parseLimit returns a limitError when a 429 body says the usage limit is hit.
+// parseLimit returns a limitError when a 429 body, or a stream error event,
+// says the usage limit is hit.
 func parseLimit(body []byte, h http.Header) *limitError {
 	var b struct {
 		Error struct {
@@ -276,15 +277,13 @@ func shortID(prefix, id string) string {
 }
 
 type event struct {
-	Type     string          `json:"type"`
-	Delta    string          `json:"delta"`
-	Item     json.RawMessage `json:"item"`
-	Response struct {
-		Error *struct{ Code, Message string } `json:"error"`
-	} `json:"response"`
-	Code    string                          `json:"code"`
-	Message string                          `json:"message"`
-	Error   *struct{ Code, Message string } `json:"error"` // some backends nest the error here
+	Type     string                          `json:"type"`
+	Delta    string                          `json:"delta"`
+	Item     json.RawMessage                 `json:"item"`
+	Response json.RawMessage                 `json:"response"` // response.failed: its "error" is read like a 429 body
+	Code     string                          `json:"code"`
+	Message  string                          `json:"message"`
+	Error    *struct{ Code, Message string } `json:"error"` // some backends nest the error here
 }
 
 // errorText describes an error from its code and message, never as "".
@@ -339,13 +338,17 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 			return true
 		case "response.failed":
 			slog.Warn("codex response failed", "event", text.Shorten(data, 2000))
+			if limit := parseLimit(ev.Response, nil); limit != nil {
+				stream.Send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: limit})
+				return false
+			}
+			var failed struct {
+				Error *struct{ Code, Message string } `json:"error"`
+			}
+			json.Unmarshal(ev.Response, &failed)
 			msg := "the response failed"
-			if e := ev.Response.Error; e != nil {
+			if e := failed.Error; e != nil {
 				msg = errorText(e.Code, e.Message)
-				if e.Code == "usage_limit_reached" {
-					stream.Send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, Err: errors.New(msg)})
-					return false
-				}
 			}
 			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + msg)})
 			return false
@@ -353,6 +356,12 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 			// The fields are at the top level, or nested under "error" (Hermes
 			// reads both too: hermes/agent/codex_runtime.py _raise_stream_error).
 			slog.Warn("codex error event", "event", text.Shorten(data, 2000))
+			// A usage limit can come this way too: the session then waits
+			// for the reset instead of failing.
+			if limit := parseLimit([]byte(data), nil); limit != nil {
+				stream.Send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: limit})
+				return false
+			}
 			code, message := ev.Code, ev.Message
 			if ev.Error != nil {
 				code, message = cmp.Or(code, ev.Error.Code), cmp.Or(message, ev.Error.Message)

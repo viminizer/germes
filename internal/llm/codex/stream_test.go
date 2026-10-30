@@ -22,3 +22,16 @@ func TestStreamErrorEventSaysWhatFailed(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamErrorEventCanBeALimit(t *testing.T) {
+	for _, event := range []string{
+		`{"type":"error","error":{"type":"usage_limit_reached","message":"limit reached","resets_at":1900000000}}`,
+		`{"type":"response.failed","response":{"error":{"code":"usage_limit_reached","message":"limit reached","resets_at":1900000000}}}`,
+	} {
+		out := make(chan llm.Chunk, 1)
+		(&Client{}).stream(context.Background(), strings.NewReader("data: "+event+"\n\n"), out)
+		if ch := <-out; ch.Kind != llm.KindLimitHit || ch.ResetAt.Unix() != 1900000000 {
+			t.Errorf("%s: got %v, reset %v; want a limit until the reset", event, ch.Kind, ch.ResetAt)
+		}
+	}
+}

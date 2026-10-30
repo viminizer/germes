@@ -92,7 +92,8 @@ func (c *Client) Send(ctx context.Context, r llm.Request) (<-chan llm.Chunk, err
 	out := make(chan llm.Chunk, 64)
 	if err != nil {
 		var limit *limitError
-		if errors.As(err, &limit) {
+		var outage *outageError
+		if errors.As(err, &limit) || errors.As(err, &outage) {
 			out <- errorChunk(err)
 			close(out)
 			return out, nil
@@ -129,7 +130,9 @@ const streamRetries = 2
 // run streams body to out. A stream that fails with a temporary error
 // (server error, overload, a cut connection) before any output went out is
 // sent again with resend: nothing was shown or saved yet, so nothing
-// repeats. It reports whether the response completed.
+// repeats. Out of tries, or after output (a resend would repeat it), the
+// provider is down for now: an outage, which the router moves to another
+// engine or waits out (issue #40). It reports whether the response completed.
 func (c *Client) run(ctx context.Context, body io.ReadCloser, resend func() (io.ReadCloser, error), out chan<- llm.Chunk) bool {
 	for attempt := 1; ; attempt++ {
 		end, sent := c.stream(ctx, body, out)
@@ -140,8 +143,12 @@ func (c *Client) run(ctx context.Context, body io.ReadCloser, resend func() (io.
 		if ctx.Err() != nil {
 			return false
 		}
-		if !end.retry || sent || attempt > streamRetries {
+		if !end.retry {
 			stream.Send(ctx, out, end.chunk)
+			return false
+		}
+		if sent || attempt > streamRetries {
+			stream.Send(ctx, out, outageChunk(end.chunk.Err, end.wait))
 			return false
 		}
 		slog.Warn("codex stream failed; sending the request again", "attempt", attempt, "err", end.chunk.Err)
@@ -164,14 +171,36 @@ func (c *Client) run(ctx context.Context, body io.ReadCloser, resend func() (io.
 	}
 }
 
-// errorChunk is the chunk for a failed request: a limit hit or an error.
+// errorChunk is the chunk for a failed request: a limit hit, an outage or
+// an error.
 func errorChunk(err error) llm.Chunk {
 	var limit *limitError
 	if errors.As(err, &limit) {
 		return llm.Chunk{Kind: llm.KindLimitHit, ResetAt: limit.resetAt, Err: err}
 	}
+	var outage *outageError
+	if errors.As(err, &outage) {
+		return outageChunk(err, 0)
+	}
 	return llm.Chunk{Kind: llm.KindError, Err: err}
 }
+
+// outageChunk says the provider is down for now. wait is the backend's
+// retry_after, 0 when it gave none; the router picks the cooldown.
+func outageChunk(err error, wait time.Duration) llm.Chunk {
+	ch := llm.Chunk{Kind: llm.KindLimitHit, Outage: true, Err: err}
+	if wait > 0 {
+		ch.ResetAt = time.Now().Add(wait)
+	}
+	return ch
+}
+
+// outageError is a request that kept failing for a temporary reason (a
+// network error, a 5xx, a short rate limit): the provider is down for now.
+type outageError struct{ err error }
+
+func (e *outageError) Error() string { return e.err.Error() }
+func (e *outageError) Unwrap() error { return e.err }
 
 // limitError is a usage limit (HTTP 429 usage_limit_reached).
 type limitError struct {
@@ -181,12 +210,13 @@ type limitError struct {
 
 func (e *limitError) Error() string { return "codex usage limit: " + e.msg }
 
-// post sends the request. It refreshes the login once on 401 and retries
-// network errors, 5xx and short rate limits up to 3 times.
+// post sends the request. It refreshes the login once on 401 and tries
+// network errors, 5xx and short rate limits 3 times in all; still failing,
+// they are an *outageError.
 func (c *Client) post(ctx context.Context, body []byte, cacheKey string) (*http.Response, tokens, error) {
 	force := false
 	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ { // 3 tries in all, as issue #40 asks
 		if attempt > 0 {
 			select {
 			case <-time.After(time.Duration(1<<(attempt-1)) * time.Second):
@@ -218,7 +248,7 @@ func (c *Client) post(ctx context.Context, body []byte, cacheKey string) (*http.
 			if ctx.Err() != nil {
 				return nil, tokens{}, ctx.Err()
 			}
-			lastErr = fmt.Errorf("codex request: %w", err)
+			lastErr = &outageError{fmt.Errorf("codex request: %w", err)}
 			continue
 		}
 		if resp.StatusCode == http.StatusOK {
@@ -234,9 +264,9 @@ func (c *Client) post(ctx context.Context, body []byte, cacheKey string) (*http.
 			if limit := parseLimit(msg, resp.Header); limit != nil {
 				return nil, tokens{}, limit
 			}
-			lastErr = fmt.Errorf("codex rate limit: %s", short(msg))
+			lastErr = &outageError{fmt.Errorf("codex rate limit: %s", short(msg))}
 		case resp.StatusCode >= 500:
-			lastErr = fmt.Errorf("codex server error %s: %s", resp.Status, short(msg))
+			lastErr = &outageError{fmt.Errorf("codex server error %s: %s", resp.Status, short(msg))}
 		default:
 			return nil, tokens{}, fmt.Errorf("codex %s: %s", resp.Status, short(msg))
 		}

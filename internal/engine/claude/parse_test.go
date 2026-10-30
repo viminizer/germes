@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/viminizer/germes/internal/engine"
@@ -37,5 +38,25 @@ func TestParseTurn(t *testing.T) {
 	}
 	if last.ResumeID != "s1" {
 		t.Fatalf("resume id = %q, want s1", last.ResumeID)
+	}
+}
+
+// A failed result that says the provider is down is an outage the router can
+// move on from; any other failed result is an error.
+func TestFailedResultKinds(t *testing.T) {
+	for result, outage := range map[string]bool{
+		`API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`:     true,
+		`API Error: Repeated 529 Overloaded errors`:                                                      true,
+		`API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}`: true,
+		`API Error: Request timed out.`:                                                                  true,
+		`API Error: 400 {"type":"error","error":{"message":"bad input"}}`:                                false,
+		`Invalid API key · Please run /login`:                                                            false,
+	} {
+		var p parser
+		line, _ := json.Marshal(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": result})
+		evs := p.parse(line)
+		if len(evs) != 1 || (evs[0].Kind == engine.KindLimitHit && evs[0].Outage) != outage || (!outage && evs[0].Kind != engine.KindError) {
+			t.Errorf("%s: got %+v, want outage %v", result, evs, outage)
+		}
 	}
 }

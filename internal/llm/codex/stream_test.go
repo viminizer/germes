@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -101,13 +102,17 @@ func TestCutStreamIsSentAgain(t *testing.T) {
 }
 
 func TestStreamIsNotSentAgain(t *testing.T) {
-	for name, first := range map[string]string{
-		"after output":    `data: {"type":"response.output_text.delta","delta":"half"}` + "\n\n" + serverError, // it would repeat
-		"a lasting error": `data: {"type":"error","code":"context_length_exceeded","message":"too long"}` + "\n\n",
+	for name, tc := range map[string]struct {
+		first  string
+		outage bool // the router moves the turn on; else the turn fails
+	}{
+		"after output":    {`data: {"type":"response.output_text.delta","delta":"half"}` + "\n\n" + serverError, true}, // a resend would repeat it
+		"a lasting error": {`data: {"type":"error","code":"context_length_exceeded","message":"too long"}` + "\n\n", false},
 	} {
-		ok, chunks, resends := runStreams(first, answer)
-		if ok || resends != 0 || chunks[len(chunks)-1].Kind != llm.KindError {
-			t.Errorf("%s: completed %v, resends %d, chunks %+v; want the error, not a resend", name, ok, resends, chunks)
+		ok, chunks, resends := runStreams(tc.first, answer)
+		last := chunks[len(chunks)-1]
+		if ok || resends != 0 || (last.Kind == llm.KindLimitHit && last.Outage) != tc.outage || (!tc.outage && last.Kind != llm.KindError) {
+			t.Errorf("%s: completed %v, resends %d, chunks %+v; want no resend, outage %v", name, ok, resends, chunks, tc.outage)
 		}
 	}
 }
@@ -115,8 +120,9 @@ func TestStreamIsNotSentAgain(t *testing.T) {
 func TestStreamGivesUpAfterTheRetries(t *testing.T) {
 	ok, chunks, resends := runStreams(serverError, serverError)
 	last := chunks[len(chunks)-1]
-	if ok || resends != streamRetries || len(chunks) != streamRetries+1 || last.Kind != llm.KindError || !strings.Contains(last.Err.Error(), "server_error") {
-		t.Fatalf("completed %v, resends %d, chunks %+v; want the error after %d resends", ok, resends, chunks, streamRetries)
+	// Out of tries: an outage, so the router can move the turn on (issue #40).
+	if ok || resends != streamRetries || len(chunks) != streamRetries+1 || last.Kind != llm.KindLimitHit || !last.Outage || !strings.Contains(last.Err.Error(), "server_error") {
+		t.Fatalf("completed %v, resends %d, chunks %+v; want an outage after %d resends", ok, resends, chunks, streamRetries)
 	}
 }
 
@@ -146,6 +152,24 @@ func TestRetryAfterIsRead(t *testing.T) {
 		e, _ := (&Client{}).stream(context.Background(), strings.NewReader("data: "+event+"\n\n"), make(chan llm.Chunk, 1))
 		if e.wait != want || !e.retry {
 			t.Errorf("%s: wait %v, retry %v; want %v and a retry", event, e.wait, e.retry, want)
+		}
+	}
+}
+
+// A request that kept failing for a temporary reason is an outage; a usage
+// limit stays a limit; anything else (a bad request, the login) an error.
+func TestFailedRequestKinds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		kind   llm.Kind
+		outage bool
+	}{
+		"server error": {&outageError{errors.New("codex server error 503")}, llm.KindLimitHit, true},
+		"usage limit":  {&limitError{msg: "limit reached"}, llm.KindLimitHit, false},
+		"bad request":  {errors.New("codex 400 Bad Request: bad"), llm.KindError, false},
+	} {
+		if ch := errorChunk(tc.err); ch.Kind != tc.kind || ch.Outage != tc.outage {
+			t.Errorf("%s: got %s outage %v", name, ch.Kind, ch.Outage)
 		}
 	}
 }

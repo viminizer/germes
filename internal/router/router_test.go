@@ -18,6 +18,7 @@ var now = time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 type fakeEngine struct {
 	name    string
 	limited bool
+	down    bool // its provider is down: an outage
 	usage   *engine.Usage
 	turns   []engine.Turn
 }
@@ -30,9 +31,12 @@ func (f *fakeEngine) Run(ctx context.Context, t engine.Turn) (<-chan engine.Even
 	if f.usage != nil {
 		out <- engine.Event{Kind: engine.KindUsage, Usage: f.usage}
 	}
-	if f.limited {
+	switch {
+	case f.limited:
 		out <- engine.Event{Kind: engine.KindLimitHit, ResetAt: now.Add(2 * time.Hour)}
-	} else {
+	case f.down:
+		out <- engine.Event{Kind: engine.KindLimitHit, Outage: true, Err: errors.New("codex: server_is_overloaded")}
+	default:
 		out <- engine.Event{Kind: engine.KindText, Text: "hi from " + f.name}
 		out <- engine.Event{Kind: engine.KindDone, Engine: f.name}
 	}
@@ -156,4 +160,58 @@ func runTurn(t *testing.T, r *Router, turn engine.Turn) <-chan engine.Event {
 		t.Fatal(err)
 	}
 	return ch
+}
+
+// A provider that is down moves the turn to the next engine with a handoff,
+// and blocks its engine only briefly: 1 minute, doubling while it stays down,
+// back to 1 once it answers.
+func TestOutageMovesTurnOnAndCoolsDown(t *testing.T) {
+	st := &fakeStore{limits: map[string]time.Time{}}
+	codex := &fakeEngine{name: "codex-api", down: true}
+	claude := &fakeEngine{name: "claude-cli"}
+	clock := now
+	r, err := New([]engine.Engine{codex, claude}, nil, st, func() time.Time { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := drain(t, runTurn(t, r, engine.Turn{SessionID: "s", Dir: t.TempDir(), Prompt: "go"}))
+	if len(evs) != 4 || evs[1].Kind != engine.KindSwitched || evs[1].Engine != "claude-cli" ||
+		!strings.Contains(evs[1].Text, "codex-api is unavailable (codex: server_is_overloaded)") {
+		t.Fatalf("events %+v", evs)
+	}
+	if !strings.Contains(claude.turns[0].Extra, "Handoff from codex-api") {
+		t.Fatal("no handoff for claude")
+	}
+	if got := st.limits["codex-api"]; !got.Equal(now.Add(time.Minute)) {
+		t.Fatalf("first cooldown until %v, want 1 minute", got)
+	}
+	// Still down after the cooldown: 2 minutes.
+	clock = now.Add(2 * time.Minute)
+	drain(t, runTurn(t, r, engine.Turn{SessionID: "s", Dir: t.TempDir(), LastEngine: "claude-cli"}))
+	if got := st.limits["codex-api"]; !got.Equal(clock.Add(2 * time.Minute)) {
+		t.Fatalf("second cooldown until %v, want 2 minutes", got)
+	}
+	// It answers again: the next outage starts at 1 minute.
+	clock, codex.down = now.Add(10*time.Minute), false
+	drain(t, runTurn(t, r, engine.Turn{SessionID: "s", Dir: t.TempDir(), LastEngine: "claude-cli"}))
+	codex.down = true
+	clock = now.Add(20 * time.Minute)
+	drain(t, runTurn(t, r, engine.Turn{SessionID: "s", Dir: t.TempDir(), LastEngine: "claude-cli"}))
+	if got := st.limits["codex-api"]; !got.Equal(clock.Add(time.Minute)) {
+		t.Fatalf("cooldown after it answered until %v, want 1 minute", got)
+	}
+}
+
+// Every provider down: the router says when to try again, so the session
+// pauses (and a job waits) instead of failing.
+func TestAllDownIsUnavailableUntilTheFirstCooldown(t *testing.T) {
+	st := &fakeStore{limits: map[string]time.Time{}}
+	codex := &fakeEngine{name: "codex-api", down: true}
+	claude := &fakeEngine{name: "claude-cli", down: true}
+	r := newRouter(t, st, nil, codex, claude)
+	evs := drain(t, runTurn(t, r, engine.Turn{SessionID: "s", Dir: t.TempDir(), Prompt: "go"}))
+	var unavail *engine.UnavailableError
+	if last := evs[len(evs)-1]; last.Kind != engine.KindError || !errors.As(last.Err, &unavail) || !unavail.ResetAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("last event %+v; want unavailable until %v", last, now.Add(time.Minute))
+	}
 }

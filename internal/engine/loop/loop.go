@@ -219,7 +219,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 				u := ch.Usage
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindUsage, Usage: &engine.Usage{Engine: l.opts.Name, Window: u.Window, UsedPercent: u.UsedPercent, ResetAt: u.ResetAt}})
 			case llm.KindLimitHit:
-				stream.Send(ctx, out, engine.Event{Kind: engine.KindLimitHit, ResetAt: ch.ResetAt, Err: ch.Err})
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindLimitHit, ResetAt: ch.ResetAt, Err: ch.Err, Outage: ch.Outage})
 				return
 			case llm.KindError:
 				l.fail(ctx, out, ch.Err)

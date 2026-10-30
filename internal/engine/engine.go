@@ -56,6 +56,7 @@ type Event struct {
 	Tool     *ToolCall
 	Usage    *Usage
 	ResetAt  time.Time // limit_hit
+	Outage   bool      // limit_hit: the provider is down for now, not a usage limit; Err says why
 	ResumeID string    // done
 	Engine   string    // done, switched: the engine that ran (or now runs) the turn
 	KeepFrom int64     // compacted: events from this seq on are kept as they are
@@ -86,5 +87,5 @@ type UnavailableError struct {
 }
 
 func (e *UnavailableError) Error() string {
-	return fmt.Sprintf("every engine is limited; trying again at %s", e.ResetAt.Format("Jan 2 15:04"))
+	return fmt.Sprintf("every engine is limited or unavailable; trying again at %s", e.ResetAt.Format("Jan 2 15:04"))
 }

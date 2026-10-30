@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -93,7 +94,13 @@ func (p *parser) parse(raw []byte) []engine.Event {
 		return p.rateLimit(l.RateLimit)
 	case "result":
 		if l.IsError {
-			return []engine.Event{{Kind: engine.KindError, Err: errors.New(textOf(l.Result))}}
+			text := textOf(l.Result)
+			if outageText.MatchString(text) {
+				// The CLI retried already: the provider is down for now, so the
+				// router moves the turn to another engine or waits (issue #40).
+				return []engine.Event{{Kind: engine.KindLimitHit, Outage: true, Err: errors.New(text)}}
+			}
+			return []engine.Event{{Kind: engine.KindError, Err: errors.New(text)}}
 		}
 		for _, d := range l.Denials {
 			for _, k := range []string{"file_path", "path", "notebook_path"} {
@@ -151,6 +158,11 @@ func (p *parser) rateLimit(r *rateLimitInfo) []engine.Event {
 	}
 	return evs
 }
+
+// outageText is a failed result that says the provider is down for now: an
+// overload, a 5xx or a timeout, like Hermes's _OVERLOADED_PATTERNS and
+// _TIMEOUT_MESSAGE_PATTERNS (hermes/agent/error_classifier.py).
+var outageText = regexp.MustCompile(`(?i)overloaded|api error: (repeated )?5\d\d|timed out|connection (error|reset)`)
 
 // textOf reads content that is either a JSON string or a list of text blocks.
 func textOf(raw json.RawMessage) string {

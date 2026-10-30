@@ -50,11 +50,17 @@ func newTestScheduler(t *testing.T, replies ...string) (*Scheduler, *scriptRunne
 
 func newTestSchedulerWith(t *testing.T, opts Options, replies ...string) (*Scheduler, *scriptRunner) {
 	t.Helper()
+	r := &scriptRunner{replies: replies}
+	return newTestSchedulerOn(t, opts, r), r
+}
+
+// newTestSchedulerOn starts a scheduler whose sessions run on r.
+func newTestSchedulerOn(t *testing.T, opts Options, r session.Runner) *Scheduler {
+	t.Helper()
 	st, err := store.New(filepath.Join(t.TempDir(), "germes.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &scriptRunner{replies: replies}
 	sessions := session.NewManager(st, r, session.Options{})
 	s := NewScheduler(st, sessions, opts)
 	if err := s.Start(context.Background()); err != nil {
@@ -65,7 +71,7 @@ func newTestSchedulerWith(t *testing.T, opts Options, replies ...string) (*Sched
 		sessions.Stop(context.Background())
 		st.Close()
 	})
-	return s, r
+	return s
 }
 
 // waitStatus waits until the job is no longer running.
@@ -323,4 +329,40 @@ func waitIdleSession(t *testing.T, s *Scheduler, id string) {
 		}
 	}
 	t.Fatal("the round's turn never ended")
+}
+
+// downRunner is every provider down for its first call (what the router
+// says then), then a normal answer.
+type downRunner struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *downRunner) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
+	r.mu.Lock()
+	r.calls++
+	first := r.calls == 1
+	r.mu.Unlock()
+	if first {
+		return nil, &engine.UnavailableError{ResetAt: time.Now().Add(100 * time.Millisecond)}
+	}
+	out := make(chan engine.Event, 2)
+	out <- engine.Event{Kind: engine.KindText, Text: "all finished [DONE]"}
+	out <- engine.Event{Kind: engine.KindDone, Engine: "fake"}
+	close(out)
+	return out, nil
+}
+
+// An outage of every provider makes a round wait, not fail (issue #40).
+func TestRoundWaitsOutAnOutage(t *testing.T) {
+	r := &downRunner{}
+	s := newTestSchedulerOn(t, Options{}, r)
+	j, err := s.CreateJob(context.Background(), api.JobRequest{Name: "outage", Dir: t.TempDir(), Prompt: "build it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobDone || j.Runs != 1 || j.Failures != 0 || r.calls != 2 {
+		t.Fatalf("job %s after %d runs, %d failures, %d calls; want done after waiting once", j.Status, j.Runs, j.Failures, r.calls)
+	}
 }

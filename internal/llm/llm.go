@@ -93,6 +93,7 @@ type Chunk struct {
 	Raw      json.RawMessage
 	Usage    *Usage
 	ResetAt  time.Time // limit_hit; zero when unknown
+	Outage   bool      // limit_hit: the provider is down for now (retries ran out), not a usage limit
 	Err      error
 }
 

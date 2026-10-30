@@ -255,7 +255,7 @@ func (w *worker) runTurn(text string, plan bool) {
 // pause waits until every engine may be free again. It reports false when
 // the turn was stopped (Esc Esc) while waiting.
 func (w *worker) pause(ctx context.Context, until time.Time) bool {
-	w.emit(api.Event{Kind: api.KindLimitHit, Text: "every engine is limited; paused until " + until.Format("Jan 2 15:04") + " (Esc Esc to stop waiting)"})
+	w.emit(api.Event{Kind: api.KindLimitHit, Text: "every engine is limited or unavailable; paused until " + until.Format("Jan 2 15:04") + " (Esc Esc to stop waiting)"})
 	w.setStatus(api.StatusPaused)
 	defer w.setStatus(api.StatusWorking)
 	select {
@@ -280,6 +280,18 @@ func (w *worker) handle(ev engine.Event) {
 		w.emit(api.Event{Kind: api.KindToolResult, Tool: toolOf(ev.Tool)})
 	case engine.KindLimitHit:
 		text := "usage limit hit"
+		if ev.Outage {
+			text = "provider unavailable"
+			if ev.Err != nil {
+				text = strings.TrimRight(ev.Err.Error(), ". ")
+			}
+			text += "; tried again"
+			if !ev.ResetAt.IsZero() {
+				text += " after " + ev.ResetAt.Format("15:04")
+			}
+			w.emit(api.Event{Kind: api.KindLimitHit, Text: text})
+			return
+		}
 		if !ev.ResetAt.IsZero() {
 			text += ", resets " + ev.ResetAt.Format("Jan 2 15:04")
 		}

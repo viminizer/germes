@@ -16,11 +16,17 @@ import (
 	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/config"
 	"github.com/viminizer/germes/internal/engine"
+	"github.com/viminizer/germes/internal/text"
 )
 
 // unknownReset is how long an engine stays blocked when its limit message
 // has no reset time. A failed try costs little, so then it is tried again.
 const unknownReset = 30 * time.Minute
+
+// maxOutageWait caps the cooldown of an engine whose provider is down: 1,
+// 2, 4 ... minutes while it stays down (issue #40).
+// ponytail: no jitter; add it if many Germes share one provider.
+const maxOutageWait = 30 * time.Minute
 
 // Store keeps limits and usage across restarts, and gives the history the
 // handoff needs.
@@ -39,9 +45,10 @@ type Router struct {
 	store   Store
 	now     func() time.Time
 
-	mu     sync.Mutex
-	limits map[string]time.Time               // engine -> limited until
-	usage  map[string]map[string]engine.Usage // engine -> window -> usage
+	mu      sync.Mutex
+	limits  map[string]time.Time               // engine -> limited until
+	usage   map[string]map[string]engine.Usage // engine -> window -> usage
+	outages map[string]int                     // engine -> outages in a row (in memory: a restart starts over)
 }
 
 // New creates the router and loads the saved limits and usage.
@@ -49,7 +56,8 @@ func New(engines []engine.Engine, cfg []config.Engine, store Store, now func() t
 	if len(engines) == 0 {
 		return nil, errors.New("router: no engines")
 	}
-	r := &Router{engines: engines, cfg: map[string]config.Engine{}, store: store, now: now, usage: map[string]map[string]engine.Usage{}}
+	r := &Router{engines: engines, cfg: map[string]config.Engine{}, store: store, now: now,
+		usage: map[string]map[string]engine.Usage{}, outages: map[string]int{}}
 	for _, c := range cfg {
 		r.cfg[c.Name] = c
 	}
@@ -103,9 +111,9 @@ func (r *Router) run(ctx context.Context, t engine.Turn, eng engine.Engine, why 
 		if last != "" && last != eng.Name() {
 			turn.Extra = r.handoff(ctx, t, last)
 		}
-		limited, ok := r.runOne(ctx, eng, turn, out)
-		if ok || !limited {
-			return // done, stopped, or a non-limit error the session reports
+		blocked, ok := r.runOne(ctx, eng, turn, out)
+		if ok || blocked == "" {
+			return // done, stopped, or another error the session reports
 		}
 		last = eng.Name()
 		next, nextWhy, err := r.pick(tried)
@@ -113,7 +121,7 @@ func (r *Router) run(ctx context.Context, t engine.Turn, eng engine.Engine, why 
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: err})
 			return
 		}
-		eng, why = next, last+" hit its usage limit"
+		eng, why = next, blocked
 		if nextWhy != "" {
 			why += "; " + nextWhy
 		}
@@ -121,8 +129,9 @@ func (r *Router) run(ctx context.Context, t engine.Turn, eng engine.Engine, why 
 }
 
 // runOne runs the turn on one engine and forwards its events. It reports
-// whether the engine hit a limit, and whether the turn finished.
-func (r *Router) runOne(ctx context.Context, eng engine.Engine, t engine.Turn, out chan<- engine.Event) (limited, done bool) {
+// why the engine is blocked now ("" = it is not: a usage limit, or its
+// provider is down), and whether the turn finished.
+func (r *Router) runOne(ctx context.Context, eng engine.Engine, t engine.Turn, out chan<- engine.Event) (blocked string, done bool) {
 	events, err := eng.Run(ctx, t)
 	if err != nil {
 		// The engine cannot even start (not installed, logged out): treat it
@@ -130,7 +139,7 @@ func (r *Router) runOne(ctx context.Context, eng engine.Engine, t engine.Turn, o
 		slog.Warn("engine failed to start", "engine", eng.Name(), "err", err)
 		stream.Send(ctx, out, engine.Event{Kind: engine.KindError, Err: fmt.Errorf("%s: %w", eng.Name(), err)})
 		r.markLimited(eng.Name(), time.Time{})
-		return true, false
+		return eng.Name() + " could not start", false
 	}
 	for ev := range events {
 		switch ev.Kind {
@@ -138,14 +147,41 @@ func (r *Router) runOne(ctx context.Context, eng engine.Engine, t engine.Turn, o
 			r.saveUsage(ev.Usage)
 			continue // the router's business, not the session's
 		case engine.KindLimitHit:
-			r.markLimited(eng.Name(), ev.ResetAt)
-			limited = true
+			if ev.Outage {
+				ev.ResetAt = r.outageUntil(eng.Name(), ev.ResetAt) // the session shows when it is tried again
+				r.markLimited(eng.Name(), ev.ResetAt)
+				blocked = eng.Name() + " is unavailable"
+				if ev.Err != nil {
+					blocked += " (" + text.Shorten(ev.Err.Error(), 120) + ")"
+				}
+			} else {
+				r.markLimited(eng.Name(), ev.ResetAt)
+				blocked = eng.Name() + " hit its usage limit"
+			}
 		case engine.KindDone:
 			done = true
+			r.mu.Lock()
+			delete(r.outages, eng.Name()) // it answers again
+			r.mu.Unlock()
 		}
 		stream.Send(ctx, out, ev)
 	}
-	return limited, done
+	return blocked, done
+}
+
+// outageUntil is how long an engine whose provider is down waits before it
+// is tried again: 1, 2, 4 ... minutes while it stays down, at most
+// maxOutageWait, and never less than the provider's own retry_after.
+func (r *Router) outageUntil(name string, resetAt time.Time) time.Time {
+	r.mu.Lock()
+	r.outages[name]++
+	n := r.outages[name]
+	r.mu.Unlock()
+	until := r.now().Add(min(time.Minute<<min(n-1, 5), maxOutageWait))
+	if resetAt.After(until) {
+		until = resetAt
+	}
+	return until
 }
 
 // pick returns the first engine (in config order) that is not limited, not
@@ -157,10 +193,15 @@ func (r *Router) pick(tried map[string]bool) (engine.Engine, string, error) {
 	var earliest time.Time
 	var skipped []string
 	for _, e := range r.engines {
+		until, why := r.blocked(e.Name(), now)
 		if tried[e.Name()] {
+			// Tried in this turn, but its block still counts for when to
+			// try again: else the wait is always unknownReset.
+			if !until.IsZero() && (earliest.IsZero() || until.Before(earliest)) {
+				earliest = until
+			}
 			continue
 		}
-		until, why := r.blocked(e.Name(), now)
 		if until.IsZero() {
 			reason := ""
 			if len(skipped) > 0 {

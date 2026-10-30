@@ -3,12 +3,121 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/viminizer/germes/internal/api"
 )
+
+func TestNewPreservesFilesystemPath(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		mode := "absolute"
+		if relative {
+			mode = "relative"
+		}
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			if relative {
+				t.Chdir(root)
+			}
+			for _, name := range []string{"plain", "home%2Farchive", "percent%", "query?_pragma=foreign_keys(0)&mode=memory", "fragment#", "space name", "日本語", "file:literal"} {
+				t.Run(name, func(t *testing.T) {
+					dir := filepath.Join(root, name)
+					if err := os.MkdirAll(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+					path := filepath.Join(dir, "germes.db")
+					if relative {
+						path = filepath.Join(name, "germes.db")
+					}
+
+					// A decoded %2F must not select another installation's database.
+					var decoyPath string
+					var decoyData []byte
+					if name == "home%2Farchive" {
+						decoyDir := filepath.Join(root, "home", "archive")
+						if err := os.MkdirAll(decoyDir, 0700); err != nil {
+							t.Fatal(err)
+						}
+						decoyPath = filepath.Join(decoyDir, "germes.db")
+						decoy, err := New(decoyPath)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := decoy.Close(); err != nil {
+							t.Fatal(err)
+						}
+						decoyData, err = os.ReadFile(decoyPath)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+
+					ctx := context.Background()
+					now := time.Unix(100, 0)
+					for reopen := range 2 {
+						s, err := New(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() { s.Close() })
+						if _, err := os.Stat(filepath.Join(dir, "germes.db")); err != nil {
+							t.Fatalf("requested database missing: %v", err)
+						}
+						if reopen == 0 {
+							if err := s.CreateSession(ctx, api.Session{ID: "literal", Title: name, Project: "/p", Dir: "/p", Status: api.StatusIdle, CreatedAt: now, UpdatedAt: now}); err != nil {
+								t.Fatal(err)
+							}
+						} else if got, err := s.GetSession(ctx, "literal"); err != nil || got.Title != name {
+							t.Fatalf("reopened session = %+v, %v", got, err)
+						}
+						if err := s.Close(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if decoyPath != "" {
+						got, err := os.ReadFile(decoyPath)
+						if err != nil || string(got) != string(decoyData) {
+							t.Fatalf("decoded-path database changed: %v", err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestNewConnectionSettings(t *testing.T) {
+	ctx := context.Background()
+	s, err := New(filepath.Join(t.TempDir(), "settings?_pragma=foreign_keys(0)#.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Hold both connections open to check settings on newly pooled connections,
+	// not just the connection that ran migrations.
+	for range 2 {
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		for _, pragma := range []struct {
+			name string
+			want string
+		}{{"busy_timeout", "5000"}, {"journal_mode", "wal"}, {"foreign_keys", "1"}} {
+			var got string
+			if err := conn.QueryRowContext(ctx, "PRAGMA "+pragma.name).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != pragma.want {
+				t.Fatalf("%s = %q, want %q", pragma.name, got, pragma.want)
+			}
+		}
+	}
+}
 
 func TestSessionsAndEvents(t *testing.T) {
 	ctx := context.Background()

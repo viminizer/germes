@@ -7,6 +7,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,8 +26,15 @@ type Store struct {
 
 // New opens the database at path and runs its migrations.
 func New(path string) (*Store, error) {
-	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
-	db, err := sql.Open("sqlite", dsn)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path %s: %w", path, err)
+	}
+	// Encode only the filesystem path, so URI characters cannot change the
+	// selected database or the connection settings. Absolute paths avoid a
+	// relative first component being interpreted as a URI scheme or host.
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs), RawQuery: "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"}
+	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}

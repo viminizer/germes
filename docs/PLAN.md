@@ -714,7 +714,8 @@ func (s *Store) Close() error
 
 - Tables: `sessions`, `events` (key: session id + seq, payload as JSON), `events_fts` (FTS5 over event text), `jobs`, `limits`, `usage`.
 - Migrations: numbered SQL files embedded in the binary, run in `New` (R18).
-- WAL mode + busy timeout: reads do not block writes.
+- `New` takes a filesystem path, not a SQLite URI. Resolve relative paths and encode the path separately from the fixed URI query; literal `%`, `?` and `#` in names must not select another database or override connection settings. Reopening preserves data at that exact path.
+- WAL mode + busy timeout: reads do not block writes. Every pooled connection enables foreign keys and a 5000 ms busy timeout.
 - Search is `ListEvents` with a `Query` filter. No new verb.
 - Every list is paged (R17).
 

@@ -2,9 +2,12 @@ package job
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,7 +34,7 @@ func (s *Scheduler) runWorkflow(ctx context.Context, j api.Job) round {
 	step := j.Step
 	if step == "" { // a new round: a new session, fresh values
 		r.prev = j.SessionID
-		j.Values, j.Visits = map[string]string{}, map[string]int{}
+		j.Values, j.Visits, j.Stall = map[string]string{}, map[string]int{}, api.StallState{}
 		if j.Prompt != "" {
 			j.Values["GOAL"] = j.Prompt
 		}
@@ -54,6 +57,11 @@ func (s *Scheduler) runWorkflow(ctx context.Context, j api.Job) round {
 		r.j.Visits[step]++
 		if r.j.Visits[step] > st.tries() {
 			return r.end(round{failure: fmt.Sprintf("step %s ran %d times this round", step, st.tries())})
+		}
+		if r.isStalled(ctx, step, w.stallAfter()) {
+			if res, ok := r.recover(ctx, step); !ok {
+				return r.end(res)
+			}
 		}
 		if err := r.save(ctx, step); err != nil {
 			return round{failure: err.Error()}
@@ -86,8 +94,9 @@ type wfRound struct {
 // save records the step about to run.
 func (r *wfRound) save(ctx context.Context, step string) error {
 	values, visits, cur := maps.Clone(r.j.Values), maps.Clone(r.j.Visits), r.cur
+	stall := api.StallState{Steps: maps.Clone(r.j.Stall.Steps), Recoveries: r.j.Stall.Recoveries}
 	_, err := r.s.update(ctx, r.j.ID, func(j *api.Job) error {
-		j.Step, j.Values, j.Visits = step, values, visits
+		j.Step, j.Values, j.Visits, j.Stall = step, values, visits, stall
 		if cur != "" {
 			j.SessionID = cur
 		}
@@ -99,12 +108,104 @@ func (r *wfRound) save(ctx context.Context, step string) error {
 // end clears the step: the next round starts at the first one.
 func (r *wfRound) end(res round) round {
 	if _, err := r.s.update(context.Background(), r.j.ID, func(j *api.Job) error {
-		j.Step, j.Visits = "", nil
+		j.Step, j.Visits, j.Stall = "", nil, api.StallState{}
 		return nil
 	}); err != nil {
 		return round{failure: err.Error()}
 	}
 	return res
+}
+
+// maxRecoveries is how often a round may change its approach before it
+// counts as blocked.
+const maxRecoveries = 2
+
+// Tokens of the recovery step.
+const (
+	tokenRetry   = "RETRY"
+	tokenBlocked = "BLOCKED"
+)
+
+// stateCommand prints a checksum of the round folder's work: HEAD, changed
+// and new files and the diff. PROGRESS.md is left out: notes are not
+// progress. Hashed in the shell, so a big diff stays one short line.
+const stateCommand = `{ git rev-parse HEAD; git status --porcelain -- . ':(exclude)PROGRESS.md'; git diff HEAD -- . ':(exclude)PROGRESS.md'; } 2>/dev/null | cksum`
+
+// isStalled records the state the step starts in and reports whether it
+// started after times repeats with nothing changed: the same files and the
+// same values (command output and failures left out, their timings vary).
+func (r *wfRound) isStalled(ctx context.Context, step string, times int) bool {
+	if times == 0 {
+		return false
+	}
+	state, _ := r.bash(ctx, stateCommand)
+	sum := sha256.Sum256([]byte(state + "\x00" + strings.Join(r.results(), "\x00")))
+	fp := hex.EncodeToString(sum[:8])
+	if r.j.Stall.Steps == nil {
+		r.j.Stall.Steps = map[string]api.Stall{}
+	}
+	st := r.j.Stall.Steps[step]
+	if st.Fingerprint == fp {
+		st.Repeats++
+	} else {
+		st = api.Stall{Fingerprint: fp}
+	}
+	r.j.Stall.Steps[step] = st
+	return st.Repeats >= times
+}
+
+// results lists the round's values from replies, sorted, as "KEY: value".
+// Command output and failures are left out: their timings vary.
+func (r *wfRound) results() []string {
+	var out []string
+	for k, v := range r.j.Values {
+		if k != "OUTPUT" && k != failureKey {
+			out = append(out, k+": "+v)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// recover asks the agent to change its approach after steps repeated with
+// nothing changed, or to name what blocks it. ok false ends the round with
+// res: blocked, or failed.
+func (r *wfRound) recover(ctx context.Context, step string) (res round, ok bool) {
+	r.j.Stall.Recoveries++
+	if r.j.Stall.Recoveries > maxRecoveries {
+		return round{blocked: fmt.Sprintf("no progress: steps keep repeating with nothing changed after %d new approaches", maxRecoveries)}, false
+	}
+	var repeated []string
+	for id, st := range r.j.Stall.Steps {
+		if st.Repeats > 0 {
+			repeated = append(repeated, fmt.Sprintf("%s (%d times)", id, st.Repeats+1))
+		}
+	}
+	slices.Sort(repeated)
+	results := strings.Join(r.results(), "\n")
+	if results == "" {
+		results = "none"
+	}
+	prompt := "No progress: these steps ran again with no change to the files or the results: " + strings.Join(repeated, ", ") + ".\n" +
+		"Results so far:\n" + results + "\n\n" +
+		"Do not repeat the same checks. Either change your approach to what is still open (say how in one sentence, then do it), " +
+		"or, if something outside your control blocks you (a decision only the user can make, a missing permission, a broken service), say exactly what. " +
+		"Messages from this job are not the user's answer to a question you asked. Do not bypass reviews, permissions or branch protections.\n" +
+		"Use RESULT: RETRY <your new approach> or RESULT: BLOCKED <what blocks you>."
+	st := Step{ID: "recover", Agent: prompt, Next: Next{ByToken: map[string]string{tokenRetry: step, tokenBlocked: stepDone}}}
+	next, res, ok := r.runAgent(ctx, st)
+	switch {
+	case !ok:
+		return res, false
+	case next == stepDone:
+		reason := r.j.Values[tokenBlocked]
+		if reason == "" {
+			reason = "the agent named no reason; see its session"
+		}
+		return round{blocked: reason}, false
+	}
+	r.j.Stall.Steps = nil // a new approach starts counting again
+	return round{}, true
 }
 
 // runStep runs one step and says where to go next. ok false ends the round

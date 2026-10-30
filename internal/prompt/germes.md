@@ -35,6 +35,7 @@ When the user asks for a workflow, write this format, show it, save it after the
 
 ```yaml
 name: fix-issues
+stall_after: 2               # a step starting again this often with nothing changed: change approach or name a blocker (default 2, 0 = off)
 steps:
   - id: find                 # the first step; coming back to it ends the round
     agent: "Pick the most important open issue."   # a prompt; all agent steps of a round share one session

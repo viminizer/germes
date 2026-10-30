@@ -78,6 +78,7 @@ type round struct {
 	done    bool   // the agent replied [DONE], or the workflow reached done (a repeating job: nothing to do now)
 	failure string // why it failed; "" = it worked
 	fatal   bool   // the job cannot run any more (its folder or workflow is gone)
+	blocked string // what blocks the work (a workflow that stopped making progress); the job waits
 }
 
 // NewScheduler creates a scheduler.
@@ -368,10 +369,14 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 			return nil
 		}
 		switch {
-		case res.done && j.Repeat:
-			// Nothing to do right now: wait longer each time, then look again.
+		case res.blocked != "" || (res.done && j.Repeat):
+			// Blocked, or nothing to do right now: wait longer each time,
+			// then look again.
 			j.Idle++
 			j.Failures, j.Error = 0, ""
+			if res.blocked != "" {
+				j.Error = "blocked: " + res.blocked
+			}
 			if wait := idleWait(j.Idle); time.Until(j.NextRunAt) < wait {
 				j.NextRunAt = time.Now().Add(wait)
 			}
@@ -391,6 +396,9 @@ func (s *Scheduler) finish(ctx context.Context, id string, res round) bool {
 	if err != nil {
 		slog.Error("job round", "job", id, "err", err)
 		return false
+	}
+	if res.blocked != "" {
+		s.notify(j.SessionID, fmt.Sprintf("job %s is blocked: %s (it tries again at %s)", j.Name, res.blocked, j.NextRunAt.Format("15:04")))
 	}
 	return j.Status == api.JobRunning
 }

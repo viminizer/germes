@@ -60,6 +60,7 @@ type fakeTools struct {
 	mu       sync.Mutex
 	fail     map[string]bool
 	commands []string
+	state    string // what the state check (stateCommand) prints
 }
 
 func (f *fakeTools) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
@@ -67,6 +68,9 @@ func (f *fakeTools) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolRes
 	json.Unmarshal(r.Args, &a)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if a.Command == stateCommand {
+		return api.ToolResult{Output: f.state}, nil
+	}
 	f.commands = append(f.commands, a.Command)
 	if f.fail[a.Command] {
 		delete(f.fail, a.Command)
@@ -181,5 +185,48 @@ func TestRepeatingWorkflowWaitsAtDone(t *testing.T) {
 	j = waitJob(t, s, j.ID, func(j api.Job) bool { return j.Idle > 0 })
 	if j.Status != api.JobRunning || j.Step != "" {
 		t.Fatalf("got %s at step %q; want running between rounds", j.Status, j.Step)
+	}
+}
+
+const reviewLoop = `
+name: review-loop
+steps:
+  - id: prepare
+    agent: "Pick what to review."
+    next: review
+  - id: review
+    agent: "Review the code."
+    next: { FINDING: fix, NONE: done }
+  - id: fix
+    agent: "Fix {FINDING}."
+    next: review
+`
+
+// sameFinding is a review loop that changes nothing: the same finding
+// comes back after each fix, so step fix starts a third time unchanged.
+var sameFinding = []string{"ok", "RESULT: FINDING x", "ok", "RESULT: FINDING x", "ok", "RESULT: FINDING x"}
+
+func TestStalledWorkflowWaitsWhenBlocked(t *testing.T) {
+	s, r := newTestSchedulerWith(t, Options{Tools: &fakeTools{}}, append(sameFinding, "RESULT: BLOCKED the user must choose an API")...)
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "review-loop", reviewLoop)
+	j, _ := s.CreateJob(context.Background(), api.JobRequest{Dir: dir, Workflow: "review-loop"})
+	j = waitJob(t, s, j.ID, func(j api.Job) bool { return j.Idle > 0 })
+	if j.Status != api.JobRunning || j.Error != "blocked: the user must choose an API" {
+		t.Fatalf("got %s (%q); want running and blocked", j.Status, j.Error)
+	}
+	if last := r.turns[len(r.turns)-1].Prompt; !strings.Contains(last, "No progress") || !strings.Contains(last, "fix (3 times)") {
+		t.Fatalf("recovery prompt:\n%s", last)
+	}
+}
+
+func TestStalledWorkflowGoesOnWithANewApproach(t *testing.T) {
+	s, _ := newTestSchedulerWith(t, Options{Tools: &fakeTools{}}, append(sameFinding, "RESULT: RETRY split the function first", "ok", "RESULT: NONE")...)
+	dir := t.TempDir()
+	writeWorkflow(t, dir, "review-loop", reviewLoop)
+	j, _ := s.CreateJob(context.Background(), api.JobRequest{Dir: dir, Workflow: "review-loop"})
+	j = waitStatus(t, s, j.ID)
+	if j.Status != api.JobDone || j.Failures != 0 {
+		t.Fatalf("got %s, %d failures (%s); want done", j.Status, j.Failures, j.Error)
 	}
 }

@@ -17,6 +17,10 @@ import (
 type Workflow struct {
 	Name  string `yaml:"name"`
 	Steps []Step `yaml:"steps"`
+	// StallAfter is how often a step may start again with nothing changed
+	// before the agent must change its approach or name a blocker; nil = 2,
+	// 0 = never.
+	StallAfter *int `yaml:"stall_after"`
 }
 
 // Step is one step: an agent prompt, or a command (a shell command or a
@@ -158,10 +162,21 @@ func (w Workflow) check() error {
 			add(`%s: notify needs a text, like notify "tests pass"`, where)
 		}
 	}
+	if w.StallAfter != nil && *w.StallAfter < 0 {
+		add("stall_after must not be negative")
+	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// stallAfter is how often a step may repeat with nothing changed.
+func (w Workflow) stallAfter() int {
+	if w.StallAfter == nil {
+		return 2
+	}
+	return *w.StallAfter
 }
 
 // step returns the step with id.

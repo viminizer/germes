@@ -20,7 +20,7 @@ func (s *Store) CreateJob(ctx context.Context, j api.Job) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO jobs (`+jobColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, vals...)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO jobs (`+jobColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, vals...)
 	if err != nil {
 		return fmt.Errorf("create job %s: %w", j.ID, err)
 	}
@@ -46,7 +46,7 @@ func (s *Store) UpdateJob(ctx context.Context, j api.Job) error {
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE jobs SET name = ?, dir = ?, prompt = ?, no_worktree = ?, every = ?, max_runs = ?,
 		runs = ?, failures = ?, next_run_at = ?, status = ?, session_id = ?, error = ?, created_at = ?, updated_at = ?,
-		workflow = ?, step = ?, vals = ?, visits = ?, repeat = ?, idle = ? WHERE id = ?`, append(vals[1:], j.ID)...)
+		workflow = ?, step = ?, vals = ?, visits = ?, repeat = ?, idle = ?, stall = ? WHERE id = ?`, append(vals[1:], j.ID)...)
 	if err != nil {
 		return fmt.Errorf("update job %s: %w", j.ID, err)
 	}
@@ -88,7 +88,7 @@ func (s *Store) ListJobs(ctx context.Context, f api.JobFilter) (api.Page[api.Job
 }
 
 const jobColumns = `id, name, dir, prompt, no_worktree, every, max_runs, runs, failures, next_run_at, status, session_id, error,
-	created_at, updated_at, workflow, step, vals, visits, repeat, idle`
+	created_at, updated_at, workflow, step, vals, visits, repeat, idle, stall`
 
 func jobValues(j api.Job) ([]any, error) {
 	vals, err := json.Marshal(j.Values)
@@ -99,17 +99,21 @@ func jobValues(j api.Job) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	stall, err := json.Marshal(j.Stall)
+	if err != nil {
+		return nil, err
+	}
 	return []any{j.ID, j.Name, j.Dir, j.Prompt, j.NoWorktree, int64(j.Every), j.MaxRuns, j.Runs, j.Failures,
 		j.NextRunAt.UnixNano(), j.Status, j.SessionID, j.Error, j.CreatedAt.UnixNano(), j.UpdatedAt.UnixNano(),
-		j.Workflow, j.Step, string(vals), string(visits), j.Repeat, j.Idle}, nil
+		j.Workflow, j.Step, string(vals), string(visits), j.Repeat, j.Idle, string(stall)}, nil
 }
 
 func scanJob(row interface{ Scan(...any) error }) (api.Job, error) {
 	var j api.Job
 	var every, next, created, updated int64
-	var vals, visits string
+	var vals, visits, stall string
 	if err := row.Scan(&j.ID, &j.Name, &j.Dir, &j.Prompt, &j.NoWorktree, &every, &j.MaxRuns, &j.Runs, &j.Failures,
-		&next, &j.Status, &j.SessionID, &j.Error, &created, &updated, &j.Workflow, &j.Step, &vals, &visits, &j.Repeat, &j.Idle); err != nil {
+		&next, &j.Status, &j.SessionID, &j.Error, &created, &updated, &j.Workflow, &j.Step, &vals, &visits, &j.Repeat, &j.Idle, &stall); err != nil {
 		return j, err
 	}
 	if err := json.Unmarshal([]byte(vals), &j.Values); err != nil {
@@ -117,6 +121,9 @@ func scanJob(row interface{ Scan(...any) error }) (api.Job, error) {
 	}
 	if err := json.Unmarshal([]byte(visits), &j.Visits); err != nil {
 		return j, fmt.Errorf("job %s visits: %w", j.ID, err)
+	}
+	if err := json.Unmarshal([]byte(stall), &j.Stall); err != nil {
+		return j, fmt.Errorf("job %s stall: %w", j.ID, err)
 	}
 	j.Every = time.Duration(every)
 	j.NextRunAt, j.CreatedAt, j.UpdatedAt = time.Unix(0, next), time.Unix(0, created), time.Unix(0, updated)

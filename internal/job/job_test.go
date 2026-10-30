@@ -84,7 +84,8 @@ func waitJob(t *testing.T, s *Scheduler, id string, ok func(api.Job) bool) api.J
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("job did not get there")
+	j, _ := s.GetJob(context.Background(), id)
+	t.Fatalf("job did not get there: %+v", j)
 	return api.Job{}
 }
 

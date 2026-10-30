@@ -186,6 +186,7 @@ type Job struct {
 	Step       string            `json:"step,omitempty"`       // workflow: the step running now ("" = between rounds)
 	Values     map[string]string `json:"values,omitempty"`     // workflow: values from replies, like ISSUE
 	Visits     map[string]int    `json:"visits,omitempty"`     // workflow: runs of each step this round
+	Stall      StallState        `json:"stall,omitzero"`       // workflow: the no-progress watchdog of this round
 	CreatedAt  time.Time         `json:"created_at"`
 	UpdatedAt  time.Time         `json:"updated_at"`
 }
@@ -325,4 +326,19 @@ type SkillUse struct {
 	Name     string    `json:"name"`
 	Count    int       `json:"count"`
 	LastUsed time.Time `json:"last_used"`
+}
+
+// StallState is a workflow round's no-progress watchdog: how often each step
+// started again with nothing changed, and how often the agent was asked to
+// change its approach.
+type StallState struct {
+	Steps      map[string]Stall `json:"steps,omitempty"`
+	Recoveries int              `json:"recoveries,omitempty"`
+}
+
+// Stall is a step's last start: the state then, and how often it started
+// again with the same state.
+type Stall struct {
+	Fingerprint string `json:"fingerprint"`
+	Repeats     int    `json:"repeats"`
 }

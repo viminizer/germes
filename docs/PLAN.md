@@ -21,7 +21,7 @@ Germes is a Go harness for building software apps from a prompt. It takes good i
 - Iteration budget with a refund and one last grace call.
 - Save the assistant message before running its tools.
 - Unknown tool name becomes a helpful error that lists valid names.
-- Compress at 50% of context: first drop old tool outputs (free), then summarize the middle with a cheap model. Keep first 3 and last 20 messages.
+- Compress at 50% of context: first trim old tool outputs to their start and end (free), then summarize the middle with a cheap model. Keep first 3 and last 20 messages.
 - System prompt is frozen for the session, so the prompt cache stays valid.
 
 ### Tools and toolsets
@@ -529,7 +529,7 @@ Needs: `llm` (calls the model with the Codex token), `tool` (registry), `prompt`
 3. Call the model; stream text out as `Text` events.
 4. Tool call: emit `ToolCall` first (the session saves it: save before running). Blocked command: error result. Unknown tool: error result listing valid names. Else run it, emit `ToolResult`.
 5. Loop until there are no tool calls or the budget runs out (up to 50 steps per turn, then one grace call to wrap up).
-6. At 50% of the context window: drop old tool outputs first (free), then summarize the middle with a cheap model and emit `Compacted{Summary}`. The next history load starts from it, so compaction lives in the event log.
+6. At 50% of the context window: trim old tool outputs to their start and end first (free), then summarize the middle with a cheap model and emit `Compacted{Summary}`. The next history load starts from it, so compaction lives in the event log.
 7. Emit `Done`.
 
 ### engine/claude
@@ -1296,7 +1296,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
 4. Memory and skills: `memory`, `skill`, search, compaction. Done:
    - `memory` tool (MEMORY.md / USER.md), `skill_view` / `skill_save` (skills from `~/.germes/skills` and read-only `~/.claude/skills`), `session_search` (SQLite FTS5 over event text).
    - The prompt has the Germes config knowledge, the skills index (descriptions cut to 200 characters) and memory. Claude gets the same parts through `--append-system-prompt`, so it edits memory and skills as plain files.
-   - Compaction: at the start of a turn, when history is over half the context window (default 200k tokens), older events are summarized; a `compacted` event saves the summary and `keep_from`. Next turns load the summary plus the kept events. Inside a long turn, old tool outputs are trimmed instead.
+   - Compaction: at the start of a turn, when history is over half the context window (default 200k tokens), older events are summarized; a `compacted` event saves the summary and `keep_from`. Next turns load the summary plus the kept events. Inside a long turn, old tool outputs are trimmed instead: all but the newest 10 keep only their first 300 and last 500 characters, so the command, a refusal, the exit code and test results survive, with a note saying where the full output was saved, or to run it again (#34).
    - Background review: after 10 tool calls without saving memory or a skill, a silent review with only memory and skill tools runs after the turn.
    - Later, both engines: one `engine.Reviews`, made in `main.go` with the daemon's context, counts the calls for both (a session keeps its count when it changes engine) and runs the reviews: each has a 5-minute limit, a panic is logged, and when the daemon exits (also after a hand-over) running reviews are cancelled and waited for before the store closes. The instruction is shared too (`prompt.Review`). The loop's review gets today's memory and skills. Claude's review resumes a fork of the conversation (`--resume <id> --fork-session`, so the session does not change) with only Read/Glob/Grep and edits inside `memories/` and `skills/`; no acceptEdits, so any other edit is refused, and no shell. Claude counts as saved when it edits a file there.
    - `skill_patch` fixes part of a skill (one exact match; the result must still parse and keep its name). The prompt and the review say to fix a skill that turned out wrong while it was used; Claude does it with Edit. SKILL.md is at most 100,000 characters (same as Hermes).

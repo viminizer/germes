@@ -265,6 +265,9 @@ func TestLongOutputIsSaved(t *testing.T) {
 	if b, err := os.ReadFile(path[1]); err != nil || string(b) != long {
 		t.Fatalf("saved file: %v", err)
 	}
+	if got := GetSavedOutput(res.Output); got != path[1] {
+		t.Errorf("GetSavedOutput = %q, want %q", got, path[1])
+	}
 }
 
 func TestPruneOutputs(t *testing.T) {

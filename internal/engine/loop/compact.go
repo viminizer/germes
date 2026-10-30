@@ -8,12 +8,16 @@ import (
 
 	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/llm"
+	"github.com/viminizer/germes/internal/tool"
 )
 
 const (
-	charsPerToken    = 4       // rough estimate, good enough to decide when to compact
-	maxSummaryInput  = 400_000 // characters of old conversation sent to the summary call
-	prunedToolOutput = "[old tool output removed to save context]"
+	charsPerToken   = 4       // rough estimate, good enough to decide when to compact
+	maxSummaryInput = 400_000 // characters of old conversation sent to the summary call
+	prunedHead      = 300     // characters kept from the start of an old tool output
+	prunedTail      = 500     // and from its end, where exit codes and test results are
+	prunedMax       = 1_200   // longer than any pruned output, so pruning again changes nothing
+	prunedNote      = "[Germes] old tool output cut to save context"
 )
 
 const summaryPrompt = `You summarize a coding session so another agent can continue it. Use exactly these sections,
@@ -85,10 +89,25 @@ func (l *Loop) compact(ctx context.Context, system string, events []api.Event) (
 // call. The newest messages stay as they are.
 func prune(msgs []llm.Message, keep int) {
 	for i := 0; i < len(msgs)-keep; i++ {
-		if msgs[i].Role == llm.RoleTool && len(msgs[i].Text) > len(prunedToolOutput) {
-			msgs[i].Text = prunedToolOutput
+		if msgs[i].Role == llm.RoleTool {
+			msgs[i].Text = pruneOutput(msgs[i].Text)
 		}
 	}
+}
+
+// pruneOutput keeps the start and the end of an old tool output, so what
+// ran and how it ended (an exit code, a test result, a refusal) are not
+// lost (#34), and where the full output was saved, if it was.
+func pruneOutput(s string) string {
+	r := []rune(s)
+	if len(r) <= prunedMax {
+		return s
+	}
+	note := prunedNote + "; run it again to see all of it"
+	if path := tool.GetSavedOutput(s); path != "" {
+		note = prunedNote + "; the full output is in " + path
+	}
+	return string(r[:prunedHead]) + "\n…\n" + note + "\n…\n" + string(r[len(r)-prunedTail:])
 }
 
 // ask makes one model call without tools and returns its text.

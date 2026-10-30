@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -171,8 +172,21 @@ func (r *Registry) shorten(sessionID, name, out string) string {
 		return cut(out)
 	}
 	part := maxOutput / 2
-	return string(runes[:part]) + fmt.Sprintf("\n\n[Germes] The output is %d characters; the middle is not shown. The full output is in %s: "+
+	return string(runes[:part]) + fmt.Sprintf("\n\n[Germes] The output is %d characters; the middle is not shown. "+savedIn+" "+
 		"read parts of it with Read (offset, limit) or search it with Grep.\n\n", len(runes), path) + string(runes[len(runes)-part:])
+}
+
+// savedIn says where shorten saved an output; GetSavedOutput reads it back.
+const savedIn = "The full output is in %s:"
+
+var savedInRE = regexp.MustCompile(strings.Replace(regexp.QuoteMeta(savedIn), "%s", `(\S+)`, 1))
+
+// GetSavedOutput returns the file a shortened output was saved in, or "".
+func GetSavedOutput(out string) string {
+	if m := savedInRE.FindStringSubmatch(out); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 func (r *Registry) names() []string {

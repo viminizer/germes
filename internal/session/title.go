@@ -24,14 +24,15 @@ const (
 	// maxTitle is the longest title a client may set (MessageRequest.Title).
 	maxTitle = 80
 	// maxNamings is how many messages may name a session, like Hermes: a
-	// chat that stays small talk stops asking.
+	// chat that stays small talk stops asking. Counted while the session's
+	// worker runs: one woken up again (idle, daemon restart) may ask again.
 	maxNamings = 3
 )
 
 // firstTitle is a new session's title: the one asked for (a job round),
 // else the message cut short until a model names it.
 func firstTitle(r api.MessageRequest, text string) string {
-	if t := strings.TrimSpace(r.Title); t != "" {
+	if t := strings.Join(strings.Fields(r.Title), " "); t != "" { // one line
 		return textpkg.Shorten(t, maxTitle)
 	}
 	return titleOf(text)

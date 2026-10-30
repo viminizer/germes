@@ -130,7 +130,7 @@ func candidates(arg, value, dir string) []string {
 	if arg == "url" {
 		// Claude Code's WebFetch(domain:example.com) works here too.
 		if u, err := url.Parse(value); err == nil && u.Hostname() != "" {
-			return []string{value, "domain:" + u.Hostname()}
+			return []string{value, "domain:" + strings.ToLower(u.Hostname())}
 		}
 		return []string{value}
 	}

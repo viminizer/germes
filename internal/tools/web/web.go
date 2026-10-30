@@ -174,11 +174,29 @@ func fetch(ctx context.Context, c *http.Client, raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := c.Do(withAgent(req))
+	// A redirect to another host is not followed: the block list checked
+	// only this URL. Fetching the new one goes through the block list again.
+	sameHost := *c
+	sameHost.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if !strings.EqualFold(next.URL.Hostname(), via[0].URL.Hostname()) {
+			return http.ErrUseLastResponse
+		}
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	}
+	resp, err := sameHost.Do(withAgent(req))
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if to := resp.Header.Get("Location"); resp.StatusCode/100 == 3 && to != "" {
+		if next, err := resp.Request.URL.Parse(to); err == nil {
+			to = next.String()
+		}
+		return "", fmt.Errorf("%s redirects to %s; fetch that URL to read it", u.Host, to)
+	}
 	if resp.StatusCode/100 != 2 {
 		return "", fmt.Errorf("%s answered %s", u.Host, resp.Status)
 	}
@@ -193,6 +211,9 @@ func fetch(ctx context.Context, c *http.Client, raw string) (string, error) {
 	page := string(b)
 	if strings.Contains(kind, "html") || kind == "" {
 		page = toText(page)
+	}
+	if strings.TrimSpace(page) == "" {
+		return "", fmt.Errorf("no readable text on %s; the page may need JavaScript", u.Host)
 	}
 	return fromWeb(u.String(), text.Shorten(page, maxChars)), nil
 }

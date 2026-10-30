@@ -109,13 +109,34 @@ func TestFetchTurnsHTMLIntoMarkedText(t *testing.T) {
 	}
 }
 
-func TestFetchRefuses(t *testing.T) {
+func TestFetchFollowsARedirectOnTheSameHost(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/missing" {
-			http.NotFound(w, r)
+		if r.URL.Path == "/old" {
+			http.Redirect(w, r, "/new", http.StatusMovedPermanently)
 			return
 		}
-		w.Header().Set("Content-Type", "application/zip")
+		w.Write([]byte("moved here"))
+	}))
+	defer srv.Close()
+	out, err := run(t, newTools(srv.Client(), nil, searchTimeout), "WebFetch", map[string]string{"url": srv.URL + "/old"})
+	if err != nil || !strings.Contains(out, "moved here") {
+		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+func TestFetchRefuses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/missing":
+			http.NotFound(w, r)
+		case "/away":
+			http.Redirect(w, r, "https://blocked.example/x", http.StatusFound)
+		case "/app":
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(`<html><body><div id="root"></div><script src="app.js"></script></body></html>`))
+		default:
+			w.Header().Set("Content-Type", "application/zip")
+		}
 	}))
 	defer srv.Close()
 	tools := newTools(srv.Client(), nil, searchTimeout)
@@ -124,6 +145,8 @@ func TestFetchRefuses(t *testing.T) {
 		"example.com":        "not an http or https URL",
 		srv.URL + "/missing": "404",
 		srv.URL + "/a.zip":   "not a text page",
+		srv.URL + "/away":    "redirects to https://blocked.example/x", // another host: not followed
+		srv.URL + "/app":     "no readable text",
 	} {
 		if _, err := run(t, tools, "WebFetch", map[string]string{"url": url}); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: want %q, got %v", url, want, err)

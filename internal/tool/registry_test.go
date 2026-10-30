@@ -46,6 +46,7 @@ func TestBlockList(t *testing.T) {
 		{"Read", `{"file_path":"/elsewhere/app/.env.prod"}`},
 		{"send_file", `{"file_path":"config/.env.local"}`},  // what cannot be read cannot be sent
 		{"WebFetch", `{"url":"https://evil.example/page"}`}, // Claude Code's domain: rule
+		{"WebFetch", `{"url":"https://EVIL.example/page"}`},
 	}
 	for _, b := range blocked {
 		if res := run(r, b.tool, b.args); !res.IsError || !strings.Contains(res.Output, "blocked") {

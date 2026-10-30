@@ -44,6 +44,14 @@ func NewHandler(svc Service) http.Handler {
 		s.ID = r.PathValue("id")
 		reply(w, r, func() (any, error) { return nil, svc.StopSession(r.Context(), s) })
 	})
+	mux.HandleFunc("GET /sessions/{id}/checkpoints", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, r, func() (any, error) { return svc.ListCheckpoints(r.Context(), r.PathValue("id")) })
+	})
+	mux.HandleFunc("POST /sessions/{id}/checkpoints/{cp}/restore", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, r, func() (any, error) {
+			return nil, svc.RestoreCheckpoint(r.Context(), r.PathValue("id"), r.PathValue("cp"))
+		})
+	})
 	mux.HandleFunc("POST /messages", func(w http.ResponseWriter, r *http.Request) {
 		var m MessageRequest
 		if !decode(w, r, &m) {

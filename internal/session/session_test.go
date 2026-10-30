@@ -268,3 +268,56 @@ func TestPlanTurnSavesThePlan(t *testing.T) {
 		t.Fatalf("plan file:\n%s", b)
 	}
 }
+
+func TestRollbackToBeforeATurn(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	os.WriteFile(filepath.Join(project, "a.txt"), []byte("before"), 0o644)
+	st, err := store.New(filepath.Join(t.TempDir(), "germes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, started := make(chan struct{}), make(chan string, 1)
+	m := NewManager(st, fakeRunner{block: block, prompts: started}, Options{Checkpoints: t.TempDir()})
+	t.Cleanup(func() { m.Stop(ctx); st.Close() })
+
+	res, _ := m.SendMessage(ctx, api.MessageRequest{Dir: project, Text: "change a.txt"})
+	ch, _ := m.Watch(ctx, api.WatchFilter{SessionID: res.SessionID})
+	<-started                                                             // the snapshot is taken before the engine runs
+	os.WriteFile(filepath.Join(project, "a.txt"), []byte("after"), 0o644) // the turn's work
+	list, err := m.ListCheckpoints(ctx, res.SessionID)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("snapshots %v, %v", list, err)
+	}
+	if err := m.RestoreCheckpoint(ctx, res.SessionID, list[0].ID); err == nil {
+		t.Fatal("restored while the turn runs")
+	}
+	close(block)
+	next(t, ch, api.KindTurnDone)
+	waitIdle(t, m, res.SessionID)
+	if err := m.RestoreCheckpoint(ctx, res.SessionID, list[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(project, "a.txt")); string(b) != "before" {
+		t.Fatalf("a.txt = %q", b)
+	}
+}
+
+// waitIdle waits until the session's worker has nothing running or queued.
+func waitIdle(t *testing.T, m *Manager, id string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if len(m.ListBusy()) == 0 {
+			return
+		}
+	}
+	t.Fatalf("session %s stays busy", id)
+}

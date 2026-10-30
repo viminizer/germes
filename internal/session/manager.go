@@ -72,6 +72,9 @@ type Options struct {
 	Worktrees string    // where session worktrees go; "" = no worktrees
 	Refs      Expander  // nil = @ references stay plain text
 	Elsewhere Elsewhere // nil = only this process runs sessions
+	// Checkpoints is where folders are snapshot before each turn, for
+	// rollback; "" = no snapshots.
+	Checkpoints string
 }
 
 // NewManager creates a manager.

@@ -210,6 +210,13 @@ type ToolRequest struct {
 	Args      json.RawMessage `json:"args"`
 }
 
+// Checkpoint is a snapshot of a session's folder, taken before a turn.
+type Checkpoint struct {
+	ID    string    `json:"id"`
+	Label string    `json:"label"`
+	Time  time.Time `json:"time"`
+}
+
 // ToolInfo describes a tool an engine may call.
 type ToolInfo struct {
 	Name        string          `json:"name"`

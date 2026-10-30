@@ -95,6 +95,17 @@ func (c *Client) ListEvents(ctx context.Context, f EventFilter) (Page[Event], er
 	return p, c.call(ctx, "GET", "/events?"+q.Encode(), nil, &p)
 }
 
+// ListCheckpoints lists the snapshots of a session's folder, newest first.
+func (c *Client) ListCheckpoints(ctx context.Context, sessionID string) ([]Checkpoint, error) {
+	var list []Checkpoint
+	return list, c.call(ctx, "GET", "/sessions/"+url.PathEscape(sessionID)+"/checkpoints", nil, &list)
+}
+
+// RestoreCheckpoint puts the session's folder back as it was in a snapshot.
+func (c *Client) RestoreCheckpoint(ctx context.Context, sessionID, id string) error {
+	return c.call(ctx, "POST", "/sessions/"+url.PathEscape(sessionID)+"/checkpoints/"+url.PathEscape(id)+"/restore", nil, nil)
+}
+
 // Watch streams events until ctx ends or the connection drops.
 func (c *Client) Watch(ctx context.Context, f WatchFilter) (<-chan Event, error) {
 	q := url.Values{}

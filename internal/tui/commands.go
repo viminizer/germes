@@ -18,6 +18,7 @@ var commands = []struct{ Name, Args, Help string }{
 	{"switch", "<id>", "open another session"},
 	{"overseer", "", "open the overseer (controls sessions and jobs)"},
 	{"rename", "<text>", "rename this session"},
+	{"rollback", "[n]", "list file snapshots of this session; n puts the files back as before turn n"},
 	{"help", "", "this help"},
 	{"exit", "", "quit (the session keeps running)"},
 }
@@ -79,6 +80,18 @@ func (m *model) command(text string) tea.Cmd {
 				return fail(err)
 			}
 			return switchMsg{id: arg}
+		}
+	case "rollback":
+		if m.sessionID == "" {
+			return notice("no session yet: nothing to roll back")
+		}
+		id := m.sessionID
+		return func() tea.Msg {
+			text, err := api.RunRollback(m.ctx, m.svc, id, arg)
+			if err != nil {
+				return fail(err)
+			}
+			return printMsg{[]message{{Kind: kindNotice, Text: text}}}
 		}
 	case "rename":
 		if m.sessionID == "" {

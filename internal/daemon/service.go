@@ -107,3 +107,13 @@ func (d *Daemon) ListTools(ctx context.Context, sessionID string) ([]api.ToolInf
 func (d *Daemon) RunTool(ctx context.Context, r api.ToolRequest) (api.ToolResult, error) {
 	return d.opts.Tools.RunTool(ctx, r)
 }
+
+// ListCheckpoints lists the snapshots of a session's folder.
+func (d *Daemon) ListCheckpoints(ctx context.Context, sessionID string) ([]api.Checkpoint, error) {
+	return d.sessions.ListCheckpoints(ctx, sessionID)
+}
+
+// RestoreCheckpoint puts a session's folder back as it was in a snapshot.
+func (d *Daemon) RestoreCheckpoint(ctx context.Context, sessionID, id string) error {
+	return d.sessions.RestoreCheckpoint(ctx, sessionID, id)
+}

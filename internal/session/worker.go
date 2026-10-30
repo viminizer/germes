@@ -212,6 +212,7 @@ func (w *worker) runTurn(text string, plan bool) {
 	w.reply = ""
 	w.setStatus(api.StatusWorking)
 	w.refresh()
+	w.snapshot(ctx, text)
 	prompt := text
 	if w.m.opts.Refs != nil {
 		// Saved apart from the message, so the TUI shows what was typed and

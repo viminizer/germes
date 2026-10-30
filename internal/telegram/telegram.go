@@ -36,6 +36,7 @@ var commands = []struct{ Name, Help string }{
 	{"new", "A fresh session in this topic's project"},
 	{"stop", "Stop the running turn"},
 	{"sessions", "Recent sessions"},
+	{"rollback", "List file snapshots; /rollback n puts the files back"},
 	{"unbind", "This topic talks to the overseer again"},
 	{"help", "What the bot does"},
 }
@@ -220,6 +221,20 @@ func (t *Telegram) command(ctx context.Context, thread int64, text string) {
 		t.bind(ctx, thread, arg)
 	case "status":
 		t.status(ctx, thread)
+	case "rollback":
+		id := api.OverseerID
+		if bound {
+			id = tp.SessionID
+		}
+		if id == "" {
+			t.reply(ctx, thread, "No session here yet: nothing to roll back.")
+			return
+		}
+		text, err := api.RunRollback(ctx, t.svc, id, arg)
+		if err != nil {
+			text = err.Error()
+		}
+		t.reply(ctx, thread, text)
 	case "plan":
 		if arg == "" {
 			t.reply(ctx, thread, "Usage: /plan <task>. The session plans without changing anything and saves the plan.")

@@ -128,6 +128,57 @@ func TestBlockListResolvedFilePaths(t *testing.T) {
 	}
 }
 
+func TestBlockListFollowsLinks(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("not a secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(target, name string) {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".env")
+	write("public.txt")
+	write("secrets/key.txt")
+	link(".env", "notes.txt")        // an innocent name for a blocked file
+	link("secrets", "pub")           // a linked folder on the way
+	link("public.txt", ".env.local") // a blocked name stays blocked
+	link("missing.txt", "dangling.txt")
+	link("public.txt", "readme.txt")
+
+	echo := func(context.Context, Call) (string, error) { return "ran", nil }
+	r, err := NewRegistry([]Tool{{Name: "Read", MatchArg: "file_path", Run: echo},
+		{Name: "send_file", MatchArg: "file_path", BlockedAs: "Read", Run: echo}},
+		nil, []string{"Read(.env)", "Read(**/.env*)", "Read(secrets/key.txt)"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, blocked := range map[string]bool{
+		"notes.txt": true, "pub/key.txt": true, ".env.local": true,
+		"dangling.txt": false, "readme.txt": false, "public.txt": false,
+	} {
+		for _, name := range []string{"Read", "send_file"} {
+			args, _ := json.Marshal(map[string]string{"file_path": path})
+			if res := r.Run(context.Background(), name, Call{Dir: dir, Args: args}); res.IsError != blocked {
+				t.Errorf("%s %s: blocked=%v, want %v (%s)", name, path, res.IsError, blocked, res.Output)
+			}
+		}
+		// Grep checks each file it searches the same way.
+		if got := r.isReadBlocked(filepath.Join(dir, path), dir); got != blocked {
+			t.Errorf("Grep %s: blocked=%v, want %v", path, got, blocked)
+		}
+	}
+	if res := run(r, "Read", `{"file_path":"`+filepath.Join(dir, "notes.txt")+`"}`); !strings.Contains(res.Output, "(Read(.env), through a link to ") {
+		t.Errorf("the block does not say a link was followed: %s", res.Output)
+	}
+}
+
 func TestBlockListWildcardMatchesNewlines(t *testing.T) {
 	for _, tc := range []struct {
 		name, arg, pattern, value string

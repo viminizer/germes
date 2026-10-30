@@ -67,10 +67,13 @@ func matchRules(rules []rule, tools []string, arg string, value func() (string, 
 		if v == "" {
 			continue
 		}
-		for _, candidate := range candidates(arg, v, dir) {
-			if rl.matches(candidate) {
-				return rl.raw, true
-			}
+		written, target := candidates(arg, v, dir)
+		if slices.ContainsFunc(written, rl.matches) {
+			return rl.raw, true
+		}
+		if slices.ContainsFunc(target, rl.matches) {
+			// Say so: by its name alone the block looks like a mistake.
+			return fmt.Sprintf("%s, through a link to %s", rl.raw, target[0]), true
 		}
 	}
 	return "", false
@@ -129,11 +132,11 @@ var (
 // split at every separator, line, subshell and substitution, and each part is
 // checked from every word on, so `if sudo y` and `env sudo y` are caught.
 // A path is checked as given, by its base name, and as a lexical absolute and
-// project-relative path.
+// project-relative path; a link also by its target, returned apart.
 // ponytail: text splitting, not a shell parser. It errs toward blocking
 // (`git commit -m "drop sudo use"` is blocked) and cannot see commands built
 // at run time ($(echo sudo) y). Use a real parser if that matters.
-func candidates(arg, value, dir string) []string {
+func candidates(arg, value, dir string) (written, target []string) {
 	if arg == "command" {
 		var parts []string
 		for _, v := range []string{value, shellUnquote.Replace(value)} {
@@ -143,14 +146,14 @@ func candidates(arg, value, dir string) []string {
 				}
 			}
 		}
-		return parts
+		return parts, nil
 	}
 	if arg == "url" {
 		// Claude Code's WebFetch(domain:example.com) works here too.
 		if u, err := url.Parse(value); err == nil && u.Hostname() != "" {
-			return []string{value, "domain:" + strings.ToLower(u.Hostname())}
+			return []string{value, "domain:" + strings.ToLower(u.Hostname())}, nil
 		}
-		return []string{value}
+		return []string{value}, nil
 	}
 	out := []string{value, filepath.Base(value)}
 	// Only file_path has home expansion; search patterns are literals.
@@ -159,13 +162,30 @@ func candidates(arg, value, dir string) []string {
 	} else if !filepath.IsAbs(value) {
 		value = filepath.Join(dir, value)
 	}
-	if abs, err := filepath.Abs(value); err == nil {
-		out = append(out, abs, filepath.Base(abs))
-		if base, err := filepath.Abs(dir); err == nil {
-			if rel, err := filepath.Rel(base, abs); err == nil {
-				out = append(out, rel)
-			}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return out, nil
+	}
+	base, _ := filepath.Abs(dir)
+	out = appendPath(out, abs, base)
+	// A link is checked by what it points to as well, folders on the way
+	// included (issue #23). A path that does not resolve does not exist:
+	// nothing can be read through it.
+	if real, err := filepath.EvalSymlinks(abs); err == nil && real != abs {
+		if realBase, err := filepath.EvalSymlinks(base); err == nil {
+			base = realBase
 		}
+		target = appendPath(nil, real, base)
+	}
+	return out, target
+}
+
+// appendPath adds an absolute path, its base name and its path relative to
+// the project folder base.
+func appendPath(out []string, abs, base string) []string {
+	out = append(out, abs, filepath.Base(abs))
+	if rel, err := filepath.Rel(base, abs); err == nil {
+		out = append(out, rel)
 	}
 	return out
 }

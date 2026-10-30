@@ -246,20 +246,28 @@ func (t *Telegram) recoverAnswer(ctx context.Context, id string, thread int64) {
 	if !waiting {
 		return // the watcher already delivered it
 	}
+	t.settle(ctx, id, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+}
+
+// settle decides a waiting session no live event will finish: a pending
+// turn keeps its topic; a finished last turn has its answer sent from the
+// stored history (its turn_done cleans up, and live copies are then
+// ignored); a turn that never finished tells the topic lost and forgets it.
+// Runs with outputMu held.
+func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost string) {
 	s, err := t.svc.GetSession(ctx, id)
 	if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
 		return
 	}
 	var turn []api.Event
 	if err == nil {
-		turn, err = t.lastTurn(ctx, id)
+		turn, err = t.storedEvents(ctx, id, 0, 0)
 	}
 	if err != nil && !api.IsNotFound(err) {
 		slog.Warn("telegram: check a waiting session", "session", id, "err", err)
 		return // kept: the next start checks again
 	}
 	if len(turn) > 0 && turn[len(turn)-1].Kind == api.KindTurnDone {
-		// Its turn_done cleans up; live copies are then ignored.
 		for _, ev := range turn {
 			t.sendReplyEvent(ctx, ev)
 		}
@@ -269,30 +277,34 @@ func (t *Telegram) recoverAnswer(ctx context.Context, id string, thread int64) {
 	delete(t.state.ReplyTo, id)
 	t.mu.Unlock()
 	t.save()
-	t.reply(ctx, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+	t.reply(ctx, thread, lost)
 }
 
-// lastTurn reads a session's stored events from its last user message on,
-// without notices: they are routed on their own.
-func (t *Telegram) lastTurn(ctx context.Context, id string) ([]api.Event, error) {
-	var turn []api.Event
-	var after int64
+// storedEvents reads a session's stored events after seq after and before
+// seq until (0 = no end), without notices: they are routed on their own.
+// With after 0 it starts at the last user message (the last turn).
+func (t *Telegram) storedEvents(ctx context.Context, id string, after, until int64) ([]api.Event, error) {
+	var events []api.Event
+	last := after == 0
 	for {
 		page, err := t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: after, Limit: 1000})
 		if err != nil {
 			return nil, err
 		}
 		for _, ev := range page.Items {
-			if ev.Kind == api.KindUserMessage {
-				turn = turn[:0]
+			if until != 0 && ev.Seq >= until {
+				return events, nil
+			}
+			if last && ev.Kind == api.KindUserMessage {
+				events = events[:0]
 			}
 			if ev.Kind != api.KindNotice {
-				turn = append(turn, ev)
+				events = append(events, ev)
 			}
 			after = ev.Seq
 		}
 		if page.Next == "" || len(page.Items) == 0 {
-			return turn, nil
+			return events, nil
 		}
 	}
 }

@@ -68,6 +68,14 @@ func (t *Telegram) registerCreated(ctx context.Context, id string, thread int64)
 		}
 		delete(t.output.held, id)
 		delete(t.output.replaying, id)
+		t.mu.Lock()
+		_, waiting := t.state.ReplyTo[id]
+		t.mu.Unlock()
+		if waiting && ctx.Err() == nil {
+			// A completion that could not be saved and came before the
+			// creation response is gone: settle it from the session itself.
+			t.settle(ctx, id, thread, "⚠ This turn ended without a saved answer, so it was lost. Send your message again.")
+		}
 		t.outputMu.Unlock()
 	}()
 	t.mu.Lock()
@@ -111,6 +119,9 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 	if !asked {
 		delete(t.output.seq, ev.SessionID)
 		delete(t.output.noticeSeq, ev.SessionID)
+	}
+	if asked && ev.Kind == api.KindTurnDone && ev.Seq > t.output.seq[ev.SessionID]+1 && !t.replayMissed(ctx, ev) {
+		return // unknown: the topic keeps waiting, and the next start settles it
 	}
 	seq := t.output.seq
 	if ev.Kind == api.KindNotice {
@@ -232,6 +243,24 @@ func (t *Telegram) finishSent(ctx context.Context, id string) {
 	if done {
 		t.finishReply(ctx, id, seq, generation)
 	}
+}
+
+// replayMissed sends the stored events of a waiting session that this bot
+// did not see live before done, its turn_done: the bot attached during a
+// hand-over, or the hub dropped its stream. With nothing seen yet it starts
+// at the turn's user message. Runs with outputMu held.
+func (t *Telegram) replayMissed(ctx context.Context, done api.Event) bool {
+	missed, err := t.storedEvents(ctx, done.SessionID, t.output.seq[done.SessionID], done.Seq)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.Warn("telegram: read missed events", "session", done.SessionID, "err", err)
+		}
+		return false
+	}
+	for _, ev := range missed {
+		t.sendReplyEvent(ctx, ev)
+	}
+	return true
 }
 
 // callKey names a tool call across sessions: call ids are only unique in one.

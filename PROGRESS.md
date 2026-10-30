@@ -93,6 +93,34 @@
 - `docs/PLAN.md` Telegram failure contract: startup recovery, held unsaved completions, regression names.
 - Checks, all exit 0: 11 Telegram reply regressions `-count=100`; focused tests; race tests; `make check`; `git diff --check`; base diff check. Evidence: `/tmp/germes-r6-fix3-path` -> `/tmp/germes-r6-fix3.*`. Both review gates must run again on the new commit.
 
+### Round 6 fourth check
+
+- HEAD `c6974e6132d0faa599265c07c72f82507a53d36a`, clean tree; `origin/main` still `28b473d` after fetch. All exit 0: `make check` (`/tmp/germes-r6-check4.log`), focused tests (`/tmp/germes-r6-focused4.log`), race tests (`/tmp/germes-r6-race4.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 fourth independent Codex review (HEAD `c6974e6`)
+
+- Evidence `/tmp/germes-r6-review4.isNIn8/` (transcript.log, verdict.txt, exit 0, session `01a18e27-af5a-7f92-9c06-bed44149b514`, read-only / never). HEAD, status and worktree diff unchanged. No failed reviewer commands. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections; also bot.go, watch.go, plan.go, api, daemon service, main wiring, store events, file.Save callers. VERDICT: Actionable findings: 3.
+- Open findings for the fix step:
+  1. P2 `telegram.go:250`, `out.go:25`: startup skips history for working sessions and the watcher attaches without history. If the final text was saved before the new watcher attached while the worker is still finalizing, the new bot gets only `turn_done`: empty text buffer, cleanup removes the destination, answer silently lost. A dropped and resubscribed stream has the same gap. Suggested: reconcile stored reply history for waiting sessions on every attachment, with per-session cursors and subscribe-before-replay.
+  2. P2 `out.go:35`, `out.go:134`: a new session can publish Seq-0 error/`turn_done` (save failure) before `SendMessage` returns, before registration and `replaying[id]`; they are ignored, replay cannot find them, the topic types forever. Suggested: after creation replay, if the session is idle with nothing queued and no stored completion, send an explicit failure and clean up. Test: terminal events before acceptance.
+  3. P2 `out.go:153`: `reply` only logs Telegram network/5xx errors; the answer buffer is then dropped and `finishReply` removes the destination, so a transient Telegram failure loses the answer for good. Suggested: return delivery errors, keep pending output and destination, retry with context-aware backoff, acknowledge only after success.
+
+### Round 6 fourth consistency audit (read-only, HEAD `c6974e6`)
+
+- Finding 1 CONFIRMED (pre-existing on main: `28b473d` out.go:27 watches with an empty `WatchFilter`, no history). The live-only watcher can miss a waiting session's final text (published before the new bot subscribed during hand-over, or while the hub dropped a slow watcher, `internal/session/watch.go:51-55`) and still clean up on the later `turn_done`. Inside this responsibility (reply retention across hand-over). Suggested smallest fix, reusing existing pieces: on a stored `turn_done` for a waiting session, if the bot has not seen every stored event before it (`ev.Seq != output.seq[id]+1`), replay the missing stored events (after `output.seq[id]`, or the last turn via `lastTurn` when nothing was seen) through `sendReplyEvent` before handling `turn_done`. Regression: text saved before the watcher attaches, only `turn_done` live.
+- Finding 2 CONFIRMED but self-limiting: the topic types until the next bot start, where `recoverAnswer` warns "lost". Real on a failed save at a new session's first turn (disk full). Suggested smallest fix: after `registerCreated` replays history, run the same idle/unfinished-turn decision `recoverAnswer` uses (outputMu is already held), so the user gets the warning at once and the topic is cleaned. Regression: Seq-0 error and `turn_done` before acceptance.
+- Finding 3 VERIFIED as behavior, REJECTED for this round with evidence: identical on main (`28b473d` telegram.go:502-506; `bot.call` retries only a 429 once). It is outbound delivery reliability in the Telegram transport, not reply-state bookkeeping, and fixing it needs a retry policy (how long, whether pending output survives a restart) that no contract defines, which this loop must not invent. Required instead: record it in PLAN Telegram failures as a known limit (a failed answer send is logged, not retried; the answer stays in session history) so later reviews see the decision, and tell the user it needs their policy call.
+- Peers: `registerCreated` replay and `recoverAnswer`/`lastTurn` already read stored history; findings 1 and 2 should reuse them, not add a new mechanism. Rules R1-R48 unique. Result: FINDINGS.
+
+### Round 6 fourth fix (findings 1 and 2; finding 3 documented)
+
+- `internal/telegram/telegram.go`: `recoverAnswer`'s decision moved into `settle` (runs with `outputMu` held; the lost text is a parameter). `lastTurn` became `storedEvents(id, after, until)`: stored events after/before a sequence, notices excluded; with `after == 0` from the last user message.
+- `internal/telegram/out.go`: (1) `sendReplyEvent`: a stored `turn_done` for a waiting session after a gap in the sequences this bot saw first calls `replayMissed` (stored events between the last seen sequence, or the turn's user message, and the `turn_done`). If they cannot be read, the `turn_done` is not handled and the topic waits for the next start to settle it. (2) `registerCreated`: after the stored replay and held events, a session still waiting is passed to `settle`, so an idle new session whose last turn has no stored `turn_done` gets "the turn ended without a saved answer" at once.
+- Finding 3 not fixed, as decided by the audit: PLAN Telegram failures now record that a failed answer send is logged, not retried, and the topic is treated as answered (answer stays in session history); retry needs a user policy decision.
+- `TestSendFileUploadsToTheTopicThatAsked`: its fake now reports the new session working (it was idle with no history right after acceptance, which a real accepted message never is), otherwise the new settle step correctly calls that turn lost.
+- New regressions: `TestRunTurnDoneReplaysMissedEvents/{none-seen,partly-seen}`, `TestRunCreationSettlesUnsavedTurnBeforeResponse`. BEFORE (HEAD `out.go`/`telegram.go` via `-overlay`): all failed, exit 1 (answer not sent; no notice, topic stuck). AFTER: pass.
+- Checks, all exit 0: 13 Telegram reply regressions `-count=100`; focused tests; race tests; `make check`; `git diff --check`; base diff check. Evidence: `/tmp/germes-r6-fix4-path` -> `/tmp/germes-r6-fix4.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

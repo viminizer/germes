@@ -1116,3 +1116,103 @@ func TestRunCreationKeepsUnsavedCompletion(t *testing.T) {
 		}
 	})
 }
+
+// The live stream can miss a waiting session's final text: the bot attached
+// during a hand-over after it was saved ("none-seen"), or the hub dropped
+// the stream in the middle of the turn ("partly-seen"). The turn_done then
+// sends the missed stored events first.
+func TestRunTurnDoneReplaysMissedEvents(t *testing.T) {
+	for _, name := range []string{"none-seen", "partly-seen"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				path := savedState(t, "s1", 7)
+				svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 3)}}}}
+				svc.history = []api.Event{
+					{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+					{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "the answer"},
+					{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+				}
+				startup := true
+				svc.lookup = func(context.Context, string) (api.Session, error) {
+					if startup {
+						startup = false
+						return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+					}
+					return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+				}
+				tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+				tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+				tg.bot.http.Transport = tr
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- tg.Run(ctx) }()
+				<-tr.polls
+				if name == "partly-seen" {
+					svc.events <- svc.history[0]
+				}
+				svc.events <- svc.history[2] // the text went out before this stream saw it
+				synctest.Wait()
+				if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" || tr.sent[0]["message_thread_id"] != float64(7) {
+					t.Errorf("sent = %v, want the answer once in topic 7", tr.sent)
+				}
+				if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+					t.Error("the finished turn is still waiting")
+				}
+				cancel()
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
+// A new session's first turn can fail to save and end before the creation
+// response (Seq 0 error and turn_done, issue #25). Nothing stored finishes
+// it, so the topic is told at once instead of typing until the next start.
+func TestRunCreationSettlesUnsavedTurnBeforeResponse(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"topics":{"8":{"project":"/project"}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 2)}}}}
+		svc.history = []api.Event{{SessionID: "created", Seq: 1, Kind: api.KindUserMessage, Text: "first request"}}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "created", Status: api.StatusIdle}, nil
+		}
+		started, release := make(chan struct{}), make(chan struct{})
+		svc.send = func(context.Context, api.MessageRequest) (api.MessageResult, error) {
+			close(started)
+			<-release
+			return api.MessageResult{SessionID: "created"}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		tr.updates <- []update{msg(1, 8, kevin, "first request")}
+		<-started
+		svc.events <- api.Event{SessionID: "created", Kind: api.KindError, Text: "could not save the conversation"}
+		svc.events <- api.Event{SessionID: "created", Kind: api.KindTurnDone}
+		synctest.Wait() // both went out before the session was registered
+		close(release)
+		<-tr.polls
+		synctest.Wait()
+		if len(tr.sent) != 1 || !strings.Contains(tr.sent[0]["text"].(string), "without a saved answer") || tr.sent[0]["message_thread_id"] != float64(8) {
+			t.Errorf("sent = %v, want the lost-answer notice in topic 8", tr.sent)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["created"]; waiting {
+			t.Error("the unsaved turn left the topic waiting")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

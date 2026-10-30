@@ -456,6 +456,9 @@ func TestFileSentToTheBotReachesTheSession(t *testing.T) {
 
 func TestSendFileUploadsToTheTopicThatAsked(t *testing.T) {
 	fake, svc, tg := startBot(t)
+	svc.mu.Lock()
+	svc.working = map[string]bool{"s1": true} // the new session works on the message
+	svc.mu.Unlock()
 	project := t.TempDir()
 	fake.push(msg(1, 7, kevin, "/bind "+project), msg(2, 7, kevin, "send me the report"))
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {

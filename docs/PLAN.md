@@ -1021,7 +1021,7 @@ Not its own module. The overseer is a normal session with:
 - A bound topic has its own session for that project: folder = project, project toolset, loads `AGENTS.md`.
 - `/new` in a topic: fresh session for the same project. `/unbind`: remove the binding.
 - Rule: project topic → that project's session. General or unbound topic → the overseer (any subject, any project).
-- Bindings are saved in `~/.germes/telegram.json` (owned by this module, no new `Service` methods).
+- Bindings are saved in `~/.germes/telegram.json` (owned by this module, no new `Service` methods), with the sessions waiting for an answer and their topics (`reply_to`), so a new bot after a daemon hand-over still sends them.
 
 ### Messages
 
@@ -1238,6 +1238,8 @@ Rule: every failure is handled gracefully (R26). Recover when possible. Otherwis
 - Bound folder is gone: reply with an error and suggest `/bind`.
 - Long answer: split at 4096 characters.
 - The 👀 reaction fails: logged only; it is a hint, and the message still goes to the session.
+- The daemon hands over during a turn: the new bot loads the waiting sessions from `telegram.json` and sends the answer when the old daemon's turn ends.
+- A waiting session is no longer working when the bot starts (the daemon crashed or restarted, or the turn ended during the hand-over): its topic gets "the answer was lost, send your message again", and it is forgotten. The session can't be checked: it stays saved, and the next start checks again.
 - A file I send cannot be fetched (over 20 MB on Telegram's servers, download or disk error): reply "Could not get the file" with the reason; nothing goes to the session.
 - `send_file` refuses a missing file, a folder or one over 50 MB, so the agent can tell me. The upload fails: reply "Could not send the file" with the reason.
 

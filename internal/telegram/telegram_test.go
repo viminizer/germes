@@ -141,6 +141,7 @@ type fakeService struct {
 	mu          sync.Mutex
 	messages    []api.MessageRequest
 	events      chan api.Event
+	working     map[string]bool // sessions GetSession reports working; others are idle
 }
 
 func (s *fakeService) SendMessage(ctx context.Context, r api.MessageRequest) (api.MessageResult, error) {
@@ -159,6 +160,11 @@ func (s *fakeService) Watch(ctx context.Context, f api.WatchFilter) (<-chan api.
 }
 
 func (s *fakeService) GetSession(ctx context.Context, id string) (api.Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.working[id] {
+		return api.Session{ID: id, Status: api.StatusWorking}, nil
+	}
 	return api.Session{ID: id, Status: api.StatusIdle}, nil
 }
 
@@ -322,16 +328,22 @@ func TestBindButtonsWhenSeveralMatch(t *testing.T) {
 
 // startBot runs a bot against a fake Bot API and a fake Germes.
 func startBot(t *testing.T) (*fakeAPI, *fakeService, *Telegram) {
+	svc := &fakeService{events: make(chan api.Event, 10)}
+	fake, tg := startBotFrom(t, svc, filepath.Join(t.TempDir(), "telegram.json"))
+	return fake, svc, tg
+}
+
+// startBotFrom runs a bot on a saved state, as after a daemon hand-over.
+func startBotFrom(t *testing.T, svc *fakeService, statePath string) (*fakeAPI, *Telegram) {
 	fake := &fakeAPI{}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
-	svc := &fakeService{events: make(chan api.Event, 10)}
 	tg := New(svc, Options{Token: "SECRET", ChatID: chatID, UserID: kevin, APIBase: srv.URL,
-		StatePath: filepath.Join(t.TempDir(), "telegram.json"), FilesDir: t.TempDir()})
+		StatePath: statePath, FilesDir: t.TempDir()})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go tg.Run(ctx)
-	return fake, svc, tg
+	return fake, tg
 }
 
 func TestFileSentToTheBotReachesTheSession(t *testing.T) {
@@ -361,7 +373,7 @@ func TestSendFileUploadsToTheTopicThatAsked(t *testing.T) {
 	fake.push(msg(1, 7, kevin, "/bind "+project), msg(2, 7, kevin, "send me the report"))
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		tg.mu.Lock()
-		_, asked := tg.replyTo["s1"]
+		_, asked := tg.state.ReplyTo["s1"]
 		tg.mu.Unlock()
 		if asked {
 			break
@@ -393,5 +405,44 @@ func TestMessagesToSessionsGetEyes(t *testing.T) {
 	defer fake.mu.Unlock()
 	if want := []string{"1 👀", "3 👀"}; !slices.Equal(fake.reacted, want) {
 		t.Fatalf("reactions %q, want %q (a command gets none)", fake.reacted, want)
+	}
+}
+
+// savedState writes a telegram.json in which the session waits for its
+// answer in the topic.
+func savedState(t *testing.T, session string, thread int64) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "telegram.json")
+	b, _ := json.Marshal(state{ReplyTo: map[string]int64{session: thread}})
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestAnswerAfterAHandOverReachesTheTopic(t *testing.T) {
+	svc := &fakeService{events: make(chan api.Event, 10), working: map[string]bool{"s1": true}}
+	fake, _ := startBotFrom(t, svc, savedState(t, "s1", 7))
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindText, Text: "Done in the old daemon."}
+	svc.events <- api.Event{SessionID: "s1", Kind: api.KindTurnDone}
+	if fake.waitSent(t, "Done in the old daemon.") != 7 {
+		t.Fatal("the answer went to the wrong topic")
+	}
+}
+
+func TestAnswerLostWhileNoBotWatchedIsTold(t *testing.T) {
+	svc := &fakeService{events: make(chan api.Event, 10)} // s1 is idle: its turn ended unseen
+	statePath := savedState(t, "s1", 7)
+	fake, _ := startBotFrom(t, svc, statePath)
+	if fake.waitSent(t, "the answer was lost") != 7 {
+		t.Fatal("the notice went to the wrong topic")
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, waiting := New(svc, Options{StatePath: statePath}).state.ReplyTo["s1"]; !waiting {
+			return // forgotten, so the next start does not tell it again
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the lost session is still saved as waiting")
+		}
 	}
 }

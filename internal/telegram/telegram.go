@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -63,14 +64,15 @@ type Telegram struct {
 
 	mu      sync.Mutex
 	state   state
-	replyTo map[string]int64    // session -> topic waiting for its answer
 	choices map[string][]string // /bind buttons: token -> project folders
 }
 
-// state is saved in telegram.json.
+// state is saved in telegram.json. ReplyTo is saved too, so a new bot after
+// a daemon hand-over still sends the answers the old one was waiting for.
 type state struct {
-	Offset int64           `json:"offset"` // the next update to read
-	Topics map[int64]topic `json:"topics"` // topic id -> binding
+	Offset  int64            `json:"offset"`             // the next update to read
+	Topics  map[int64]topic  `json:"topics"`             // topic id -> binding
+	ReplyTo map[string]int64 `json:"reply_to,omitempty"` // session -> topic waiting for its answer
 }
 
 // topic is a topic bound to a project, with its current session.
@@ -87,8 +89,7 @@ func New(svc api.Service, opts Options) *Telegram {
 		base = "https://api.telegram.org"
 	}
 	b := &bot{base: base + "/bot" + opts.Token, files: base + "/file/bot" + opts.Token, http: &http.Client{}}
-	t := &Telegram{svc: svc, opts: opts, bot: b,
-		replyTo: map[string]int64{}, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}}}
+	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}}}
 	if b, err := os.ReadFile(opts.StatePath); err == nil {
 		if err := json.Unmarshal(b, &t.state); err != nil {
 			slog.Warn("telegram: state file is broken; starting without bindings", "path", opts.StatePath, "err", err)
@@ -97,6 +98,9 @@ func New(svc api.Service, opts Options) *Telegram {
 	}
 	if t.state.Topics == nil {
 		t.state.Topics = map[int64]topic{}
+	}
+	if t.state.ReplyTo == nil {
+		t.state.ReplyTo = map[string]int64{}
 	}
 	return t
 }
@@ -107,6 +111,7 @@ func (t *Telegram) Run(ctx context.Context) error {
 	t.setCommands(ctx)
 	go recovered("telegram watch", func() { t.watch(ctx) })
 	go recovered("telegram typing", func() { t.showTyping(ctx) })
+	t.tellLostAnswers(ctx)
 	for ctx.Err() == nil {
 		var updates []update
 		err := t.bot.call(ctx, "getUpdates", map[string]any{"offset": t.offset(), "timeout": pollTimeout,
@@ -192,8 +197,38 @@ func (t *Telegram) ask(ctx context.Context, thread int64, text string, plan bool
 		return
 	}
 	t.mu.Lock()
-	t.replyTo[id] = thread
+	t.state.ReplyTo[id] = thread
 	t.mu.Unlock()
+	t.save()
+}
+
+// tellLostAnswers runs at start. A saved session that is no longer working
+// ended its turn while no bot watched (the daemon crashed or restarted, or
+// the turn ended during a hand-over), so its answer is lost: its topic is
+// told, and it is forgotten. Sessions still working are answered as usual.
+func (t *Telegram) tellLostAnswers(ctx context.Context) {
+	t.mu.Lock()
+	waiting := maps.Clone(t.state.ReplyTo)
+	t.mu.Unlock()
+	lost := false
+	for id, thread := range waiting {
+		s, err := t.svc.GetSession(ctx, id)
+		if err != nil && !api.IsNotFound(err) {
+			slog.Warn("telegram: check a waiting session", "session", id, "err", err)
+			continue // kept: the next start checks again
+		}
+		if err == nil && s.Status == api.StatusWorking {
+			continue
+		}
+		t.mu.Lock()
+		delete(t.state.ReplyTo, id)
+		t.mu.Unlock()
+		lost = true
+		t.reply(ctx, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+	}
+	if lost {
+		t.save()
+	}
 }
 
 // askWithFile saves the file and sends its caption and path to the topic's
@@ -469,11 +504,13 @@ func (t *Telegram) reply(ctx context.Context, thread int64, text string) {
 	}
 }
 
-// save writes the state. It is small and rebuilt by /bind if lost.
+// save writes the state. It is small and rebuilt by /bind if lost. The
+// lock is held while writing: the poll and the watch both save, and an
+// older state written last would bring back a finished session.
 func (t *Telegram) save() {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	b, err := json.MarshalIndent(t.state, "", "  ")
-	t.mu.Unlock()
 	if err == nil {
 		err = os.WriteFile(t.opts.StatePath, b, 0o600)
 	}

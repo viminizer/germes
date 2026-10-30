@@ -31,7 +31,7 @@ func (t *Telegram) watch(ctx context.Context) {
 		}
 		for ev := range events {
 			t.mu.Lock()
-			thread, asked := t.replyTo[ev.SessionID]
+			thread, asked := t.state.ReplyTo[ev.SessionID]
 			t.mu.Unlock()
 			switch {
 			case ev.Kind == api.KindNotice:
@@ -56,8 +56,9 @@ func (t *Telegram) watch(ctx context.Context) {
 				// Messages queued during the turn run next: keep listening.
 				if s, err := t.svc.GetSession(ctx, ev.SessionID); err != nil || (s.Status == api.StatusIdle && len(s.Queued) == 0) {
 					t.mu.Lock()
-					delete(t.replyTo, ev.SessionID)
+					delete(t.state.ReplyTo, ev.SessionID)
 					t.mu.Unlock()
+					t.save()
 				}
 			}
 		}
@@ -80,7 +81,7 @@ func (t *Telegram) upload(ctx context.Context, thread int64, path string) {
 // topic bound to it or to its project, else General.
 func (t *Telegram) threadFor(ctx context.Context, sessionID string) int64 {
 	t.mu.Lock()
-	if thread, ok := t.replyTo[sessionID]; ok {
+	if thread, ok := t.state.ReplyTo[sessionID]; ok {
 		t.mu.Unlock()
 		return thread
 	}
@@ -117,7 +118,7 @@ func (t *Telegram) showTyping(ctx context.Context) {
 		}
 		t.mu.Lock()
 		threads := map[int64]bool{}
-		for _, thread := range t.replyTo {
+		for _, thread := range t.state.ReplyTo {
 			threads[thread] = true
 		}
 		t.mu.Unlock()

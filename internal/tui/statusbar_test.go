@@ -11,22 +11,24 @@ import (
 	"github.com/viminizer/germes/internal/api"
 )
 
-func TestFooterFitsAndDropsTheLeastImportantFirst(t *testing.T) {
+func TestStatusLineFitsAndDropsTheLeastImportantFirst(t *testing.T) {
 	s := statusBar{
 		Engine:   "codex-api",
 		Context:  &api.Context{Model: "gpt-5.5", Used: 57_000, Window: 200_000},
 		Started:  time.Now().Add(-2*time.Hour - 5*time.Minute),
 		LastTurn: 13 * time.Second,
 		Branch:   "germes/abc123",
+		Title:    "Fix the footer under the input",
+		Project:  "/p/germes",
 	}
 	for _, c := range []struct {
 		width      int
 		has, lacks []string
 	}{
-		{160, []string{"ready", "gpt-5.5", "57K/200K", "28%", "session 2h 5m", "turn 13s", "⎇ germes/abc123", keyHints}, nil},
-		{90, []string{"ready", "gpt-5.5", "57K/200K", "⎇ germes/abc123"}, []string{keyHints}},
-		{60, []string{"ready", "gpt-5.5", "57K/200K"}, []string{keyHints, "⎇"}},
-		{20, []string{"ready"}, []string{keyHints}},
+		{160, []string{"ready", "gpt-5.5", "57K/200K", "28%", "2h 5m", "✓ 13s", "Fix the footer under the input (germes/abc123)"}, nil},
+		{90, []string{"ready", "gpt-5.5", "57K/200K", "2h 5m", "…"}, []string{"Fix the footer"}},
+		{50, []string{"ready", "gpt-5.5", "57K/200K"}, []string{"2h 5m", "germes/abc123"}},
+		{20, []string{"ready"}, nil},
 	} {
 		got := ansi.Strip(s.view(c.width))
 		if strings.Contains(got, "\n") || lipgloss.Width(got) > c.width {
@@ -43,9 +45,10 @@ func TestFooterFitsAndDropsTheLeastImportantFirst(t *testing.T) {
 			}
 		}
 	}
-	// Before a turn ends there is no context: the engine stands in for the model.
-	if got := ansi.Strip(statusBar{Engine: "codex-api"}.view(80)); !strings.Contains(got, "codex-api") {
-		t.Errorf("no context: %q", got)
+	// Before a turn ends there is no context: the engine stands in for the
+	// model; before a title the project is on the right.
+	if got := ansi.Strip(statusBar{Engine: "codex-api", Project: "/p/germes"}.view(80)); !strings.Contains(got, "codex-api") || !strings.HasSuffix(got, "─ /p/germes") {
+		t.Errorf("no context, no title: %q", got)
 	}
 }
 
@@ -60,26 +63,11 @@ func TestFooterWritesShortNumbers(t *testing.T) {
 			t.Errorf("shortDuration(%s) = %q, want %q", in, got, want)
 		}
 	}
-	if got := ansi.Strip(contextUse(api.Context{Used: 300_000, Window: 200_000})); !strings.Contains(got, "████████ 100%") {
+	if got := ansi.Strip(contextUse(api.Context{Used: 300_000, Window: 200_000})); !strings.Contains(got, "[██████████] 100%") {
 		t.Errorf("over the window: %q", got)
 	}
 	if got := ansi.Strip(contextUse(api.Context{Used: 4000})); got != "4K" {
 		t.Errorf("unknown window: %q", got)
-	}
-}
-
-func TestTitleRuleFitsWithTheTitleOnTheRight(t *testing.T) {
-	for _, width := range []int{120, 40, 8} {
-		got := ansi.Strip(titleRule{Title: "Fix the footer under the input", Project: "/p"}.view(width))
-		if lipgloss.Width(got) != width && width >= 12 || lipgloss.Width(got) > width {
-			t.Errorf("width %d: %d wide: %q", width, lipgloss.Width(got), got)
-		}
-		if width == 120 && !strings.HasSuffix(got, " Fix the footer under the input") {
-			t.Errorf("title not on the right: %q", got)
-		}
-	}
-	if got := ansi.Strip(titleRule{Project: "/p/germes"}.view(40)); !strings.HasSuffix(got, "/p/germes") {
-		t.Errorf("no title: %q", got)
 	}
 }
 

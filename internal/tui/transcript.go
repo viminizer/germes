@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -9,30 +11,39 @@ import (
 )
 
 // transcript turns session events into finished messages (printed above the
-// live area) and keeps the live part: running tools and the last, unfinished
-// line of the streaming reply. Finished lines go to the scrollback as they
-// stream, so a long reply never outgrows the screen.
+// live area) and keeps the live part: the tool calls of the current step
+// and the last, unfinished line of the streaming reply. Finished lines go
+// to the scrollback as they stream, so a long reply never outgrows the
+// screen.
 type transcript struct {
 	dir       string          // project folder, for short paths
 	streaming strings.Builder // the unfinished line
+	held      string          // finished lines of an open code block or table
 	printed   string          // the part of the current reply already printed
 	started   bool            // a message of the current reply is printed
-	running   []*api.ToolCall // tool calls waiting for their result
-	group     []*api.ToolCall // finished routine calls (reads, searches) not printed yet
+	tools     []toolRun       // calls since the last text, printed as one tree
 	lastSeq   int64
 }
 
-// routine tools only look around; in a row they print as one line.
-var routine = map[string]bool{"Read": true, "Glob": true, "Grep": true, "LS": true, "skill_view": true,
-	"session_search": true, "WebFetch": true, "WebSearch": true}
+// toolRun is a tool call in the tree, with how long it took.
+type toolRun struct {
+	Call  *api.ToolCall
+	Start time.Time
+	Took  time.Duration
+	Done  bool
+}
 
-// apply takes one event and returns the messages it finished. Routine calls
-// wait in a group, printed as one line before whatever comes next.
+// apply takes one event and returns the messages it finished. Tool calls
+// wait in a tree, printed whole before the text or error that follows
+// them, like Hermes.
 func (t *transcript) apply(ev api.Event) []message {
 	out := t.applyEvent(ev)
-	if len(t.group) > 0 && (len(out) > 0 || ev.Kind == api.KindTurnDone) {
-		out = append([]message{{Kind: kindTools, Tools: t.group, Dir: t.dir}}, out...)
-		t.group = nil
+	ends := ev.Kind == api.KindTurnDone || slices.ContainsFunc(out, func(m message) bool {
+		return m.Kind == kindAssistant || m.Kind == kindError
+	})
+	if len(t.tools) > 0 && ends {
+		out = append([]message{{Kind: kindTools, Tools: t.tools, Dir: t.dir}}, out...)
+		t.tools = nil
 	}
 	return out
 }
@@ -59,10 +70,10 @@ func (t *transcript) applyEvent(ev api.Event) []message {
 		return t.endReply(rest)
 	case api.KindToolCall:
 		if ev.Tool != nil {
-			t.running = append(t.running, ev.Tool)
+			t.tools = append(t.tools, toolRun{Call: ev.Tool, Start: eventTime(ev)})
 		}
 	case api.KindToolResult:
-		return t.finishTool(ev.Tool)
+		t.finishTool(ev)
 	case api.KindError, api.KindLimitHit:
 		// Text streamed so far comes first, then the error under it.
 		return append(t.flushText(), message{Kind: kindError, Text: ev.Text})
@@ -77,51 +88,36 @@ func (t *transcript) applyEvent(ev api.Event) []message {
 	case api.KindCompacted:
 		return []message{{Kind: kindNotice, Text: "older history was summarized to keep the context small"}}
 	case api.KindTurnDone:
-		return t.flush()
+		return append(t.flushText(), message{Kind: kindTurnEnd})
 	}
 	return nil
 }
 
-func (t *transcript) finishTool(result *api.ToolCall) []message {
-	if result == nil {
-		return nil
+// finishTool puts a result on its call in the tree.
+func (t *transcript) finishTool(ev api.Event) {
+	if ev.Tool == nil {
+		return
 	}
-	for i, call := range t.running {
-		if call.ID == result.ID {
-			t.running = append(t.running[:i], t.running[i+1:]...)
-			done := *call
-			done.Output, done.IsError = result.Output, result.IsError
-			if done.Output == "" {
-				done.Output = "done"
-			}
-			if routine[done.Name] && !done.IsError {
-				t.group = append(t.group, &done)
-				return nil
-			}
-			return []message{{Kind: kindTool, Tool: &done, Dir: t.dir}}
+	for i := range t.tools {
+		run := &t.tools[i]
+		if run.Call.ID == ev.Tool.ID && !run.Done {
+			done := *run.Call
+			done.Output, done.IsError = ev.Tool.Output, ev.Tool.IsError
+			run.Call, run.Took, run.Done = &done, eventTime(ev).Sub(run.Start), true
+			return
 		}
 	}
-	return nil
-}
-
-// flush ends the turn: leftover text and tools without a result are printed.
-func (t *transcript) flush() []message {
-	out := t.flushText()
-	for _, call := range t.running {
-		out = append(out, message{Kind: kindTool, Tool: call, Dir: t.dir})
-	}
-	t.running = nil
-	return out
 }
 
 // flushText prints the rest of a reply that ends without its final text
 // (stopped, failed, or the turn ended).
 func (t *transcript) flushText() []message {
-	return t.endReply(t.streaming.String())
+	return t.endReply(t.held + t.streaming.String())
 }
 
 // printLines prints the finished lines of the streaming reply and keeps the
-// unfinished last line live.
+// unfinished last line live. An open code block or table waits until it
+// ends, so it is drawn whole.
 func (t *transcript) printLines() []message {
 	s := t.streaming.String()
 	i := strings.LastIndex(s, "\n")
@@ -130,15 +126,20 @@ func (t *transcript) printLines() []message {
 	}
 	t.streaming.Reset()
 	t.streaming.WriteString(s[i+1:])
-	t.printed += s[:i+1]
-	return t.reply(s[:i])
+	ready, held := readyBlocks(t.held + s[:i+1])
+	t.held = held
+	if ready == "" {
+		return nil
+	}
+	t.printed += ready
+	return t.reply(strings.TrimSuffix(ready, "\n"))
 }
 
 // endReply prints the rest of the reply and starts a new one.
 func (t *transcript) endReply(rest string) []message {
 	out := t.reply(strings.TrimRight(rest, " \t\n"))
 	t.streaming.Reset()
-	t.printed, t.started = "", false
+	t.held, t.printed, t.started = "", "", false
 	return out
 }
 
@@ -159,19 +160,33 @@ func (t *transcript) reply(text string) []message {
 // lastSeqShown is the last stored event shown, for reconnecting.
 func (t *transcript) lastSeqShown() int64 { return t.lastSeq }
 
-// view renders the live part: running tools with a spinner, then one row
-// for the unfinished line of the reply (empty when none). The row is always
-// there: a live area that changes height on every line loses or repeats
-// printed lines at the bottom of the screen.
-func (t *transcript) view(width int, spin string) string {
+// maxLiveTools is how many tree rows the live area shows; the printed
+// tree has them all.
+const maxLiveTools = 8
+
+// view renders the live part: the tool tree of the current step, running
+// calls with a spinner, then one row for the unfinished line of the reply
+// (empty when none). The row is always there: a live area that changes
+// height on every line loses or repeats printed lines at the bottom of the
+// screen.
+func (t *transcript) view(width int, spin string, now time.Time) string {
 	var parts []string
-	for _, call := range t.running {
-		parts = append(parts, styleAccent.Render(spin+" ")+styleText.Render(toolLabel(call, t.dir)))
+	// A blank line before a block, as it will be printed.
+	if len(t.tools) > 0 {
+		parts = append(parts, "", treeView(t.tools, t.dir, width, spin, now, maxLiveTools))
 	}
-	if s := t.streaming.String(); s != "" {
+	if s := lastLine(t.held + t.streaming.String()); s != "" {
+		if !t.started {
+			parts = append(parts, "")
+		}
 		parts = append(parts, ansi.Truncate(replyMark(t.started)+styleText.Render(s)+"▍", max(width, 1), "…"))
 	}
 	return strings.Join(parts, "\n")
+}
+
+func lastLine(s string) string {
+	s = strings.TrimSuffix(s, "\n")
+	return s[strings.LastIndex(s, "\n")+1:]
 }
 
 // attachedNames lists the references in an attachment ("--- @file:x ---" headers).

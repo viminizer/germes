@@ -85,7 +85,6 @@ type model struct {
 	queue      queueView
 	suggest    suggestBox
 	picker     sessionPicker
-	rule       titleRule
 	status     statusBar
 	composer   composer
 }
@@ -94,8 +93,7 @@ func newModel(ctx context.Context, svc api.Service, opts Options) *model {
 	return &model{
 		ctx: ctx, svc: svc, opts: opts, sessionID: opts.SessionID,
 		transcript: transcript{dir: opts.Dir},
-		rule:       titleRule{Project: opts.Project},
-		status:     statusBar{Engine: opts.Engine},
+		status:     statusBar{Engine: opts.Engine, Project: opts.Project},
 		composer:   newComposer(),
 	}
 }
@@ -461,32 +459,34 @@ func (m *model) flush() string {
 }
 
 func (m *model) View() tea.View {
-	// Running tools and the reply's unfinished line, then the queue.
+	// The tool tree and the reply's unfinished line, then the queue.
+	now := time.Now()
 	var parts []string
-	for _, p := range []string{m.transcript.view(m.width, m.status.spinner()), m.queue.view(m.width)} {
+	for _, p := range []string{m.transcript.view(m.width, m.status.spinner(), now), m.queue.view(m.width)} {
 		if p != "" {
 			parts = append(parts, p)
 		}
 	}
-	// A blank line, the input between a rule with the title and a plain
-	// rule, then a blank line and the footer close the app.
-	parts = append(parts, "", m.rule.view(m.width))
-	if m.picker.open {
-		parts = append(parts, m.picker.view(m.width, time.Now()), m.rule.bottom(m.width))
+	// A blank line, then the status line (or the suggestions in its place)
+	// and the input close the app, like Hermes.
+	parts = append(parts, "")
+	if sug := m.suggest.view(m.width); sug != "" && !m.picker.open {
+		parts = append(parts, sug)
 	} else {
-		parts = append(parts, m.composer.view(), m.rule.bottom(m.width))
-		if sug := m.suggest.view(m.width); sug != "" {
-			parts = append(parts, sug)
-		}
+		parts = append(parts, m.status.view(m.width))
 	}
-	parts = append(parts, "", m.status.view(m.width))
+	if m.picker.open {
+		parts = append(parts, m.picker.view(m.width, now))
+	} else {
+		parts = append(parts, m.composer.view())
+	}
 	return tea.NewView(strings.Join(parts, "\n"))
 }
 
-// showSession puts the session's title, start and branch in the rule and
-// footer.
+// showSession puts the session's title, start and branch in the status
+// line.
 func (m *model) showSession(s api.Session) {
-	m.rule.Title, m.status.Branch = s.Title, s.Branch
+	m.status.Title, m.status.Branch = s.Title, s.Branch
 	if !s.CreatedAt.IsZero() {
 		m.status.Started = s.CreatedAt
 	}

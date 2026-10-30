@@ -173,8 +173,7 @@ func (m *model) open(id string) tea.Cmd {
 	m.sessionID = id
 	m.transcript = transcript{dir: m.opts.Dir}
 	m.queue = queueView{}
-	m.status = statusBar{Engine: m.status.Engine} // a new session's own title, start, context and branch come with it
-	m.rule.Title = ""
+	m.status = statusBar{Engine: m.status.Engine, Project: m.opts.Project} // a new session's own title, start, context and branch come with it
 	if id == "" {
 		return nil
 	}

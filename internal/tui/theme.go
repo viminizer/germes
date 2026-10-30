@@ -14,6 +14,7 @@ var (
 	colorError   = lipgloss.Color("#EF5350")
 	colorOK      = lipgloss.Color("#4CAF50")
 	colorWarn    = lipgloss.Color("#FFA726")
+	colorSelect  = lipgloss.Color("#4E4E7A") // the selected row of a list
 )
 
 var (

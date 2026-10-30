@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -304,15 +303,24 @@ func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost str
 // catchUp sends the stored events a waiting session had after the last one
 // this bot saw, after the watcher subscribed again: the hub drops a watcher
 // that falls behind (a long rate-limit wait), and live events from the gap
-// are gone. A session with nothing seen yet waits for its turn_done, which
-// replays its turn. Before the first subscription nothing was seen.
+// are gone. A session with nothing seen yet is settled like at start: its
+// turn may have ended in the gap, and no live turn_done will come.
 func (t *Telegram) catchUp(ctx context.Context) {
 	t.mu.Lock()
-	waiting := slices.Collect(maps.Keys(t.state.ReplyTo))
+	waiting := maps.Clone(t.state.ReplyTo)
 	t.mu.Unlock()
-	for _, id := range waiting {
+	for id, thread := range waiting {
 		t.outputMu.Lock()
-		if after := t.output.seq[id]; after != 0 && !t.output.replaying[id] {
+		t.mu.Lock()
+		_, still := t.state.ReplyTo[id]
+		t.mu.Unlock()
+		switch after := t.output.seq[id]; {
+		case !still || t.output.replaying[id]:
+		case after == 0:
+			// Nothing seen yet (kept at start while it worked): if its
+			// turn ended in the gap, no live turn_done will come.
+			t.settle(ctx, id, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+		default:
 			missed, err := t.storedEvents(ctx, id, after, 0)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				slog.Warn("telegram: catch up a waiting session", "session", id, "err", err)

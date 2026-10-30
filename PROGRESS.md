@@ -147,6 +147,30 @@
 - New regressions: `TestRunStartupWaitsForFinalSave`, `TestRunWatchCatchesUpAfterDrop` (new `dropService` fake hands out streams so the test can drop one). BEFORE (HEAD code via `-overlay`): both failed, exit 1 (false lost warning; answer never sent, topic stuck). AFTER: pass. All `TestRun*` `-count=100` pass. Evidence: `/tmp/germes-r6-fix5-path` -> `/tmp/germes-r6-fix5.*`.
 - Committed as `008db74`, then rebased the branch onto `origin/main` `90e12a7ff54057678af8c4ee81ab0372223af2b1` with no conflicts. Main's overlap in `session/manager.go` and `worker.go` only adds session titles (`Titles` option, `namings`, `nameSession` at turn start) and does not touch claim/finish ordering. After the rebase, all exit 0: focused tests, race tests, `make check`, `git diff --check`, `git diff origin/main...HEAD --check`; rule numbers R46/R47/R48 still unique. Both review gates must run again on the rebased HEAD.
 
+### Round 6 sixth check (rebased)
+
+- HEAD `da05c8cf909a414ddb3e12cf02125a2b832dc839`, clean tree, based on `origin/main` `90e12a7ff54057678af8c4ee81ab0372223af2b1` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check6.log`), focused tests (`/tmp/germes-r6-focused6.log`), race tests (`/tmp/germes-r6-race6.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 sixth independent Codex review (rebased HEAD `da05c8c`)
+
+- Evidence `/tmp/germes-r6-review6.PrIU2x/` (transcript.log, verdict.txt, exit 0, session `01a18e52-8cf9-7162-b56f-36509f4e2840`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files and RULEBOOK through EOF in reads of at most 160 lines; PLAN scope sections; PROGRESS; peers. Title integration from main is clean; R1-R48 unique. VERDICT: Actionable findings: 1.
+- Open finding for the fix step:
+  1. P2 `internal/telegram/telegram.go:315` (`catchUp`): a session with no seen sequence (kept at startup because it was working or paused after a hand-over) is skipped. If its turn finishes while the watch is dropped, before this bot saw any of its events, nothing replays it and nothing arrives live; the topic types until the next start. Suggested: after a subscription also handle zero-cursor waiting sessions, at least settling idle ones from their stored last turn; extend the drop regression so nothing was seen before the drop.
+
+### Round 6 sixth consistency audit (read-only, rebased HEAD `da05c8c`)
+
+- Finding CONFIRMED: `catchUp` (`telegram.go:313-325`) only acts when `output.seq[id] != 0`. All-session `Watch` replays no history (`internal/session/watch.go:69-80` only replays for a single `SessionID`). A session kept at start because it was working/paused has no cursor until its first live event; if the watch is dropped before that and the turn ends during the drop, the gap replay never runs (no live `turn_done` arrives), so the topic types until the next start. Needs a hand-over plus a drop in the same turn: uncommon, but the result is a silent stuck topic, and the fix is small.
+- Suggested fix, reusing `settle`: in `catchUp`, clone `ReplyTo` (id and thread); for a session with no cursor, not in creation replay and still waiting under `outputMu`, call `settle` with the restart lost text. `settle` keeps working/paused/queued sessions, sends a finished last turn from history and only then rechecks before "lost". Regression: extend `TestRunWatchCatchesUpAfterDrop` with a case where nothing from the session was seen before the drop.
+- Rest of the scope: rebase integration with main's titles is clean (`nameSession` runs after the working status, before `snapshot`; no change to claim/finish). R1-R48 unique; PLAN matches the code except this case (the PLAN catch-up sentence says sessions with no cursor wait for their own `turn_done`, which is exactly the uncovered case and must be updated with the fix). Result: FINDINGS.
+
+### Round 6 sixth fix (zero-cursor catch-up)
+
+- `internal/telegram/telegram.go` `catchUp`: clones `ReplyTo` (id and topic), rechecks under `outputMu` that the session is still waiting and not in creation replay; with a last seen sequence it sends the stored events after it (as before); with none it calls `settle` (keeps working/paused/queued, sends a finished last turn from history, rechecks once before "lost"). Unused `slices` import removed.
+- `internal/telegram/out.go` `watch`: `catchUp` now runs only on re-subscriptions. A first draft also ran it on the first subscription: it repeated the start check and its one-second recheck ran on the watcher goroutine, so 10 existing Telegram tests failed (answers not delivered while the watcher waited). The start already settles every waiting session, so the first subscription needs no catch-up.
+- `TestRunWatchCatchesUpAfterDrop` is now a table `{partly-seen, none-seen}`; the session reports working until the test ends its turn. BEFORE (HEAD `telegram.go` via `-overlay`): `none-seen` failed, exit 1 (answer never sent, topic stuck); `partly-seen` passed (covered by the previous fix). AFTER: both pass.
+- PLAN catch-up sentence updated (not on the first subscription; a session with no cursor is settled like at start).
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix6-path` -> `/tmp/germes-r6-fix6.*`. Known small limit: on a re-subscription the recheck for an idle session with no stored `turn_done` holds the watcher for up to one second (only after a save failure). Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

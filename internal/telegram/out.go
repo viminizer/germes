@@ -21,14 +21,18 @@ const scanDepth = 3
 // the topic that asked, job notices to the project's topic (or General). A
 // dropped watch comes back after a short wait.
 func (t *Telegram) watch(ctx context.Context) {
-	for ctx.Err() == nil {
+	// The first subscription needs no catch-up: the start settles every
+	// waiting session itself (tellLostAnswers).
+	for attached := false; ctx.Err() == nil; attached = true {
 		events, err := t.svc.Watch(ctx, api.WatchFilter{})
 		if err != nil {
 			slog.Warn("telegram watch", "err", err)
 			wait(ctx, retryWait)
 			continue
 		}
-		t.catchUp(ctx)
+		if attached {
+			t.catchUp(ctx)
+		}
 		for ev := range events {
 			t.outputMu.Lock()
 			switch {

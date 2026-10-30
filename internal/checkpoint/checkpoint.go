@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/viminizer/germes/internal/worktree"
@@ -31,6 +33,15 @@ const exclude = ".germes/\n"
 // Create snapshots dir's files with a label and returns the snapshot's id.
 // An unchanged folder gives a snapshot too, so every turn has one.
 func Create(ctx context.Context, store, dir, label string) (string, error) {
+	lock, err := lockRepo(ctx, repoPath(store, dir), true)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
+	return create(ctx, store, dir, label)
+}
+
+func create(ctx context.Context, store, dir, label string) (string, error) {
 	gitDir, err := open(ctx, store, dir)
 	if err != nil {
 		return "", err
@@ -46,6 +57,11 @@ func Create(ctx context.Context, store, dir, label string) (string, error) {
 
 // List lists dir's snapshots, newest first, at most n.
 func List(ctx context.Context, store, dir string, n int) ([]Checkpoint, error) {
+	lock, err := lockRepo(ctx, repoPath(store, dir), true)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
 	gitDir := repoPath(store, dir)
 	if _, err := os.Stat(gitDir); err != nil {
 		return nil, nil // no snapshot yet
@@ -71,14 +87,19 @@ func List(ctx context.Context, store, dir string, n int) ([]Checkpoint, error) {
 // get their old content, files added since are removed. The current state
 // is saved first, so a rollback can be undone.
 func Restore(ctx context.Context, store, dir, id string) error {
-	if _, err := Create(ctx, store, dir, "before rollback to "+short(id)); err != nil {
+	lock, err := lockRepo(ctx, repoPath(store, dir), true)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if _, err := create(ctx, store, dir, "before rollback to "+short(id)); err != nil {
 		return err
 	}
 	gitDir := repoPath(store, dir)
 	if _, err := git(ctx, gitDir, dir, "read-tree", "-u", "--reset", id); err != nil {
 		return err
 	}
-	_, err := git(ctx, gitDir, dir, "commit", "-q", "--allow-empty", "--no-verify", "-m", "rollback to "+short(id))
+	_, err = git(ctx, gitDir, dir, "commit", "-q", "--allow-empty", "--no-verify", "-m", "rollback to "+short(id))
 	return err
 }
 
@@ -93,24 +114,132 @@ func Prune(store string, before time.Time) (int, error) {
 		return 0, err
 	}
 	removed := 0
+	var failures []error
 	for _, e := range entries {
-		gitDir := filepath.Join(store, e.Name())
-		folder, err := os.ReadFile(filepath.Join(gitDir, "folder"))
-		if err != nil {
-			continue // not a snapshot repo: leave it
-		}
-		_, gone := os.Stat(strings.TrimSpace(string(folder)))
-		// The index changes with every snapshot.
-		used, err := os.Stat(filepath.Join(gitDir, "index"))
-		if gone == nil && err == nil && used.ModTime().After(before) {
+		if !e.IsDir() {
 			continue
 		}
-		if err := os.RemoveAll(gitDir); err != nil {
-			return removed, err
+		gitDir := filepath.Join(store, e.Name())
+		n, err := pruneRepo(gitDir, store, before)
+		removed += n
+		if err != nil {
+			failures = append(failures, err)
 		}
-		removed++
 	}
-	return removed, nil
+	return removed, errors.Join(failures...)
+}
+
+func pruneRepo(gitDir, store string, before time.Time) (int, error) {
+	lock, err := lockRepo(context.Background(), gitDir, false)
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		return 0, nil // active snapshot, reader or rollback; retry next cleanup
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
+	folder, err := os.ReadFile(filepath.Join(gitDir, "folder"))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil // not a snapshot repo: leave it
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read snapshot folder %s: %w", gitDir, err)
+	}
+	// open appends one newline; whitespace can be part of the path.
+	dir := strings.TrimSuffix(string(folder), "\n")
+	if !filepath.IsAbs(dir) || repoPath(store, dir) != gitDir {
+		return 0, fmt.Errorf("invalid snapshot folder record in %s", gitDir)
+	}
+	_, err = os.Stat(dir)
+	gone := errors.Is(err, os.ErrNotExist)
+	if err != nil && !gone {
+		return 0, fmt.Errorf("stat snapshot project %s: %w", dir, err)
+	}
+	if !gone {
+		// Neither missing metadata nor an old index alone proves inactivity.
+		used, err := os.Lstat(filepath.Join(gitDir, "index"))
+		if err != nil {
+			return 0, fmt.Errorf("stat snapshot index %s: %w", gitDir, err)
+		}
+		if !used.Mode().IsRegular() {
+			return 0, fmt.Errorf("invalid snapshot index in %s", gitDir)
+		}
+		if !used.ModTime().Before(before) {
+			return 0, nil
+		}
+		old, err := refsBefore(gitDir, before)
+		if err != nil || !old {
+			return 0, err
+		}
+	}
+	if err := os.RemoveAll(gitDir); err != nil {
+		return 0, fmt.Errorf("delete snapshot repo %s: %w", gitDir, err)
+	}
+	return 1, nil
+}
+
+// Git commits always update HEAD or its ref, even when add leaves the index
+// unchanged. Inspect both loose and packed refs for existing shadow repos.
+func refsBefore(gitDir string, before time.Time) (bool, error) {
+	old := true
+	for _, name := range []string{"HEAD", "refs", "packed-refs"} {
+		err := filepath.WalkDir(filepath.Join(gitDir, name), func(path string, entry fs.DirEntry, err error) error {
+			if name == "packed-refs" && errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				if name != "refs" {
+					return fmt.Errorf("invalid snapshot ref %s", path)
+				}
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("invalid snapshot ref %s", path)
+			}
+			old = old && info.ModTime().Before(before)
+			return nil
+		})
+		if err != nil {
+			return false, fmt.Errorf("inspect snapshot activity %s: %w", gitDir, err)
+		}
+	}
+	return old, nil
+}
+
+// The sidecar inode must outlive repo deletion: removing a lock file would
+// allow different processes to hold locks on different inodes for one repo.
+func lockRepo(ctx context.Context, gitDir string, wait bool) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(gitDir), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(gitDir+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open snapshot lock: %w", err)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, errors.Join(err, lock.Close())
+		}
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return lock, nil
+		}
+		if !wait || !errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errors.Join(fmt.Errorf("lock snapshot repo %s: %w", gitDir, err), lock.Close())
+		}
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(ctx.Err(), lock.Close())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // open returns dir's snapshot repo, making it on first use.

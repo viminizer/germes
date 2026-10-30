@@ -122,7 +122,7 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 			toolsets = l.opts.OverseerToolsets
 		}
 		l.turn(ctx, t, system, msgs, out, turnSpec{toolsets: toolsets, maxSteps: l.opts.MaxSteps,
-			review: true, delegate: len(l.opts.SubagentToolsets) > 0})
+			review: true, delegate: len(l.opts.SubagentToolsets) > 0, ask: true})
 	}()
 	return out, nil
 }
@@ -150,6 +150,7 @@ type turnSpec struct {
 	maxSteps int
 	review   bool // count tool calls toward the background review
 	delegate bool // may start subagents
+	ask      bool // may ask the user (clarify); a subagent has nobody to ask
 }
 
 func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []llm.Message, out chan<- engine.Event, spec turnSpec) {
@@ -159,6 +160,9 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 	}
 	if spec.delegate {
 		specs = append(specs, delegateSpec)
+	}
+	if spec.ask {
+		specs = append(specs, clarifySpec)
 	}
 	if t.Extra != "" {
 		// A handoff goes in as a message: the system prompt stays frozen, so
@@ -233,6 +237,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			reviewDue = true
 		}
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})
+		asked := "" // the questions for the user, when the model called clarify
 		for _, call := range calls {
 			// The session saves the call before it runs.
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args}})
@@ -241,6 +246,13 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			case res.Output != "":
 			case spec.delegate && call.Name == delegateTool:
 				res = l.delegate(ctx, t, system, call.Args)
+			case spec.ask && call.Name == clarifyTool:
+				text, ok := clarify(call.Args)
+				res = tool.Result{IsError: !ok, Output: text}
+				if ok {
+					asked = text
+					res.Output = "asked the user; the answer comes in their next message"
+				}
 			default:
 				res = l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
 				res.Output += g.note(call, res)
@@ -253,6 +265,12 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			}
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolResult, Tool: &engine.ToolCall{ID: call.ID, Output: res.Output, IsError: res.IsError}})
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Text: res.Output})
+		}
+		if asked != "" {
+			// The questions end the turn: the user's next message answers.
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindText, Text: asked})
+			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
+			return
 		}
 	}
 	stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})

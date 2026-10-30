@@ -28,6 +28,7 @@ func (t *Telegram) watch(ctx context.Context) {
 			wait(ctx, retryWait)
 			continue
 		}
+		t.catchUp(ctx)
 		for ev := range events {
 			t.outputMu.Lock()
 			switch {

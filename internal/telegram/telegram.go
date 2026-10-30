@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ import (
 const (
 	pollTimeout = 30              // seconds a getUpdates call waits for news
 	retryWait   = 5 * time.Second // after a failed poll or watch
+	settleWait  = time.Second     // a turn_done being saved as the bot looks
 	typingEvery = 4 * time.Second // Telegram shows "typing" for about 5 s
 )
 
@@ -255,29 +257,72 @@ func (t *Telegram) recoverAnswer(ctx context.Context, id string, thread int64) {
 // ignored); a turn that never finished tells the topic lost and forgets it.
 // Runs with outputMu held.
 func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost string) {
-	s, err := t.svc.GetSession(ctx, id)
-	if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
-		return
-	}
-	var turn []api.Event
-	if err == nil {
-		turn, err = t.storedEvents(ctx, id, 0, 0)
-	}
-	if err != nil && !api.IsNotFound(err) {
-		slog.Warn("telegram: check a waiting session", "session", id, "err", err)
-		return // kept: the next start checks again
-	}
-	if len(turn) > 0 && turn[len(turn)-1].Kind == api.KindTurnDone {
-		for _, ev := range turn {
-			t.sendReplyEvent(ctx, ev)
+	for rechecked := false; ; rechecked = true {
+		s, err := t.svc.GetSession(ctx, id)
+		if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
+			return
 		}
-		return
+		var turn []api.Event
+		if err == nil {
+			turn, err = t.storedEvents(ctx, id, 0, 0)
+		}
+		if err != nil && !api.IsNotFound(err) {
+			slog.Warn("telegram: check a waiting session", "session", id, "err", err)
+			return // kept: the next start checks again
+		}
+		if len(turn) > 0 && turn[len(turn)-1].Kind == api.KindTurnDone {
+			for _, ev := range turn {
+				t.sendReplyEvent(ctx, ev)
+			}
+			return
+		}
+		if rechecked || api.IsNotFound(err) {
+			break
+		}
+		// The worker shows idle just before it saves turn_done, so a turn
+		// ending right now looks unfinished: look again a moment later,
+		// letting live output through meanwhile.
+		// ponytail: one fixed wait; a turn_done save slower than
+		// settleWait still reads as lost. Upgrade: a worker signal.
+		t.outputMu.Unlock()
+		wait(ctx, settleWait)
+		t.outputMu.Lock()
+		t.mu.Lock()
+		_, waiting := t.state.ReplyTo[id]
+		t.mu.Unlock()
+		if !waiting || ctx.Err() != nil {
+			return // its live turn_done finished it
+		}
 	}
 	t.mu.Lock()
 	delete(t.state.ReplyTo, id)
 	t.mu.Unlock()
 	t.save()
 	t.reply(ctx, thread, lost)
+}
+
+// catchUp sends the stored events a waiting session had after the last one
+// this bot saw, after the watcher subscribed again: the hub drops a watcher
+// that falls behind (a long rate-limit wait), and live events from the gap
+// are gone. A session with nothing seen yet waits for its turn_done, which
+// replays its turn. Before the first subscription nothing was seen.
+func (t *Telegram) catchUp(ctx context.Context) {
+	t.mu.Lock()
+	waiting := slices.Collect(maps.Keys(t.state.ReplyTo))
+	t.mu.Unlock()
+	for _, id := range waiting {
+		t.outputMu.Lock()
+		if after := t.output.seq[id]; after != 0 && !t.output.replaying[id] {
+			missed, err := t.storedEvents(ctx, id, after, 0)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				slog.Warn("telegram: catch up a waiting session", "session", id, "err", err)
+			}
+			for _, ev := range missed {
+				t.sendReplyEvent(ctx, ev)
+			}
+		}
+		t.outputMu.Unlock()
+	}
 }
 
 // storedEvents reads a session's stored events after seq after and before

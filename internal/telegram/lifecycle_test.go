@@ -1216,3 +1216,109 @@ func TestRunCreationSettlesUnsavedTurnBeforeResponse(t *testing.T) {
 		}
 	})
 }
+
+// The worker shows idle just before it saves turn_done. A start that looks
+// in that moment must not call the answer lost.
+func TestRunStartupWaitsForFinalSave(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := savedState(t, "s1", 7)
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 1)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "the answer"},
+		}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		synctest.Wait() // the start saw idle without a stored turn_done
+		final := api.Event{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone}
+		svc.history = append(svc.history, final)
+		svc.events <- final
+		<-tr.polls
+		synctest.Wait()
+		if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" || tr.sent[0]["message_thread_id"] != float64(7) {
+			t.Errorf("sent = %v, want the answer once in topic 7", tr.sent)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Error("the finished turn is still waiting")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// dropService hands out the streams the test gives it, so a test can drop
+// the watcher like the hub does when it falls behind.
+type dropService struct {
+	creationService
+	streams chan chan api.Event
+}
+
+func (s *dropService) Watch(ctx context.Context, _ api.WatchFilter) (<-chan api.Event, error) {
+	select {
+	case ch := <-s.streams:
+		return ch, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// The hub drops a watcher that falls behind; a waiting turn that finishes
+// before it subscribes again sends nothing live. The stored events after
+// the last one seen are sent on the new subscription.
+func TestRunWatchCatchesUpAfterDrop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := savedState(t, "s1", 7)
+		svc := &dropService{streams: make(chan chan api.Event)}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "the answer"},
+		}
+		startup := true
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			if startup {
+				startup = false
+				return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+			}
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		first := make(chan api.Event, 2)
+		svc.streams <- first
+		first <- svc.history[0]
+		first <- svc.history[1]
+		synctest.Wait()
+		svc.history = append(svc.history, api.Event{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone})
+		close(first) // dropped: the turn_done went out while nobody listened
+		second := make(chan api.Event)
+		svc.streams <- second
+		synctest.Wait()
+		if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" || tr.sent[0]["message_thread_id"] != float64(7) {
+			t.Errorf("sent = %v, want the answer once in topic 7", tr.sent)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Error("the finished turn is still waiting")
+		}
+		cancel()
+		close(second)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

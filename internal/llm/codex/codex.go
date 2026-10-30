@@ -5,6 +5,7 @@ package codex
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -281,8 +282,20 @@ type event struct {
 	Response struct {
 		Error *struct{ Code, Message string } `json:"error"`
 	} `json:"response"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string                          `json:"code"`
+	Message string                          `json:"message"`
+	Error   *struct{ Code, Message string } `json:"error"` // some backends nest the error here
+}
+
+// errorText describes an error from its code and message, never as "".
+func errorText(code, message string) string {
+	switch {
+	case code != "" && message != "":
+		return code + ": " + message
+	case code+message != "":
+		return code + message
+	}
+	return "the stream sent an error with no message"
 }
 
 type item struct {
@@ -325,9 +338,10 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 		case "response.completed", "response.incomplete":
 			return true
 		case "response.failed":
+			slog.Warn("codex response failed", "event", text.Shorten(data, 2000))
 			msg := "the response failed"
 			if e := ev.Response.Error; e != nil {
-				msg = e.Code + ": " + e.Message
+				msg = errorText(e.Code, e.Message)
 				if e.Code == "usage_limit_reached" {
 					stream.Send(ctx, out, llm.Chunk{Kind: llm.KindLimitHit, Err: errors.New(msg)})
 					return false
@@ -336,7 +350,14 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + msg)})
 			return false
 		case "error":
-			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex: %s %s", ev.Code, ev.Message)})
+			// The fields are at the top level, or nested under "error" (Hermes
+			// reads both too: hermes/agent/codex_runtime.py _raise_stream_error).
+			slog.Warn("codex error event", "event", text.Shorten(data, 2000))
+			code, message := ev.Code, ev.Message
+			if ev.Error != nil {
+				code, message = cmp.Or(code, ev.Error.Code), cmp.Or(message, ev.Error.Message)
+			}
+			stream.Send(ctx, out, llm.Chunk{Kind: llm.KindError, Err: errors.New("codex: " + errorText(code, message))})
 			return false
 		}
 	}

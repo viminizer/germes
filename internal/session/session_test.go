@@ -348,3 +348,48 @@ func waitIdle(t *testing.T, m *Manager, id string) {
 	}
 	t.Fatalf("session %s stays busy", id)
 }
+
+// busyElsewhere says the listed sessions still run in an old daemon.
+type busyElsewhere map[string]bool
+
+func (b busyElsewhere) IsBusy(_ context.Context, id string) bool { return b[id] }
+
+// A daemon that stopped or crashed left turns behind: working ones, and
+// paused ones waiting for an engine limit (their timer was only in memory).
+// Start marks both interrupted, but not one an old daemon still runs.
+func TestStartRecoversCutAndPausedTurns(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.New(filepath.Join(t.TempDir(), "germes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	dir, now := t.TempDir(), time.Now()
+	for id, status := range map[string]api.Status{"cut": api.StatusWorking, "paused": api.StatusPaused,
+		"old": api.StatusPaused, "idle": api.StatusIdle} {
+		s := api.Session{ID: id, Title: id, Project: dir, Dir: dir, Status: status, CreatedAt: now, UpdatedAt: now}
+		if err := st.CreateSession(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewManager(st, fakeRunner{}, Options{Elsewhere: busyElsewhere{"old": true}})
+	defer m.Stop(ctx)
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]api.Status{"cut": api.StatusIdle, "paused": api.StatusIdle, "old": api.StatusPaused, "idle": api.StatusIdle} {
+		s, err := m.GetSession(ctx, id)
+		if err != nil || s.Status != want {
+			t.Errorf("%s: status %s (%v), want %s", id, s.Status, err, want)
+		}
+		page, _ := m.ListEvents(ctx, api.EventFilter{SessionID: id})
+		var kinds []string
+		for _, ev := range page.Items {
+			kinds = append(kinds, string(ev.Kind)+":"+ev.Text)
+		}
+		got, interrupted := strings.Join(kinds, " "), "error:"+api.TextInterrupted+" turn_done:"
+		if (id == "cut" || id == "paused") != (got == interrupted) {
+			t.Errorf("%s: events %q", id, got)
+		}
+	}
+}

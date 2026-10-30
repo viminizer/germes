@@ -92,6 +92,9 @@ func toolView(t *api.ToolCall, dir string, width int) string {
 	if t.Name == "todo_list" && !t.IsError {
 		return head + "\n" + taskList(t.Output, width)
 	}
+	if t.Name == "delegate_task" && !t.IsError {
+		return head + "\n" + subagentList(t.Output, width)
+	}
 	result := strings.Join(strings.Fields(firstLine(shortPaths(t.Output, dir))), " ") // tabs and runs of spaces
 	if n := strings.Count(strings.TrimSpace(t.Output), "\n"); n > 0 {
 		result += fmt.Sprintf(" (+%d lines)", n)
@@ -103,6 +106,9 @@ func toolView(t *api.ToolCall, dir string, width int) string {
 func toolLabel(t *api.ToolCall, dir string) string {
 	var args map[string]any
 	json.Unmarshal(t.Args, &args)
+	if tasks, ok := args["tasks"].([]any); ok && t.Name == "delegate_task" {
+		return fmt.Sprintf("%s(%d tasks)", t.Name, len(tasks))
+	}
 	preview := ""
 	for _, k := range []string{"command", "file_path", "pattern", "url", "query", "name", "text", "description"} {
 		if s, ok := args[k].(string); ok && s != "" {
@@ -136,6 +142,20 @@ func taskList(list string, width int) string {
 	}
 	if more > 0 {
 		lines = append(lines, styleDim.Render(fmt.Sprintf("  (+%d more)", more)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// subagentList shows one line per subagent report: its goal and how long
+// the report is.
+func subagentList(out string, width int) string {
+	parts := strings.Split(out, "## Subagent ")
+	var lines []string
+	for _, p := range parts[1:] {
+		head, body, _ := strings.Cut(p, "\n")
+		num, goal, _ := strings.Cut(head, ": ")
+		n := strings.Count(strings.TrimSpace(body), "\n") + 1
+		lines = append(lines, styleDim.Render(ansi.Truncate(fmt.Sprintf("  └─ %s. %d-line report: %s", num, n, goal), max(width, 10), "…")))
 	}
 	return strings.Join(lines, "\n")
 }

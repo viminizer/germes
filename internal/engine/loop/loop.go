@@ -36,6 +36,9 @@ type Options struct {
 	// Todos gives the model its open task items again after a compaction;
 	// nil = none.
 	Todos TaskLists
+	// SubagentToolsets are the tools of the subagents delegate_task starts.
+	// Empty: no delegate_task.
+	SubagentToolsets []string
 	// ReviewToolsets are the tools of the background self-learning review
 	// (memory and skills). Empty: no review.
 	ReviewToolsets []string
@@ -113,7 +116,12 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 				msgs[0].Text += "\n\n" + plan
 			}
 		}
-		l.turn(ctx, t, system, msgs, out)
+		toolsets := l.opts.Toolsets
+		if t.Overseer {
+			toolsets = l.opts.OverseerToolsets
+		}
+		l.turn(ctx, t, system, msgs, out, turnSpec{toolsets: toolsets, maxSteps: l.opts.MaxSteps,
+			review: true, delegate: len(l.opts.SubagentToolsets) > 0})
 	}()
 	return out, nil
 }
@@ -135,14 +143,21 @@ func (l *Loop) system(ctx context.Context, t engine.Turn) (string, error) {
 	return p.System, nil
 }
 
-func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []llm.Message, out chan<- engine.Event) {
+// turnSpec says what a turn may do: a session's turn, or a subagent's.
+type turnSpec struct {
+	toolsets []string
+	maxSteps int
+	review   bool // count tool calls toward the background review
+	delegate bool // may start subagents
+}
+
+func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []llm.Message, out chan<- engine.Event, spec turnSpec) {
 	var specs []llm.ToolSpec
-	toolsets := l.opts.Toolsets
-	if t.Overseer {
-		toolsets = l.opts.OverseerToolsets
-	}
-	for _, tl := range l.tools.List(toolsets...) {
+	for _, tl := range l.tools.List(spec.toolsets...) {
 		specs = append(specs, llm.ToolSpec{Name: tl.Name, Description: tl.Description, Schema: tl.Schema})
+	}
+	if spec.delegate {
+		specs = append(specs, delegateSpec)
 	}
 	if t.Extra != "" {
 		// A handoff goes in as a message: the system prompt stays frozen, so
@@ -156,12 +171,12 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			l.review(t.SessionID, t.Dir) // after the turn, in the background
 		}
 	}()
-	for step := 0; step <= l.opts.MaxSteps; step++ {
+	for step := 0; step <= spec.maxSteps; step++ {
 		if tokens(system, msgs) > l.opts.ContextWindow/2 {
 			prune(msgs, 10) // a long turn: drop old tool outputs, keep the newest
 		}
 		req := llm.Request{System: system, Messages: msgs, Tools: specs, CacheKey: t.SessionID}
-		if step == l.opts.MaxSteps {
+		if step == spec.maxSteps {
 			// Grace call: no tools, just wrap up.
 			req.Tools = nil
 			req.Messages = append(append([]llm.Message(nil), msgs...), llm.Message{Role: llm.RoleUser,
@@ -206,14 +221,14 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Text: text})
 		}
 		if len(calls) == 0 {
-			if nudge := g.finishNudge(); nudge != "" && step < l.opts.MaxSteps {
+			if nudge := g.finishNudge(); nudge != "" && step < spec.maxSteps {
 				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: nudge})
 				continue
 			}
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindDone, Engine: l.opts.Name})
 			return
 		}
-		if l.countSteps(t.SessionID, calls) {
+		if spec.review && l.countSteps(t.SessionID, calls) {
 			reviewDue = true
 		}
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})
@@ -221,7 +236,11 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			// The session saves the call before it runs.
 			stream.Send(ctx, out, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args}})
 			res := tool.Result{IsError: true, Output: g.refuse(call)}
-			if res.Output == "" {
+			switch {
+			case res.Output != "":
+			case spec.delegate && call.Name == delegateTool:
+				res = l.delegate(ctx, t, system, call.Args)
+			default:
 				res = l.tools.Run(ctx, call.Name, tool.Call{SessionID: t.SessionID, Dir: t.Dir, Args: call.Args})
 				res.Output += g.note(call, res)
 			}

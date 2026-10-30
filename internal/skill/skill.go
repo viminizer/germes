@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/viminizer/germes/internal/file"
+	"github.com/viminizer/germes/internal/text"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -18,7 +19,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const maxDescription = 1024
+const (
+	maxDescription = 1024
+	maxSkill       = 100_000 // characters of a SKILL.md (same as Hermes)
+)
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
@@ -129,7 +133,35 @@ func (s *Store) Save(ctx context.Context, sk Skill) error {
 		return err
 	}
 	text := "---\n" + string(front) + "---\n\n" + strings.TrimSpace(sk.Body) + "\n"
+	if n := len([]rune(text)); n > maxSkill {
+		return fmt.Errorf("SKILL.md would be %d characters, the limit is %d: move details into extra files in the skill's folder", n, maxSkill)
+	}
 	return file.Save(filepath.Join(dir, "SKILL.md"), []byte(text), 0o644)
+}
+
+// Update replaces the one place old appears in a skill's SKILL.md with
+// repl, and saves it with the same checks as Save.
+func (s *Store) Update(ctx context.Context, name, old, repl string) error {
+	if !nameRe.MatchString(name) {
+		return fmt.Errorf("bad skill name %q", name)
+	}
+	dir := filepath.Join(s.writeDir, name)
+	b, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		return fmt.Errorf("no skill %q in %s (other folders are read-only)", name, s.writeDir)
+	}
+	patched, _, err := text.Replace(string(b), old, repl, false)
+	if err != nil {
+		return fmt.Errorf("skill %s: %w", name, err)
+	}
+	sum, body, err := parse([]byte(patched), dir)
+	if err != nil {
+		return err
+	}
+	if sum.Name != name {
+		return errors.New("a skill's name cannot change; save it under the new name instead")
+	}
+	return s.Save(ctx, Skill{Summary: sum, Body: body})
 }
 
 // Delete removes a skill from the write folder. Read-only skills stay.
@@ -144,12 +176,17 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	return os.RemoveAll(dir)
 }
 
-// read parses SKILL.md in dir: YAML frontmatter, then the body.
+// read parses SKILL.md in dir.
 func read(dir string) (Summary, string, error) {
 	b, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
 	if err != nil {
 		return Summary{}, "", err
 	}
+	return parse(b, dir)
+}
+
+// parse reads a SKILL.md of the skill in dir: YAML frontmatter, then the body.
+func parse(b []byte, dir string) (Summary, string, error) {
 	rest, ok := bytes.CutPrefix(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), []byte("---\n"))
 	if !ok {
 		return Summary{}, "", errors.New("SKILL.md has no frontmatter")

@@ -242,7 +242,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		}
 		if spec.review {
 			for _, c := range calls {
-				l.steps.Update(t.SessionID, c.Name == "memory" || c.Name == "skill_save")
+				l.steps.Update(t.SessionID, c.Name == "memory" || c.Name == "skill_save" || c.Name == "skill_patch")
 			}
 		}
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: calls})

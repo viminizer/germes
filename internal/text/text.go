@@ -1,8 +1,9 @@
-// Package text turns things into short plain text: shortened strings and
-// session transcripts.
+// Package text works on plain text: shortened strings, exact replacements
+// and session transcripts.
 package text
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,32 @@ func Shorten(s string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// Replace puts text in the place old appears in s, or in every place with
+// all. Models often escape text that is not escaped in s (\\ \" \'); that
+// is undone only when the result appears exactly once. It returns the new s
+// and how many places changed.
+func Replace(s, old, text string, all bool) (string, int, error) {
+	if old == "" || old == text {
+		return "", 0, errors.New("the old text must be non-empty and differ from the new text")
+	}
+	count := strings.Count(s, old)
+	if count == 0 {
+		unescape := strings.NewReplacer(`\\`, `\`, `\"`, `"`, `\'`, `'`).Replace
+		if u := unescape(old); u != old && strings.Count(s, u) == 1 {
+			old, text, count = u, unescape(text), 1
+		}
+	}
+	switch {
+	case count == 0:
+		return "", 0, errors.New("the old text was not found; read it again and copy it exactly")
+	case count > 1 && !all:
+		return "", 0, fmt.Errorf("the old text was found %d times; quote more of it", count)
+	case all:
+		return strings.ReplaceAll(s, old, text), count, nil
+	}
+	return strings.Replace(s, old, text, 1), 1, nil
 }
 
 // Transcript is a session's events, written as plain text for a summary, a

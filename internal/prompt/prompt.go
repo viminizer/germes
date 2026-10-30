@@ -174,7 +174,8 @@ func (b *Builder) skillIndex(ctx context.Context) (string, error) {
 	}
 	var s strings.Builder
 	s.WriteString("# Skills\n\nIf a skill below matches the task, you MUST load it before you start (skill_view, or read its SKILL.md). " +
-		"After a hard task, save what you learned as a skill (skill_save, or write a SKILL.md into the Germes skills folder).\n")
+		"After a hard task, save what you learned as a skill (skill_save, or write a SKILL.md into the Germes skills folder). " +
+		"When a skill turns out wrong or incomplete while you use it, fix it right away (skill_patch, or edit its SKILL.md).\n")
 	for _, sk := range list {
 		desc := sk.Description
 		if r := []rune(desc); len(r) > maxSkillDesc {

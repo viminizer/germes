@@ -1,5 +1,5 @@
 // Package skills has the skill tools: skill_view loads a skill, skill_save
-// creates or updates one.
+// creates or replaces one, skill_patch fixes part of one.
 package skills
 
 import (
@@ -42,6 +42,23 @@ func New(store *skill.Store) []tool.Tool {
 					return "", err
 				}
 				return "saved skill " + a.Name, nil
+			}),
+		},
+		{
+			Name: "skill_patch", Toolset: "skills",
+			Description: "Fix part of a skill that turned out wrong or incomplete: old_text (quoted exactly, found once in its SKILL.md) becomes new_text. " +
+				"Use it instead of saving the whole skill again.",
+			Schema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},` +
+				`"required":["name","old_text","new_text"],"additionalProperties":false}`),
+			Run: tool.NewRun(func(ctx context.Context, c tool.Call, a struct {
+				Name    string `json:"name"`
+				OldText string `json:"old_text"`
+				NewText string `json:"new_text"`
+			}) (string, error) {
+				if err := store.Update(ctx, a.Name, a.OldText, a.NewText); err != nil {
+					return "", err
+				}
+				return "patched skill " + a.Name, nil
 			}),
 		},
 	}

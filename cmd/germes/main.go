@@ -521,7 +521,7 @@ func newRouter(p paths, cfg config.Config, st *store.Store) (*router.Router, *to
 		"job_create", "job_list", "job_start", "job_stop", "job_delete"}
 	toolsets := map[string]tool.Toolset{
 		"core":    {Tools: []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}},
-		"learn":   {Tools: []string{"memory", "skill_view", "skill_save"}},
+		"learn":   {Tools: []string{"memory", "skill_view", "skill_save", "skill_patch"}},
 		"project": {Tools: []string{"session_search", "worktree_enter", "worktree_exit", "todo_list"}, Includes: []string{"core", "learn"}},
 		"review":  {Includes: []string{"learn"}},
 		// A plan turn reads and searches; it changes nothing.

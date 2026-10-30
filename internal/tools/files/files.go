@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/viminizer/germes/internal/text"
 	"github.com/viminizer/germes/internal/tool"
 )
 
@@ -161,54 +162,23 @@ type editArgs struct {
 }
 
 func edit(ctx context.Context, c tool.Call, a editArgs) (string, error) {
-	if a.OldString == "" || a.OldString == a.NewString {
-		return "", errors.New("old_string must be non-empty and differ from new_string")
-	}
 	p := resolve(c.Dir, a.FilePath)
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return "", err
 	}
-	text := string(b)
-	count := strings.Count(text, a.OldString)
-	if count == 0 {
-		// Models often escape text that is not escaped in the file. Undo
-		// that only when the result matches the file exactly once.
-		if old := unescape(a.OldString); old != a.OldString && strings.Count(text, old) == 1 {
-			a.OldString, a.NewString, count = old, unescape(a.NewString), 1
-		}
-	}
-	switch {
-	case count == 0:
-		return "", errors.New("old_string not found; read the file and copy the text exactly")
-	case count > 1 && !a.ReplaceAll:
-		return "", fmt.Errorf("old_string found %d times; add more context or set replace_all", count)
-	}
-	if a.ReplaceAll {
-		text = strings.ReplaceAll(text, a.OldString, a.NewString)
-	} else {
-		text = strings.Replace(text, a.OldString, a.NewString, 1)
+	edited, count, err := text.Replace(string(b), a.OldString, a.NewString, a.ReplaceAll)
+	if err != nil {
+		return "", fmt.Errorf("old_string: %w", err)
 	}
 	info, err := os.Stat(p)
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(p, []byte(text), info.Mode().Perm()); err != nil {
+	if err := os.WriteFile(p, []byte(edited), info.Mode().Perm()); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("edited %s (%d replacement(s))", a.FilePath, max(1, count*boolInt(a.ReplaceAll))), nil
-}
-
-// unescape undoes backslash escaping a model added: \\ \" \'.
-func unescape(s string) string {
-	return strings.NewReplacer(`\\`, `\`, `\"`, `"`, `\'`, `'`).Replace(s)
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
+	return fmt.Sprintf("edited %s (%d replacement(s))", a.FilePath, count), nil
 }
 
 // skipDir is folders searches never enter.

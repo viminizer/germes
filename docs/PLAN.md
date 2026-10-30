@@ -90,7 +90,7 @@ leaves                api                                  → stream
                       engine, tool, env                    → (none)
 ```
 
-Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `stream.Wait` (wait for goroutines unless cancelled), `file.Save` (safe write), `text.Shorten` and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `tool.NewRun` (decode tool arguments). Also imported by: job (stream), llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text).
+Shared pieces (R8): `stream.Send` (send on a channel unless cancelled), `stream.Wait` (wait for goroutines unless cancelled), `file.Save` (safe write), `text.Shorten`, `text.Replace` (exact replace, undoing a model's added escaping) and `text.Transcript` (plain text), `api.ListAllEvents` (page through events), `tool.NewRun` (decode tool arguments). Also imported by: job (stream), llm/codex (file, stream, text), engine/claude (stream), engine/loop and router (stream, text), session (stream, text), tools/search (text), tools/files and skill (text).
 
 Notes:
 - Shared plain types live low: `api` (Session, Event, Job, Page, filters), `engine` (Turn, Event, Usage). Higher modules and `store` use them, so nothing imports upward.
@@ -624,7 +624,7 @@ Core tools use Claude Code's names: `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Gr
 internal/tools/files/     Read, Write, Edit, Glob, Grep
 internal/tools/shell/     Bash (runs through env.Environment)
 internal/tools/memory/    memory
-internal/tools/skills/    skill_list, skill_view, skill_save
+internal/tools/skills/    skill_view, skill_save, skill_patch
 internal/tools/search/    session_search
 internal/tools/sessions/  session_list, session_create, session_send, ... (overseer)
 internal/tools/worktree/  worktree_exit (project sessions; calls UpdateSession, the daemon moves the session and removes an unchanged worktree)
@@ -743,6 +743,7 @@ func New(writeDir string, readDirs ...string) *Store
 func (s *Store) List(ctx) ([]Summary, error)          // name + description, for the prompt
 func (s *Store) Load(ctx, name string) (Skill, error) // full SKILL.md + list of extra files
 func (s *Store) Save(ctx, Skill) error                // create or update, in writeDir only
+func (s *Store) Update(ctx, name, old, text string) error // replace one exact piece, then the same checks as Save
 func (s *Store) Delete(ctx, name string) error        // writeDir only
 ```
 
@@ -1242,6 +1243,7 @@ Fast iteration: one worktree and branch per milestone, commit often, merge and p
    - Compaction: at the start of a turn, when history is over half the context window (default 200k tokens), older events are summarized; a `compacted` event saves the summary and `keep_from`. Next turns load the summary plus the kept events. Inside a long turn, old tool outputs are trimmed instead.
    - Background review: after 10 tool calls without saving memory or a skill, a silent review with only memory and skill tools runs after the turn.
    - Later, both engines: the counter is shared (`engine.Steps`) and so is the instruction (`prompt.Review`). The loop's review gets today's memory and skills. Claude's review resumes a fork of the conversation (`--resume <id> --fork-session`, so the session does not change) with only Read/Glob/Grep and edits inside `memories/` and `skills/`; no acceptEdits, so any other edit is refused, and no shell. Claude counts as saved when it edits a file there.
+   - `skill_patch` fixes part of a skill (one exact match; the result must still parse and keep its name). The prompt and the review say to fix a skill that turned out wrong while it was used; Claude does it with Edit. SKILL.md is at most 100,000 characters (same as Hermes).
    - Checked live: memory saved, config edited by the agent, search found an old session, the right skill named, review ran, Claude knew the config path and memory.
 5. Worktrees. Done:
    - New sessions in a git project get a worktree in `~/.germes/worktrees/<project>-<hash>/<session id>` on branch `germes/<id>`, from the project's HEAD. The status bar shows `⎇ branch`; `germes ls` has a BRANCH column.

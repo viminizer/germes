@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 )
 
 // Client calls a Service over the daemon's unix socket.
@@ -104,6 +105,12 @@ func (c *Client) ListCheckpoints(ctx context.Context, sessionID string) ([]Check
 // RestoreCheckpoint puts the session's folder back as it was in a snapshot.
 func (c *Client) RestoreCheckpoint(ctx context.Context, sessionID, id string) error {
 	return c.call(ctx, "POST", "/sessions/"+url.PathEscape(sessionID)+"/checkpoints/"+url.PathEscape(id)+"/restore", nil, nil)
+}
+
+// GetInsights says how Germes was used since a time.
+func (c *Client) GetInsights(ctx context.Context, since time.Time) (Insights, error) {
+	var in Insights
+	return in, c.call(ctx, "GET", "/insights?since="+url.QueryEscape(since.Format(time.RFC3339)), nil, &in)
 }
 
 // Watch streams events until ctx ends or the connection drops.

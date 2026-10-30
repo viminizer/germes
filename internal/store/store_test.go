@@ -92,3 +92,39 @@ func TestSearchEvents(t *testing.T) {
 		t.Fatalf("deleted session still found: %+v", page.Items)
 	}
 }
+
+func TestGetInsightsFindsSkills(t *testing.T) {
+	ctx := context.Background()
+	s, err := New(filepath.Join(t.TempDir(), "germes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	old, now := time.Unix(100, 0), time.Unix(200, 0)
+	s.CreateSession(ctx, api.Session{ID: "a", Title: "a", Project: "/p", Dir: "/p", Status: api.StatusIdle, CreatedAt: old, UpdatedAt: now})
+	for i, c := range []struct {
+		at   time.Time
+		name string
+		args string
+	}{
+		{now, "skill_view", `{"name":"deploy"}`},                  // Germes' loop
+		{now, "Skill", `{"skill":"deploy"}`},                      // Claude's Skill tool
+		{now, "Read", `{"file_path":"/h/skills/audit/SKILL.md"}`}, // read as a file
+		{now, "Read", `{"file_path":"/p/main.go"}`},               // not a skill
+		{old, "skill_view", `{"name":"stale"}`},                   // before since
+	} {
+		s.CreateEvent(ctx, api.Event{SessionID: "a", Seq: int64(i + 1), Time: c.at, Kind: api.KindToolCall,
+			Tool: &api.ToolCall{ID: "x", Name: c.name, Args: []byte(c.args)}})
+	}
+	in, err := s.GetInsights(ctx, time.Unix(150, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []api.SkillUse{{Name: "deploy", Count: 2, LastUsed: now}, {Name: "audit", Count: 1, LastUsed: now}}
+	if len(in.Skills) != 2 || in.Skills[0] != want[0] || in.Skills[1] != want[1] {
+		t.Fatalf("skills = %+v", in.Skills)
+	}
+	if len(in.Tools) != 3 || in.Tools[0] != (api.Count{Name: "Read", Count: 2}) {
+		t.Fatalf("tools = %+v", in.Tools)
+	}
+}

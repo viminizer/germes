@@ -751,6 +751,15 @@ func (s *Store) Delete(ctx, name string) error        // writeDir only
 - `Save` checks the name format, a short description and valid frontmatter, then writes safely (temp file, then rename).
 - YAML: `gopkg.in/yaml.v3` (shared with `config`).
 
+## Insights
+
+`germes insights [--days 30]`: how Germes was used, read from the event log (no extra files). `Service.GetInsights(since)` → the store's `GetInsights`, passed to the daemon as `Options.Insights`.
+
+- Sessions with a turn, finished turns per engine, errors.
+- Calls per tool, most first (the CLI shows 15).
+- Skills loaded, with uses and last use: `skill_view`, Claude's `Skill` tool, or a `Read` of a `SKILL.md`. The curator uses this to find unused skills.
+- No tokens or cost: the engines report usage windows, not tokens.
+
 ## Env module
 
 `internal/env`: runs shell commands. On my machine now, in Docker later.
@@ -1071,7 +1080,7 @@ Go's standard `flag` package with a switch on the subcommand. No Cobra.
 | `germes`, `-c`, `--resume`, `attach <id>`, `overseer`, `--worktree` | TUI |
 | `germes daemon` | wires everything, `daemon.Run` |
 | `germes mcp --session <id>` | MCP server |
-| `ls`, `stop`, `job add/ls/start/stop/rm`, `reserve on/off`, `daemon restart`, `pin` | `internal/cli` |
+| `ls`, `stop`, `insights`, `job add/ls/start/stop/rm`, `reserve on/off`, `daemon restart`, `pin` | `internal/cli` |
 | `workflow check/ls` | `main.go` with `job.LoadWorkflow` / `job.ListWorkflows` (they read files, no daemon) |
 | `workflow new` | TUI (a session that writes the workflow with me) |
 | `setup telegram` | `main.go` itself (writes the config; `internal/cli` may only import `api`) |

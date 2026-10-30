@@ -51,6 +51,8 @@ type Options struct {
 	// Cleanup deletes old files (snapshots, saved tool outputs). It runs at
 	// start and once a day; nil = never.
 	Cleanup func(ctx context.Context)
+	// Insights counts what happened since a time (the store).
+	Insights func(ctx context.Context, since time.Time) (api.Insights, error)
 }
 
 // Gateway is a long-running client inside the daemon (the Telegram bot). It

@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
+	"time"
 
 	"github.com/viminizer/germes/internal/api"
 )
@@ -101,6 +103,14 @@ func (d *Daemon) ListTools(ctx context.Context, sessionID string) ([]api.ToolInf
 		return d.opts.Tools.ListTools(ToolsetMCPOverseer), nil
 	}
 	return d.opts.Tools.ListTools(ToolsetMCP), nil
+}
+
+// GetInsights says how Germes was used since a time.
+func (d *Daemon) GetInsights(ctx context.Context, since time.Time) (api.Insights, error) {
+	if d.opts.Insights == nil {
+		return api.Insights{}, errors.New("no insights in this daemon")
+	}
+	return d.opts.Insights(ctx, since)
 }
 
 // RunTool runs one tool in a session's folder (or r.Dir).

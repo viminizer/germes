@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // NewHandler serves svc over HTTP. Watch streams newline-delimited JSON.
@@ -51,6 +52,14 @@ func NewHandler(svc Service) http.Handler {
 		reply(w, r, func() (any, error) {
 			return nil, svc.RestoreCheckpoint(r.Context(), r.PathValue("id"), r.PathValue("cp"))
 		})
+	})
+	mux.HandleFunc("GET /insights", func(w http.ResponseWriter, r *http.Request) {
+		since, err := time.Parse(time.RFC3339, r.URL.Query().Get("since"))
+		if err != nil {
+			writeError(w, NewError(CodeInvalid, "since: want an RFC 3339 time"))
+			return
+		}
+		reply(w, r, func() (any, error) { return svc.GetInsights(r.Context(), since) })
 	})
 	mux.HandleFunc("POST /messages", func(w http.ResponseWriter, r *http.Request) {
 		var m MessageRequest

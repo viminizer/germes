@@ -285,3 +285,26 @@ var RefKinds = []struct{ Token, Help string }{
 	{"@git:", `git output, e.g. @git:"log -5"`},
 	{"@url:", "a web page's text"},
 }
+
+// Insights is how Germes was used since a time, from the event log.
+type Insights struct {
+	Since    time.Time  `json:"since"`
+	Sessions int        `json:"sessions"` // sessions with a turn since then
+	Turns    []Count    `json:"turns"`    // finished turns per engine, most first
+	Errors   int        `json:"errors"`
+	Tools    []Count    `json:"tools"`  // calls per tool, most first
+	Skills   []SkillUse `json:"skills"` // skills loaded, most first
+}
+
+// Count is how often something happened.
+type Count struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// SkillUse is how often a skill was loaded, and when last.
+type SkillUse struct {
+	Name     string    `json:"name"`
+	Count    int       `json:"count"`
+	LastUsed time.Time `json:"last_used"`
+}

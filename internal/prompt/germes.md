@@ -55,6 +55,7 @@ Built-ins: `merge`, `cleanup` (remove the job's worktree), `notify "<text>"` (a 
 - `/rollback` in the TUI or Telegram lists file snapshots taken before each turn; `/rollback n` puts the files back.
 - `germes overseer` (or `/overseer`): the overseer, one session in the home folder with tools to control sessions and jobs.
 - `germes setup telegram`: talk to Germes from a Telegram group (asks for the bot token, chat id and user id; saved under `telegram:` in the config). In a topic, `/bind <project>`; General talks to the overseer.
+- `germes insights [--days 30]`: sessions, turns per engine, the most used tools, and which skills were loaded and when last.
 - `germes doctor`: check the config, engines, database and daemon, with fixes. `germes daemon kill`: stop a hung daemon.
 - `germes daemon restart`: restart the daemon, cutting running turns (rarely needed; it updates and reloads itself without cutting anything).
 

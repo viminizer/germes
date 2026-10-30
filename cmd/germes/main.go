@@ -64,6 +64,7 @@ const usage = `usage:
   germes overseer       open the overseer: one session that controls Germes (sessions, jobs) for you
   germes mcp --session <id>  MCP server with Germes' tools (claude starts it on its own)
   germes ls             list sessions
+  germes insights [--days 30]  how Germes was used: sessions, turns, tools, skills
   germes stop <id>      stop a session's current step
   germes job add [--every 1h] [--max-runs n] [--name x] [--no-worktree] "<prompt>"
                         run a prompt again and again in this folder, a new session each round
@@ -135,6 +136,16 @@ func run(args []string) error {
 			return err
 		}
 		return cli.ListSessions(ctx, client, os.Stdout)
+	case "insights":
+		fs := flag.NewFlagSet("insights", flag.ContinueOnError)
+		days := fs.Int("days", 30, "how many days back")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if err := ensureDaemon(ctx, p, client); err != nil {
+			return err
+		}
+		return cli.GetInsights(ctx, client, time.Now().AddDate(0, 0, -*days), os.Stdout)
 	case "stop":
 		if len(args) < 2 {
 			return errors.New("usage: germes stop <id>")
@@ -326,6 +337,7 @@ func runDaemon(p paths) error {
 			}
 			slog.Info("cleanup", "tool_outputs", outputs, "snapshot_repos", snapshots)
 		},
+		Insights: st.GetInsights,
 	}).Run(context.Background())
 }
 

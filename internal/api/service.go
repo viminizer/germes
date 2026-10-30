@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Service is everything a client can ask Germes to do. The daemon implements
@@ -32,6 +33,7 @@ type Service interface {
 	StopJob(ctx context.Context, id string) error
 	DeleteJob(ctx context.Context, id string) error
 
+	GetInsights(ctx context.Context, since time.Time) (Insights, error)
 	ListTools(ctx context.Context, sessionID string) ([]ToolInfo, error)
 	RunTool(ctx context.Context, r ToolRequest) (ToolResult, error)
 }

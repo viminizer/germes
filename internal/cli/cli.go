@@ -134,3 +134,35 @@ func ago(t time.Time) string {
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
+
+// GetInsights prints how Germes was used since a time: sessions, turns, the
+// most used tools and the skills loaded.
+func GetInsights(ctx context.Context, svc api.Service, since time.Time, out io.Writer) error {
+	in, err := svc.GetInsights(ctx, since)
+	if err != nil {
+		return err
+	}
+	turns, engines := 0, ""
+	for _, c := range in.Turns {
+		turns += c.Count
+		engines += fmt.Sprintf(", %s %d", c.Name, c.Count)
+	}
+	fmt.Fprintf(out, "Since %s: %d sessions, %d turns, %d errors\n", in.Since.Format("Jan 2"), in.Sessions, turns, in.Errors)
+	if engines != "" {
+		fmt.Fprintf(out, "Turns by engine: %s\n", engines[2:])
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "\nTOOL\tCALLS")
+	for _, c := range in.Tools[:min(len(in.Tools), 15)] {
+		fmt.Fprintf(tw, "%s\t%d\n", c.Name, c.Count)
+	}
+	if len(in.Skills) == 0 {
+		fmt.Fprintln(tw, "\nno skills loaded")
+		return tw.Flush()
+	}
+	fmt.Fprintln(tw, "\nSKILL\tUSES\tLAST USED")
+	for _, u := range in.Skills {
+		fmt.Fprintf(tw, "%s\t%d\t%s\n", u.Name, u.Count, u.LastUsed.Format("Jan 2"))
+	}
+	return tw.Flush()
+}

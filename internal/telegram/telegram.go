@@ -17,6 +17,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 const (
 	pollTimeout = 30              // seconds a getUpdates call waits for news
 	retryWait   = 5 * time.Second // after a failed poll or watch
+	settleWait  = time.Second     // a turn_done being saved as the bot looks
 	typingEvery = 4 * time.Second // Telegram shows "typing" for about 5 s
 )
 
@@ -65,6 +67,18 @@ type Telegram struct {
 	mu      sync.Mutex
 	state   state
 	choices map[string][]string // /bind buttons: token -> project folders
+	// Kept across cleanup to distinguish successive requests to the same topic.
+	replyGeneration map[string]uint64
+	replySending    map[string]int
+	replyDone       map[string]int64 // turn_done seq seen while a send was in flight
+	// handled is the last stored event seen per session this bot has
+	// answered before, also while nobody waits for it, kept after its
+	// topic is forgotten: copies of older events still on their way after
+	// a new request registers the session are skipped.
+	handled map[string]int64
+
+	outputMu sync.Mutex // serializes stored creation replay with the live watcher
+	output   replyOutput
 }
 
 // state is saved in telegram.json. ReplyTo is saved too, so a new bot after
@@ -73,6 +87,10 @@ type state struct {
 	Offset  int64            `json:"offset"`             // the next update to read
 	Topics  map[int64]topic  `json:"topics"`             // topic id -> binding
 	ReplyTo map[string]int64 `json:"reply_to,omitempty"` // session -> topic waiting for its answer
+	// Answered is, per waiting session, the last event before its first
+	// unanswered turn: a new bot sends every turn after it, not only the
+	// last one. Set from the first user message seen, then each turn_done.
+	Answered map[string]int64 `json:"answered,omitempty"`
 }
 
 // topic is a topic bound to a project, with its current session.
@@ -89,7 +107,9 @@ func New(svc api.Service, opts Options) *Telegram {
 		base = "https://api.telegram.org"
 	}
 	b := &bot{base: base + "/bot" + opts.Token, files: base + "/file/bot" + opts.Token, http: &http.Client{}}
-	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}}}
+	t := &Telegram{svc: svc, opts: opts, bot: b, choices: map[string][]string{}, state: state{Topics: map[int64]topic{}},
+		replyGeneration: map[string]uint64{}, replySending: map[string]int{}, replyDone: map[string]int64{}, handled: map[string]int64{},
+		output: replyOutput{last: map[string]string{}, sending: map[string]bool{}, limited: map[string]bool{}, seq: map[string]int64{}, noticeSeq: map[string]int64{}, replaying: map[string]bool{}, held: map[string][]api.Event{}}}
 	if b, err := os.ReadFile(opts.StatePath); err == nil {
 		if err := json.Unmarshal(b, &t.state); err != nil {
 			slog.Warn("telegram: state file is broken; starting without bindings", "path", opts.StatePath, "err", err)
@@ -105,12 +125,36 @@ func New(svc api.Service, opts Options) *Telegram {
 	return t
 }
 
-// Run polls Telegram and sends answers until ctx ends.
+// Run polls Telegram and sends answers until ctx ends. Its children finish
+// before it returns or propagates a panic, so a replacement bot can start safely.
 func (t *Telegram) Run(ctx context.Context) error {
 	slog.Info("telegram bot started")
+	ctx, cancel := context.WithCancel(ctx)
+	var children sync.WaitGroup
+	defer func() {
+		cancel()
+		children.Wait()
+	}()
 	t.setCommands(ctx)
-	go recovered("telegram watch", func() { t.watch(ctx) })
-	go recovered("telegram typing", func() { t.showTyping(ctx) })
+	children.Add(2)
+	// The start check waits for the first subscription: a turn that ends
+	// after it arrives live, one that ended before it is idle when the
+	// start looks. All-session watches replay no history.
+	attached := make(chan struct{})
+	ready := sync.OnceFunc(func() { close(attached) })
+	go func() {
+		defer children.Done()
+		defer ready()
+		recovered("telegram watch", func() { t.watch(ctx, ready) })
+	}()
+	go func() {
+		defer children.Done()
+		recovered("telegram typing", func() { t.showTyping(ctx) })
+	}()
+	select {
+	case <-attached:
+	case <-ctx.Done():
+	}
 	t.tellLostAnswers(ctx)
 	for ctx.Err() == nil {
 		var updates []update
@@ -192,43 +236,193 @@ func (t *Telegram) markSeen(ctx context.Context, m *message) {
 // ask sends text to the topic's session and waits for its answer there.
 // plan: a plan turn.
 func (t *Telegram) ask(ctx context.Context, thread int64, text string, plan bool) {
-	id, err := t.send(ctx, thread, text, plan)
-	if err != nil {
+	if _, err := t.send(ctx, thread, text, plan); err != nil {
 		t.reply(ctx, thread, "Could not send it: "+err.Error())
-		return
 	}
-	t.mu.Lock()
-	t.state.ReplyTo[id] = thread
-	t.mu.Unlock()
-	t.save()
 }
 
-// tellLostAnswers runs at start. A saved session that is no longer working
-// ended its turn while no bot watched (the daemon crashed or restarted, or
-// the turn ended during a hand-over), so its answer is lost: its topic is
-// told, and it is forgotten. Sessions still working are answered as usual.
+// tellLostAnswers runs at start, while the watcher already runs. Pending
+// turns keep their saved destination. A turn that ended while no bot
+// watched (during a hand-over, or just now) has its answer sent from the
+// stored history. Only a turn that never finished (the daemon crashed or
+// restarted) is lost: its topic is told, and it is forgotten.
 func (t *Telegram) tellLostAnswers(ctx context.Context) {
 	t.mu.Lock()
 	waiting := maps.Clone(t.state.ReplyTo)
 	t.mu.Unlock()
-	lost := false
 	for id, thread := range waiting {
+		t.recoverAnswer(ctx, id, thread)
+	}
+}
+
+// recoverAnswer holds outputMu, so the watcher cannot deliver or forget the
+// same answer at the same time.
+func (t *Telegram) recoverAnswer(ctx context.Context, id string, thread int64) {
+	t.outputMu.Lock()
+	defer t.outputMu.Unlock()
+	t.mu.Lock()
+	_, waiting := t.state.ReplyTo[id]
+	t.mu.Unlock()
+	if !waiting {
+		return // the watcher already delivered it
+	}
+	t.settle(ctx, id, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+}
+
+// settle decides a waiting session no live event will finish: a pending
+// turn keeps its topic; a finished last turn has its answer sent from the
+// stored history (its turn_done cleans up, and live copies are then
+// ignored); a turn that never finished tells the topic lost and forgets it.
+// Runs with outputMu held.
+func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost string) {
+	var generation uint64
+	for rechecked := false; ; rechecked = true {
+		t.mu.Lock()
+		generation = t.replyGeneration[id]
+		t.mu.Unlock()
 		s, err := t.svc.GetSession(ctx, id)
-		if err != nil && !api.IsNotFound(err) {
-			slog.Warn("telegram: check a waiting session", "session", id, "err", err)
-			continue // kept: the next start checks again
-		}
-		if err == nil && s.Status == api.StatusWorking {
-			continue
+		if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
+			return
 		}
 		t.mu.Lock()
-		delete(t.state.ReplyTo, id)
+		answered, known := t.state.Answered[id]
 		t.mu.Unlock()
-		lost = true
-		t.reply(ctx, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+		if !known {
+			answered = -1
+		}
+		var turns []api.Event
+		if err == nil {
+			turns, err = t.storedEvents(ctx, id, answered, 0)
+		}
+		if err != nil && !api.IsNotFound(err) {
+			slog.Warn("telegram: check a waiting session", "session", id, "err", err)
+			return // kept: the next start checks again
+		}
+		// Every unanswered turn goes out; seen events are skipped.
+		for _, ev := range turns {
+			t.sendReplyEvent(ctx, ev)
+		}
+		// The last turn finished: one replayed now, or (nothing after the
+		// boundary) the turn_done the boundary was saved at.
+		done := int64(-1)
+		if n := len(turns); n > 0 && turns[n-1].Kind == api.KindTurnDone {
+			done = turns[n-1].Seq
+		} else if n == 0 && known && err == nil {
+			done = answered
+		}
+		if done >= 0 {
+			t.mu.Lock()
+			_, waiting := t.state.ReplyTo[id]
+			generation := t.replyGeneration[id]
+			t.mu.Unlock()
+			if waiting {
+				// This same bot may have seen that turn_done before a
+				// restart: the replay skipped it, and its cleanup with it.
+				t.finishReply(ctx, id, done, generation)
+			}
+			return
+		}
+		if rechecked || api.IsNotFound(err) {
+			break
+		}
+		// The worker shows idle just before it saves turn_done, so a turn
+		// ending right now looks unfinished: look again a moment later,
+		// letting live output through meanwhile.
+		// ponytail: one fixed wait; a turn_done save slower than
+		// settleWait still reads as lost. Upgrade: a worker signal.
+		t.outputMu.Unlock()
+		wait(ctx, settleWait)
+		t.outputMu.Lock()
+		t.mu.Lock()
+		_, waiting := t.state.ReplyTo[id]
+		t.mu.Unlock()
+		if !waiting || ctx.Err() != nil {
+			return // its live turn_done finished it
+		}
 	}
-	if lost {
-		t.save()
+	t.mu.Lock()
+	if t.replyGeneration[id] != generation || t.replySending[id] > 0 {
+		// A newer request registered meanwhile: its own turn finishes it.
+		t.mu.Unlock()
+		return
+	}
+	delete(t.state.ReplyTo, id)
+	delete(t.state.Answered, id)
+	t.mu.Unlock()
+	// The lost turn's replayed output must not become the next turn's.
+	delete(t.output.last, id)
+	delete(t.output.limited, id)
+	delete(t.output.seq, id)
+	delete(t.output.noticeSeq, id)
+	for key := range t.output.sending {
+		if strings.HasPrefix(key, id+" ") {
+			delete(t.output.sending, key)
+		}
+	}
+	t.save()
+	t.reply(ctx, thread, lost)
+}
+
+// catchUp sends the stored events a waiting session had after the last one
+// this bot saw, after the watcher subscribed again: the hub drops a watcher
+// that falls behind (a long rate-limit wait), and live events from the gap
+// are gone. A session with nothing seen yet is settled like at start: its
+// turn may have ended in the gap, and no live turn_done will come.
+func (t *Telegram) catchUp(ctx context.Context) {
+	t.mu.Lock()
+	waiting := maps.Clone(t.state.ReplyTo)
+	t.mu.Unlock()
+	for id, thread := range waiting {
+		t.outputMu.Lock()
+		t.mu.Lock()
+		_, still := t.state.ReplyTo[id]
+		t.mu.Unlock()
+		switch after := t.output.seq[id]; {
+		case !still || t.output.replaying[id]:
+		case after == 0:
+			// Nothing seen yet (kept at start while it worked): if its
+			// turn ended in the gap, no live turn_done will come.
+			t.settle(ctx, id, thread, "⚠ Germes restarted while working on this, so the answer was lost. Send your message again.")
+		default:
+			missed, err := t.storedEvents(ctx, id, after, 0)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				slog.Warn("telegram: catch up a waiting session", "session", id, "err", err)
+			}
+			for _, ev := range missed {
+				t.sendReplyEvent(ctx, ev)
+			}
+		}
+		t.outputMu.Unlock()
+	}
+}
+
+// storedEvents reads a session's stored events after seq after and before
+// seq until (0 = no end), without notices: they are routed on their own.
+// With after -1 (nothing known) it starts at the last user message.
+func (t *Telegram) storedEvents(ctx context.Context, id string, after, until int64) ([]api.Event, error) {
+	var events []api.Event
+	last := after < 0
+	after = max(after, 0)
+	for {
+		page, err := t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: after, Limit: 1000})
+		if err != nil {
+			return nil, err
+		}
+		for _, ev := range page.Items {
+			if until != 0 && ev.Seq >= until {
+				return events, nil
+			}
+			if last && ev.Kind == api.KindUserMessage {
+				events = events[:0]
+			}
+			if ev.Kind != api.KindNotice {
+				events = append(events, ev)
+			}
+			after = ev.Seq
+		}
+		if page.Next == "" || len(page.Items) == 0 {
+			return events, nil
+		}
 	}
 }
 
@@ -251,17 +445,17 @@ func (t *Telegram) send(ctx context.Context, thread int64, text string, plan boo
 	tp, bound := t.state.Topics[thread]
 	t.mu.Unlock()
 	if !bound {
-		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: api.OverseerID, Text: text, Plan: plan})
+		res, err := t.sendMessage(ctx, thread, api.MessageRequest{SessionID: api.OverseerID, Text: text, Plan: plan})
 		return res.SessionID, err
 	}
 	if tp.SessionID != "" {
-		res, err := t.svc.SendMessage(ctx, api.MessageRequest{SessionID: tp.SessionID, Text: text, Plan: plan})
+		res, err := t.sendMessage(ctx, thread, api.MessageRequest{SessionID: tp.SessionID, Text: text, Plan: plan})
 		if !api.IsNotFound(err) {
 			return res.SessionID, err
 		}
 		// The session was deleted: start a new one below.
 	}
-	res, err := t.svc.SendMessage(ctx, api.MessageRequest{Dir: tp.Project, Text: text, Plan: plan})
+	res, err := t.sendMessage(ctx, thread, api.MessageRequest{Dir: tp.Project, Text: text, Plan: plan})
 	if err != nil {
 		return "", err
 	}
@@ -274,6 +468,51 @@ func (t *Telegram) send(ctx context.Context, thread int64, text string, plan boo
 		t.reply(ctx, thread, res.Warning)
 	}
 	return res.SessionID, nil
+}
+
+// sendMessage reserves a known session before sending: completion lookups
+// must not remove its destination while the request is still in flight.
+func (t *Telegram) sendMessage(ctx context.Context, thread int64, r api.MessageRequest) (api.MessageResult, error) {
+	id := r.SessionID
+	t.mu.Lock()
+	previous, waiting := t.state.ReplyTo[id]
+	if id != "" {
+		t.replyGeneration[id]++
+		t.replySending[id]++
+		t.state.ReplyTo[id] = thread
+	}
+	t.mu.Unlock()
+
+	res, err := t.svc.SendMessage(ctx, r)
+	t.mu.Lock()
+	if id != "" {
+		t.replySending[id]--
+		t.replyGeneration[id]++
+		if err != nil {
+			// The poller sends serially; a failed request must not erase an
+			// earlier turn's destination, including one in another topic.
+			if waiting {
+				t.state.ReplyTo[id] = previous
+			} else {
+				delete(t.state.ReplyTo, id)
+				delete(t.state.Answered, id)
+			}
+		}
+	}
+	if err == nil && id != "" {
+		// Known sessions were reserved before sending.
+		t.replyGeneration[res.SessionID]++
+		t.state.ReplyTo[res.SessionID] = thread
+	}
+	t.mu.Unlock()
+	if err == nil && id == "" {
+		t.registerCreated(ctx, res.SessionID, thread)
+	}
+	t.save()
+	if id != "" {
+		t.finishSent(ctx, id)
+	}
+	return res, err
 }
 
 // command runs a slash command. "/bind@MyBot x" works too.
@@ -513,17 +752,30 @@ func (t *Telegram) save() {
 	defer t.mu.Unlock()
 	b, err := json.MarshalIndent(t.state, "", "  ")
 	if err == nil {
-		// A temp file and a rename, so a crash never leaves a half-written
-		// file. This is file.Save, which R5 does not let this package import.
-		tmp := t.opts.StatePath + ".tmp"
-		err = os.WriteFile(tmp, b, 0o600)
-		if err == nil {
-			err = os.Rename(tmp, t.opts.StatePath)
-		}
+		err = saveState(t.opts.StatePath, b)
 	}
 	if err != nil {
 		slog.Warn("telegram: save state", "err", err)
 	}
+}
+
+// This mirrors file.Save because R5 allows this client to import only api.
+func saveState(path string, data []byte) (err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".germes-save-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, os.Remove(f.Name()))
+		}
+	}()
+	_, err = f.Write(data)
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // recovered runs fn and logs a panic instead of crashing the daemon.

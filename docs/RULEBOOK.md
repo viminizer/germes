@@ -258,6 +258,14 @@ Fix the root cause in the shared place, not in one caller.
 - Check: a fix in a caller does not leave other callers of the same function broken.
 - Example: none yet
 
+## R48. Publish whole files from exclusive temporary files
+
+Whole-file replacement uses a unique, exclusively created temporary file in the destination directory, private until its requested final permissions are applied. Check write, permission, close and rename failures; on failure remove only that save's temporary file and report cleanup errors. Never reuse a predictable `.tmp` path. Use `file.Save` where module boundaries permit; boundary-required copies document why they cannot share it. Atomic publication does not promise power-loss durability or serialize caller read-modify-write operations.
+
+- From: atomic-save concurrency, symlink and stale-permission review findings, 2026-10-30.
+- Check: inspect whole-file saving code for exclusive sibling creation and checked publication/cleanup; run `go test ./internal/file ./internal/telegram ./internal/archtest -count=1`.
+- Example: `internal/file/file.go`; R5-boundary copy: `internal/telegram/telegram.go`.
+
 ## R13. Validate input where it enters
 
 Validate input where it enters: socket requests, Telegram messages, tool arguments from the model, config files.

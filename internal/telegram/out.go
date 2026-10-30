@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -18,65 +19,320 @@ const scanDepth = 3
 
 // watch follows every session: answers and files from send_file go back to
 // the topic that asked, job notices to the project's topic (or General). A
-// dropped watch comes back after a short wait.
-func (t *Telegram) watch(ctx context.Context) {
-	last := map[string]string{}  // session -> its last text this turn
-	sending := map[string]bool{} // send_file calls waiting for their result (session + call id)
-	limited := map[string]bool{} // sessions told this turn about a limit or outage
-	for ctx.Err() == nil {
+// dropped watch comes back after a short wait. ready is called after the
+// first subscription attempt.
+func (t *Telegram) watch(ctx context.Context, ready func()) {
+	// The first subscription needs no catch-up: the start settles every
+	// waiting session itself (tellLostAnswers), after it.
+	for attached := false; ctx.Err() == nil; attached = true {
 		events, err := t.svc.Watch(ctx, api.WatchFilter{})
+		ready()
 		if err != nil {
 			slog.Warn("telegram watch", "err", err)
 			wait(ctx, retryWait)
 			continue
 		}
+		if attached {
+			t.catchUp(ctx)
+		}
 		for ev := range events {
-			t.mu.Lock()
-			thread, asked := t.state.ReplyTo[ev.SessionID]
-			t.mu.Unlock()
+			t.outputMu.Lock()
 			switch {
-			case ev.Kind == api.KindNotice:
-				t.reply(ctx, t.threadFor(ctx, ev.SessionID), "🔔 "+ev.Text)
-			case ev.Kind == api.KindLearned:
-				// Only where this session talks, like Hermes ("💾 Memory
-				// updated" in its own chat): never a project topic or General.
-				if thread, ok := t.ownThread(ev.SessionID); ok {
-					t.reply(ctx, thread, "💾 "+ev.Text)
-				}
-			case !asked:
-			case ev.Kind == api.KindStatus:
-				t.reply(ctx, thread, "⏳ "+ev.Text)
-			case ev.Kind == api.KindText:
-				last[ev.SessionID] = ev.Text
-			case ev.Kind == api.KindToolCall && ev.Tool != nil && ev.Tool.Name == api.ToolSendFile:
-				sending[callKey(ev)] = true
-			case ev.Kind == api.KindToolResult && ev.Tool != nil && sending[callKey(ev)]:
-				delete(sending, callKey(ev))
-				if !ev.Tool.IsError {
-					t.upload(ctx, thread, ev.Tool.Output)
-				}
-			case ev.Kind == api.KindLimitHit && limited[ev.SessionID]:
-				// Once per turn: a long outage repeats it every cooldown.
-			case ev.Kind == api.KindError || ev.Kind == api.KindLimitHit:
-				limited[ev.SessionID] = limited[ev.SessionID] || ev.Kind == api.KindLimitHit
-				t.reply(ctx, thread, "⚠ "+ev.Text)
-			case ev.Kind == api.KindTurnDone:
-				if text := last[ev.SessionID]; text != "" {
-					t.reply(ctx, thread, text)
-				}
-				delete(last, ev.SessionID)
-				delete(limited, ev.SessionID)
-				// Messages queued during the turn run next: keep listening.
-				if s, err := t.svc.GetSession(ctx, ev.SessionID); err != nil || (s.Status == api.StatusIdle && len(s.Queued) == 0) {
-					t.mu.Lock()
-					delete(t.state.ReplyTo, ev.SessionID)
-					t.mu.Unlock()
-					t.save()
-				}
+			// Replay resends saved events only; live-only ones pass through.
+			case !t.output.replaying[ev.SessionID] || ev.Kind == api.KindNotice || ev.Kind == api.KindLearned:
+				t.sendReplyEvent(ctx, ev)
+			case ev.Seq == 0 && (ev.Kind == api.KindError || ev.Kind == api.KindTurnDone):
+				// Not saved (issue #25): replay cannot find it, so it
+				// waits for the end of the replay.
+				t.output.held[ev.SessionID] = append(t.output.held[ev.SessionID], ev)
 			}
+			t.outputMu.Unlock()
 		}
 		wait(ctx, time.Second) // the stream ended: the daemon is going away
 	}
+}
+
+// replyOutput belongs to outputMu, including creation-time stored replay.
+type replyOutput struct {
+	last      map[string]string
+	sending   map[string]bool
+	limited   map[string]bool
+	seq       map[string]int64
+	noticeSeq map[string]int64 // globally routed notices cannot acknowledge unseen replies
+	replaying map[string]bool
+	held      map[string][]api.Event // unsaved completions that arrived during replay
+}
+
+// registerCreated replays only the returned session, while live output is
+// excluded. Events published before acceptance returned are already stored;
+// queued live copies are skipped by sequence, without buffering strangers.
+func (t *Telegram) registerCreated(ctx context.Context, id string, thread int64) {
+	t.outputMu.Lock()
+	t.output.replaying[id] = true
+	defer func() {
+		for _, ev := range t.output.held[id] {
+			t.sendReplyEvent(ctx, ev)
+		}
+		delete(t.output.held, id)
+		delete(t.output.replaying, id)
+		t.mu.Lock()
+		_, waiting := t.state.ReplyTo[id]
+		t.mu.Unlock()
+		if waiting && ctx.Err() == nil {
+			// A completion that could not be saved and came before the
+			// creation response is gone: settle it from the session itself.
+			t.settle(ctx, id, thread, "⚠ This turn ended without a saved answer, so it was lost. Send your message again.")
+		}
+		t.outputMu.Unlock()
+	}()
+	t.mu.Lock()
+	t.replyGeneration[id]++
+	t.state.ReplyTo[id] = thread
+	t.mu.Unlock()
+	t.save()
+	var after int64
+	for ctx.Err() == nil {
+		page, err := t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: after, Limit: 1000})
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("telegram: replay created session", "session", id, "err", err)
+				// Other sessions must keep receiving replies while history
+				// is unavailable. Only this ID waits for its stored replay.
+				t.outputMu.Unlock()
+				wait(ctx, retryWait)
+				t.outputMu.Lock()
+			}
+			continue
+		}
+		for _, ev := range page.Items {
+			// Notices are already routed globally, even before registration.
+			if ev.SessionID == id && ev.Kind != api.KindNotice {
+				t.sendReplyEvent(ctx, ev)
+			}
+			after = ev.Seq
+		}
+		if page.Next == "" || len(page.Items) == 0 {
+			return
+		}
+	}
+}
+
+// sendReplyEvent runs with outputMu held.
+func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
+	t.mu.Lock()
+	thread, asked := t.state.ReplyTo[ev.SessionID]
+	generation := t.replyGeneration[ev.SessionID]
+	handled, known := t.handled[ev.SessionID]
+	t.mu.Unlock()
+	stored := ev.Seq != 0 && ev.Kind != api.KindNotice
+	if asked && stored && ev.Seq <= handled {
+		return // already seen: a late copy of an older turn
+	}
+	if !asked {
+		delete(t.output.seq, ev.SessionID)
+		delete(t.output.noticeSeq, ev.SessionID)
+	}
+	if asked && ev.Seq != 0 && ev.Kind != api.KindNotice {
+		// A stored event after a gap: send what this bot missed first, or
+		// an earlier unanswered turn would be skipped. With no watermark,
+		// only a turn_done can tell its turn was missed.
+		after, known := t.watermark(ev.SessionID)
+		if (known && ev.Seq > after+1 || !known && ev.Kind == api.KindTurnDone) && !t.replayMissed(ctx, ev) {
+			return // unknown: the topic keeps waiting, and the next start settles it
+		}
+	}
+	if stored && (asked || known) {
+		// Also while nobody waits here (a TUI turn). Only once the event
+		// is handled: after a failed gap replay it must stay replayable.
+		t.mu.Lock()
+		t.handled[ev.SessionID] = max(t.handled[ev.SessionID], ev.Seq)
+		t.mu.Unlock()
+	}
+	seq := t.output.seq
+	if ev.Kind == api.KindNotice {
+		seq = t.output.noticeSeq
+	}
+	if asked && ev.Seq != 0 {
+		if ev.Seq <= seq[ev.SessionID] {
+			return
+		}
+		seq[ev.SessionID] = ev.Seq
+	}
+	switch {
+	case ev.Kind == api.KindNotice:
+		t.reply(ctx, t.threadFor(ctx, ev.SessionID), "🔔 "+ev.Text)
+	case ev.Kind == api.KindLearned:
+		// Only where this session talks, like Hermes ("💾 Memory
+		// updated" in its own chat): never a project topic or General.
+		if thread, ok := t.ownThread(ev.SessionID); ok {
+			t.reply(ctx, thread, "💾 "+ev.Text)
+		}
+	case !asked:
+	case ev.Kind == api.KindUserMessage && ev.Seq != 0:
+		// A new turn: output left by one whose turn_done never came (not
+		// saved, and missed live) is not this turn's answer.
+		delete(t.output.last, ev.SessionID)
+		delete(t.output.limited, ev.SessionID)
+		t.markAnswered(ev.SessionID, ev.Seq-1, false)
+	case ev.Kind == api.KindStatus:
+		t.reply(ctx, thread, "⏳ "+ev.Text)
+	case ev.Kind == api.KindText:
+		t.output.last[ev.SessionID] = ev.Text
+	case ev.Kind == api.KindToolCall && ev.Tool != nil && ev.Tool.Name == api.ToolSendFile:
+		t.output.sending[callKey(ev)] = true
+	case ev.Kind == api.KindToolResult && ev.Tool != nil && t.output.sending[callKey(ev)]:
+		delete(t.output.sending, callKey(ev))
+		if !ev.Tool.IsError {
+			t.upload(ctx, thread, ev.Tool.Output)
+		}
+	case ev.Kind == api.KindLimitHit && t.output.limited[ev.SessionID]:
+		// Once per turn: a long outage repeats it every cooldown.
+	case ev.Kind == api.KindError || ev.Kind == api.KindLimitHit:
+		t.output.limited[ev.SessionID] = t.output.limited[ev.SessionID] || ev.Kind == api.KindLimitHit
+		t.reply(ctx, thread, "⚠ "+ev.Text)
+	case ev.Kind == api.KindTurnDone:
+		if text := t.output.last[ev.SessionID]; text != "" {
+			t.reply(ctx, thread, text)
+		}
+		delete(t.output.last, ev.SessionID)
+		delete(t.output.limited, ev.SessionID)
+		if ev.Seq != 0 {
+			t.markAnswered(ev.SessionID, ev.Seq, true)
+		}
+		t.finishReply(ctx, ev.SessionID, ev.Seq, generation)
+	}
+}
+
+// markAnswered saves the boundary before a waiting session's first
+// unanswered turn: at its first user message seen (only if none is known),
+// and after each turn_done handled (later always wins).
+func (t *Telegram) markAnswered(id string, seq int64, turnDone bool) {
+	t.mu.Lock()
+	known, has := t.state.Answered[id]
+	_, waiting := t.state.ReplyTo[id]
+	changed := waiting && (!has || turnDone && seq > known)
+	if changed {
+		if t.state.Answered == nil {
+			t.state.Answered = map[string]int64{}
+		}
+		t.state.Answered[id] = seq
+	}
+	t.mu.Unlock()
+	if changed {
+		t.save()
+	}
+}
+
+// finishReply forgets the topic waiting for a session after the turn_done
+// at seq, once the session is gone, or idle with nothing queued and nothing
+// stored after seq: a later turn may have finished before this one's
+// answer went out, and its events are still on their way. A send in flight
+// defers the check to finishSent; a send that ended during the check makes
+// it check again. Runs with outputMu held.
+func (t *Telegram) finishReply(ctx context.Context, id string, seq int64, generation uint64) {
+	if seq == 0 {
+		// A turn_done that could not be saved goes out live (issue #25):
+		// the last stored event this bot saw is the watermark instead.
+		seq = max(t.output.seq[id], t.output.noticeSeq[id])
+	}
+	for {
+		s, err := t.svc.GetSession(ctx, id)
+		if err == nil && (s.Status != api.StatusIdle || len(s.Queued) > 0) {
+			return // messages queued during the turn run next: keep listening
+		}
+		if err == nil && seq != 0 {
+			var later api.Page[api.Event]
+			if later, err = t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: seq, Limit: 1}); err == nil && len(later.Items) > 0 {
+				return
+			}
+		}
+		if err != nil && !api.IsNotFound(err) {
+			if !errors.Is(err, context.Canceled) {
+				slog.Warn("telegram: check a finished turn", "session", id, "err", err)
+			}
+			return // an unknown state is not proof that queued work finished
+		}
+		t.mu.Lock()
+		switch {
+		case t.replySending[id] > 0:
+			t.replyDone[id] = seq // the turn may be the one being sent
+		case t.replyGeneration[id] == generation:
+			delete(t.state.ReplyTo, id)
+			delete(t.state.Answered, id)
+			delete(t.replyDone, id)
+			delete(t.output.seq, id)
+			delete(t.output.noticeSeq, id)
+		default:
+			// A send ended during the check, too early for finishSent to
+			// see this completion: check again with its outcome.
+			generation = t.replyGeneration[id]
+			t.mu.Unlock()
+			continue
+		}
+		t.mu.Unlock()
+		t.save()
+		return
+	}
+}
+
+// finishSent checks a completion that arrived while a send to the session
+// was in flight, now that the send is over. Only a deferred completion
+// waits for output: the poller must not stall behind slow replies.
+func (t *Telegram) finishSent(ctx context.Context, id string) {
+	t.mu.Lock()
+	_, deferred := t.replyDone[id]
+	t.mu.Unlock()
+	if !deferred {
+		return
+	}
+	t.outputMu.Lock()
+	defer t.outputMu.Unlock()
+	t.mu.Lock()
+	seq, done := t.replyDone[id]
+	done = done && t.replySending[id] == 0
+	if done {
+		delete(t.replyDone, id)
+	}
+	generation := t.replyGeneration[id]
+	t.mu.Unlock()
+	if done {
+		t.finishReply(ctx, id, seq, generation)
+	}
+}
+
+// replayMissed sends the stored events of a waiting session that this bot
+// did not see live before ev: the bot attached during a hand-over, or the
+// hub dropped its stream. It starts after the watermark, else (ev is a
+// turn_done) at the turn's user message. Runs with outputMu held.
+func (t *Telegram) replayMissed(ctx context.Context, ev api.Event) bool {
+	after, known := t.watermark(ev.SessionID)
+	if !known {
+		after = -1
+	}
+	missed, err := t.storedEvents(ctx, ev.SessionID, after, ev.Seq)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.Warn("telegram: read missed events", "session", ev.SessionID, "err", err)
+		}
+		return false
+	}
+	for _, ev := range missed {
+		t.sendReplyEvent(ctx, ev)
+	}
+	return true
+}
+
+// watermark is the last stored event of a waiting session this bot has
+// handled: the last one seen, else the saved answered boundary. Runs with
+// outputMu held.
+func (t *Telegram) watermark(id string) (int64, bool) {
+	if seq := t.output.seq[id]; seq != 0 {
+		return seq, true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	answered, known := t.state.Answered[id]
+	return answered, known
 }
 
 // callKey names a tool call across sessions: call ids are only unique in one.

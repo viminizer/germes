@@ -102,7 +102,7 @@ func workspace(dir string) string {
 		b.WriteString(git + "\n")
 	}
 	if len(checks) > 0 {
-		fmt.Fprintf(&b, "Checks (run them before you say the work is done): `%s`\n", strings.Join(checks, "`, `"))
+		fmt.Fprintf(&b, "Checks (run them after you change files): `%s`\n", strings.Join(checks, "`, `"))
 	}
 	return strings.TrimSpace(b.String())
 }

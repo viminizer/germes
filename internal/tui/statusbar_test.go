@@ -26,7 +26,7 @@ func TestStatusLineFitsAndDropsTheLeastImportantFirst(t *testing.T) {
 		has, lacks []string
 	}{
 		{160, []string{"ready", "gpt 5.5", "57k/200k", "28%", "2h 5m", "✓ 13s", "Fix the footer under the input (germes/abc123)"}, nil},
-		{90, []string{"ready", "gpt 5.5", "57k/200k", "2h 5m", "…"}, []string{"Fix the footer"}},
+		{90, []string{"ready", "gpt 5.5", "57k/200k", "2h 5m", "─ Fix the footer under …"}, []string{"germes/abc123"}},
 		{50, []string{"ready", "gpt 5.5", "57k/200k"}, []string{"2h 5m", "germes/abc123"}},
 		{20, []string{"ready"}, nil},
 	} {

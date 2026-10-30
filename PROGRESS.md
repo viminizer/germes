@@ -194,6 +194,32 @@
 - PLAN: start check runs after the first subscription attempt; regression name added.
 - Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix7-path` -> `/tmp/germes-r6-fix7.*`. Both review gates must run again on the new commit.
 
+### Round 6 eighth check
+
+- HEAD `685dd8d426b6bb6f8b4052e68f7d7b812510c148`, clean tree, based on `origin/main` `90e12a7` (unchanged after fetch). All exit 0: `make check` (`/tmp/germes-r6-check8.log`), focused tests (`/tmp/germes-r6-focused8.log`), race tests (`/tmp/germes-r6-race8.log`), `git diff --check`, `git diff origin/main...HEAD --check`. Both review gates still pending on this HEAD.
+
+### Round 6 eighth independent Codex review (HEAD `685dd8d`)
+
+- Evidence `/tmp/germes-r6-review8.8s6TMU/` (transcript.log, verdict.txt, exit 0, session `01a18e7b-ce51-7360-908f-14342de94372`, read-only / never). HEAD, status and worktree diff unchanged; no failed reviewer commands. Coverage: all 12 Go files, RULEBOOK and PROGRESS through EOF in reads of at most 160 lines; PLAN scope sections; all `file.Save` callers, daemon wiring and peers. R1-R48 unique; no problem in the latest startup-order change. VERDICT: Actionable findings: 2.
+- Open findings for the fix step:
+  1. P2 `telegram.go:361` (`storedEvents` with `after == 0`): recovery keeps only the last turn. If turn A waits for its answer and queued turn B also finishes before startup, history is `user A, answer A, done A, user B, answer B, done B`; startup sends only B and clears the topic, so A's answer is lost. Suggested: persist a pending/acknowledged sequence boundary with the destination and replay all outstanding turns; two-turn regression; update PLAN's last-turn-only wording.
+  2. P2 `out.go:138`, `telegram.go:282`: `sendReplyEvent` advances the cursor through `turn_done` before `finishReply` cleans up. If gateway cancellation interrupts that lookup, the destination stays; `keepServing` restarts `Run` on the same object (`internal/daemon/daemon.go:305`), keeping the cursor, so startup replay skips that `turn_done` as a duplicate and cleanup never runs. Suggested: reconcile completion cleanup independently of delivery dedup; test cancel/restart with the same `Telegram` instance.
+
+### Round 6 eighth consistency audit (read-only, HEAD `685dd8d`)
+
+- Finding 1 CONFIRMED: `storedEvents` with `after == 0` (`telegram.go:351-362`) restarts the list at every `user_message`, so `settle` only sees the last turn. With A waiting and B queued, both finishing while no bot watches (normal for a self-update hand-over with a queued follow-up), startup sends B and its `turn_done` cleans up; A's answer is never sent. Nothing in `telegram.json` says which turns were already answered, so the bot cannot tell "A answered by the old bot" from "A never answered": a persisted boundary is required (module-owned file, no schema migration needed; R2/R5 unaffected).
+- Finding 2 CONFIRMED: `keepServing` (`internal/daemon/daemon.go:297-306`) restarts the gateway on the same `Telegram` object, so `output.seq` survives. `sendReplyEvent` records the `turn_done` sequence before `finishReply`; a cancelled lookup there keeps `ReplyTo`; on the next `Run`, `settle` replays the last turn but every event (including `turn_done`) is skipped as a duplicate, so `finishReply` never runs.
+- Suggested fix covering both, reusing existing pieces: persist per waiting session the last answered sequence (`state.Answered map[string]int64`, saved with `ReplyTo`; set to the `turn_done` sequence when a turn_done is handled for a session that stays waiting, deleted with the destination). `settle` replays every stored event after that boundary (all outstanding turns, no last-turn reset) when one exists, else the last turn as now; after the replay, if the session still waits and the last replayed event is `turn_done`, call `finishReply` directly so delivery dedup cannot skip cleanup. Regressions: two finished turns at start (A unanswered, B finished), and cancel during the completion lookup then `Run` again on the same object. Update PLAN (replay from the answered boundary; same-object restart).
+- Nothing else: R1-R48 unique; the latest start-order change is fine. Result: FINDINGS.
+
+### Round 6 eighth fix (answered boundary; same-object restart)
+
+- `internal/telegram/telegram.go`: `state.Answered` (`answered` in `telegram.json`, module-owned; old files without it still load): per waiting session, the last event before its first unanswered turn. `settle` replays every stored event after it (all outstanding turns); without one, the last turn as before. After the replay, if what was sent ends in `turn_done`, or nothing came after a boundary saved at a `turn_done`, it calls `finishReply` itself, so a `turn_done` this same bot already saw before a gateway restart (`keepServing` reuses the object) still gets its cleanup. `storedEvents` takes `after = -1` for "nothing known" (last turn); `0` is a real boundary (first turn at sequence 1). A failed send and every cleanup also remove `Answered`.
+- `internal/telegram/out.go`: new `markAnswered`: set from the first `user_message` seen for a waiting session (only if none is known), then at each handled `turn_done` (saved before `finishReply`). `replayMissed` with no seen sequence starts after the boundary when one exists.
+- New regressions: `TestRunStartupSendsEveryUnansweredTurn` (A unanswered, queued B finished, both sent; state file left without `reply_to`/`answered`), `TestRunSameBotRestartFinishesReply` (completion lookup cut by cancellation, then `Run` again on the same object). BEFORE (HEAD code via `-overlay`): both failed, exit 1 (only "answer B" sent; topic still waiting after the restart). AFTER: pass. No existing test changed.
+- PLAN Telegram contract: answered boundary, all outstanding turns, same-bot restart cleanup; regression names.
+- Checks, all exit 0: all `TestRun*` `-count=100`; focused tests; race tests; `make check`; `git diff --check`; `git diff origin/main...HEAD --check` (`origin/main` still `90e12a7`). Evidence: `/tmp/germes-r6-fix8-path` -> `/tmp/germes-r6-fix8.*`. Both review gates must run again on the new commit.
+
 ## Active: germes-continuous-quality-loop / round 5 / fix
 
 ### Identity, isolation, base and coordination

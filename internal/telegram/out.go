@@ -150,6 +150,8 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 			t.reply(ctx, thread, "💾 "+ev.Text)
 		}
 	case !asked:
+	case ev.Kind == api.KindUserMessage && ev.Seq != 0:
+		t.markAnswered(ev.SessionID, ev.Seq-1, false)
 	case ev.Kind == api.KindStatus:
 		t.reply(ctx, thread, "⏳ "+ev.Text)
 	case ev.Kind == api.KindText:
@@ -172,7 +174,30 @@ func (t *Telegram) sendReplyEvent(ctx context.Context, ev api.Event) {
 		}
 		delete(t.output.last, ev.SessionID)
 		delete(t.output.limited, ev.SessionID)
+		if ev.Seq != 0 {
+			t.markAnswered(ev.SessionID, ev.Seq, true)
+		}
 		t.finishReply(ctx, ev.SessionID, ev.Seq, generation)
+	}
+}
+
+// markAnswered saves the boundary before a waiting session's first
+// unanswered turn: at its first user message seen (only if none is known),
+// and after each turn_done handled (later always wins).
+func (t *Telegram) markAnswered(id string, seq int64, turnDone bool) {
+	t.mu.Lock()
+	known, has := t.state.Answered[id]
+	_, waiting := t.state.ReplyTo[id]
+	changed := waiting && (!has || turnDone && seq > known)
+	if changed {
+		if t.state.Answered == nil {
+			t.state.Answered = map[string]int64{}
+		}
+		t.state.Answered[id] = seq
+	}
+	t.mu.Unlock()
+	if changed {
+		t.save()
 	}
 }
 
@@ -211,6 +236,7 @@ func (t *Telegram) finishReply(ctx context.Context, id string, seq int64, genera
 			t.replyDone[id] = seq // the turn may be the one being sent
 		case t.replyGeneration[id] == generation:
 			delete(t.state.ReplyTo, id)
+			delete(t.state.Answered, id)
 			delete(t.replyDone, id)
 			delete(t.output.seq, id)
 			delete(t.output.noticeSeq, id)
@@ -255,9 +281,20 @@ func (t *Telegram) finishSent(ctx context.Context, id string) {
 // replayMissed sends the stored events of a waiting session that this bot
 // did not see live before done, its turn_done: the bot attached during a
 // hand-over, or the hub dropped its stream. With nothing seen yet it starts
-// at the turn's user message. Runs with outputMu held.
+// after the saved answered boundary, else at the turn's user message. Runs
+// with outputMu held.
 func (t *Telegram) replayMissed(ctx context.Context, done api.Event) bool {
-	missed, err := t.storedEvents(ctx, done.SessionID, t.output.seq[done.SessionID], done.Seq)
+	after := t.output.seq[done.SessionID]
+	if after == 0 {
+		t.mu.Lock()
+		answered, known := t.state.Answered[done.SessionID]
+		t.mu.Unlock()
+		after = -1
+		if known {
+			after = answered
+		}
+	}
+	missed, err := t.storedEvents(ctx, done.SessionID, after, done.Seq)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			slog.Warn("telegram: read missed events", "session", done.SessionID, "err", err)

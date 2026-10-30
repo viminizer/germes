@@ -82,6 +82,10 @@ type state struct {
 	Offset  int64            `json:"offset"`             // the next update to read
 	Topics  map[int64]topic  `json:"topics"`             // topic id -> binding
 	ReplyTo map[string]int64 `json:"reply_to,omitempty"` // session -> topic waiting for its answer
+	// Answered is, per waiting session, the last event before its first
+	// unanswered turn: a new bot sends every turn after it, not only the
+	// last one. Set from the first user message seen, then each turn_done.
+	Answered map[string]int64 `json:"answered,omitempty"`
 }
 
 // topic is a topic bound to a project, with its current session.
@@ -271,17 +275,41 @@ func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost str
 		if err == nil && (s.Status == api.StatusWorking || s.Status == api.StatusPaused || len(s.Queued) > 0) {
 			return
 		}
-		var turn []api.Event
+		t.mu.Lock()
+		answered, known := t.state.Answered[id]
+		t.mu.Unlock()
+		if !known {
+			answered = -1
+		}
+		var turns []api.Event
 		if err == nil {
-			turn, err = t.storedEvents(ctx, id, 0, 0)
+			turns, err = t.storedEvents(ctx, id, answered, 0)
 		}
 		if err != nil && !api.IsNotFound(err) {
 			slog.Warn("telegram: check a waiting session", "session", id, "err", err)
 			return // kept: the next start checks again
 		}
-		if len(turn) > 0 && turn[len(turn)-1].Kind == api.KindTurnDone {
-			for _, ev := range turn {
-				t.sendReplyEvent(ctx, ev)
+		// Every unanswered turn goes out; seen events are skipped.
+		for _, ev := range turns {
+			t.sendReplyEvent(ctx, ev)
+		}
+		// The last turn finished: one replayed now, or (nothing after the
+		// boundary) the turn_done the boundary was saved at.
+		done := int64(-1)
+		if n := len(turns); n > 0 && turns[n-1].Kind == api.KindTurnDone {
+			done = turns[n-1].Seq
+		} else if n == 0 && known && err == nil {
+			done = answered
+		}
+		if done >= 0 {
+			t.mu.Lock()
+			_, waiting := t.state.ReplyTo[id]
+			generation := t.replyGeneration[id]
+			t.mu.Unlock()
+			if waiting {
+				// This same bot may have seen that turn_done before a
+				// restart: the replay skipped it, and its cleanup with it.
+				t.finishReply(ctx, id, done, generation)
 			}
 			return
 		}
@@ -305,6 +333,7 @@ func (t *Telegram) settle(ctx context.Context, id string, thread int64, lost str
 	}
 	t.mu.Lock()
 	delete(t.state.ReplyTo, id)
+	delete(t.state.Answered, id)
 	t.mu.Unlock()
 	t.save()
 	t.reply(ctx, thread, lost)
@@ -345,10 +374,11 @@ func (t *Telegram) catchUp(ctx context.Context) {
 
 // storedEvents reads a session's stored events after seq after and before
 // seq until (0 = no end), without notices: they are routed on their own.
-// With after 0 it starts at the last user message (the last turn).
+// With after -1 (nothing known) it starts at the last user message.
 func (t *Telegram) storedEvents(ctx context.Context, id string, after, until int64) ([]api.Event, error) {
 	var events []api.Event
-	last := after == 0
+	last := after < 0
+	after = max(after, 0)
 	for {
 		page, err := t.svc.ListEvents(ctx, api.EventFilter{SessionID: id, AfterSeq: after, Limit: 1000})
 		if err != nil {
@@ -441,6 +471,7 @@ func (t *Telegram) sendMessage(ctx context.Context, thread int64, r api.MessageR
 				t.state.ReplyTo[id] = previous
 			} else {
 				delete(t.state.ReplyTo, id)
+				delete(t.state.Answered, id)
 			}
 		}
 	}

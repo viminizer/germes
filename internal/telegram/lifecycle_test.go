@@ -1382,3 +1382,116 @@ func TestRunStartWaitsForFirstSubscription(t *testing.T) {
 		}
 	})
 }
+
+// A waits for its answer and B is queued when the bot stops; both finish
+// before the new bot starts. Both answers go out, not only the last turn.
+func TestRunStartupSendsEveryUnansweredTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "telegram.json")
+		if err := os.WriteFile(path, []byte(`{"reply_to":{"s1":7},"answered":{"s1":0}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 1)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "A"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "answer A"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+			{SessionID: "s1", Seq: 4, Kind: api.KindUserMessage, Text: "B"},
+			{SessionID: "s1", Seq: 5, Kind: api.KindText, Text: "answer B"},
+			{SessionID: "s1", Seq: 6, Kind: api.KindTurnDone},
+		}
+		svc.lookup = func(context.Context, string) (api.Session, error) {
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		synctest.Wait()
+		want := []string{"answer A", "answer B"}
+		if len(tr.sent) != len(want) {
+			t.Errorf("sent = %v, want %q", tr.sent, want)
+		} else {
+			for i, text := range want {
+				if p := tr.sent[i]; p["text"] != text || p["message_thread_id"] != float64(7) {
+					t.Errorf("reply %d = %v, want %q in topic 7", i, p, text)
+				}
+			}
+		}
+		saved, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(saved), "reply_to") || strings.Contains(string(saved), "answered") {
+			t.Errorf("finished turns left state: %s", saved)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A gateway restart runs the same bot again. If cancellation cut the
+// completion lookup, the next Run must still clean up the finished turn,
+// though this bot already saw its turn_done.
+func TestRunSameBotRestartFinishesReply(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path := savedState(t, "s1", 7)
+		svc := &creationService{registrationService: registrationService{turnDoneService: turnDoneService{fakeService: fakeService{events: make(chan api.Event, 2)}}}}
+		svc.history = []api.Event{
+			{SessionID: "s1", Seq: 1, Kind: api.KindUserMessage, Text: "question"},
+			{SessionID: "s1", Seq: 2, Kind: api.KindText, Text: "the answer"},
+			{SessionID: "s1", Seq: 3, Kind: api.KindTurnDone},
+		}
+		var calls atomic.Int32
+		looking := make(chan struct{})
+		svc.lookup = func(ctx context.Context, _ string) (api.Session, error) {
+			switch calls.Add(1) {
+			case 1:
+				return api.Session{ID: "s1", Status: api.StatusWorking}, nil
+			case 2:
+				close(looking)
+				<-ctx.Done() // the gateway is cancelled during the completion lookup
+				return api.Session{}, fmt.Errorf("get session: %w", ctx.Err())
+			}
+			return api.Session{ID: "s1", Status: api.StatusIdle}, nil
+		}
+		tr := &pollTransport{polls: make(chan struct{}, 10), updates: make(chan []update)}
+		tg := New(svc, Options{ChatID: chatID, UserID: kevin, StatePath: path})
+		tg.bot.http.Transport = tr
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- tg.Run(ctx) }()
+		<-tr.polls
+		svc.events <- svc.history[1]
+		svc.events <- svc.history[2]
+		<-looking
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; !waiting {
+			t.Fatal("the cut lookup already cleaned up; the test needs it kept")
+		}
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
+		go func() { done <- tg.Run(ctx) }() // the same bot, as after a failed hand-over
+		<-tr.polls
+		synctest.Wait()
+		if len(tr.sent) != 1 || tr.sent[0]["text"] != "the answer" {
+			t.Errorf("sent = %v, want the answer once", tr.sent)
+		}
+		if _, waiting := New(svc, Options{StatePath: path}).state.ReplyTo["s1"]; waiting {
+			t.Error("the finished turn is still waiting after the restart")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

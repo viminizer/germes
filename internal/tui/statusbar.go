@@ -31,18 +31,21 @@ const verbWidth = len("brainstorming…")
 // left; the session title (the project before there is one) and branch on
 // the right.
 type statusBar struct {
-	Busy     bool
-	Since    time.Time // when the turn started
-	Frame    int       // spinner frame
-	Engine   string
-	Context  *api.Context  // after a turn: how full the model's context was
-	Started  time.Time     // when the session was created; zero = not yet
-	LastTurn time.Duration // how long the last turn took; 0 = none yet
-	Branch   string        // the session's worktree branch, "" = none
-	Title    string        // the session's title, "" = none yet
-	Project  string
-	Note     string // short message, e.g. "interrupted" or an error
-	Hint     string // shown instead of the state for a moment, e.g. "Esc again to stop"
+	Busy    bool
+	Since   time.Time // when the turn started
+	Frame   int       // spinner frame
+	Engine  string
+	Context *api.Context // after a turn: how full the model's context was
+	// CacheInput and CacheRead add up the session's model calls seen here:
+	// input tokens, and of those the ones from the prompt cache.
+	CacheInput, CacheRead int
+	Started               time.Time     // when the session was created; zero = not yet
+	LastTurn              time.Duration // how long the last turn took; 0 = none yet
+	Branch                string        // the session's worktree branch, "" = none
+	Title                 string        // the session's title, "" = none yet
+	Project               string
+	Note                  string // short message, e.g. "interrupted" or an error
+	Hint                  string // shown instead of the state for a moment, e.g. "Esc again to stop"
 }
 
 // spinner returns the current spinner frame.
@@ -78,6 +81,11 @@ func (s statusBar) view(width int) string {
 		parts = append(parts, contextUse(*s.Context))
 	}
 	keep := len(parts) // state, model and context never drop
+	if s.CacheRead > 0 && s.CacheInput > 0 {
+		// Like Hermes: how much of the prompt the provider's cache served.
+		pct := min(100, (200*s.CacheRead+s.CacheInput)/(2*s.CacheInput)) // rounded
+		parts = append(parts, lipgloss.NewStyle().Foreground(colorStatusGood).Render(fmt.Sprintf("◎ %d%%", pct)))
+	}
 	if !s.Started.IsZero() {
 		parts = append(parts, styleMuted.Render(shortDuration(time.Since(s.Started))))
 	}
@@ -98,6 +106,9 @@ func (s statusBar) view(width int) string {
 	for {
 		left := lead + strings.Join(parts, styleMuted.Render(" │ "))
 		room := width - lipgloss.Width(left) - 3 - 2 // a gap of 3, then "─ "
+		if right == "" && lipgloss.Width(left) <= width {
+			return left // nothing on the right: the left fits as it is
+		}
 		if right != "" && room >= min(minRight, lipgloss.Width(right)) {
 			r := lead + rightStyle.Render(cut(right, room))
 			return left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(r)) + r

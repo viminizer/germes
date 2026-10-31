@@ -345,7 +345,7 @@ func (w *worker) handle(ev engine.Event) {
 	case engine.KindDone:
 		w.sess.Engine = ev.Engine
 		if c := ev.Context; c != nil {
-			w.used = &api.Context{Model: c.Model, Used: c.Used, Window: c.Window}
+			w.used = &api.Context{Model: c.Model, Used: c.Used, Window: c.Window, Input: c.Input, Cached: c.Cached}
 		}
 		if ev.ResumeID != "" {
 			if w.sess.ResumeIDs == nil {

@@ -422,12 +422,15 @@ func contextOf(raw json.RawMessage) *llm.Context {
 		Model string `json:"model"`
 		Usage struct {
 			InputTokens int `json:"input_tokens"`
+			Details     struct {
+				Cached int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(raw, &r) != nil || r.Usage.InputTokens <= 0 {
 		return nil
 	}
-	return &llm.Context{Model: r.Model, Tokens: r.Usage.InputTokens}
+	return &llm.Context{Model: r.Model, Tokens: r.Usage.InputTokens, Cached: r.Usage.Details.Cached}
 }
 
 // streamEnd is how a stream ended without completing.

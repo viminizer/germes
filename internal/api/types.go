@@ -87,6 +87,10 @@ type Context struct {
 	Model  string `json:"model,omitempty"`
 	Used   int    `json:"used"`
 	Window int    `json:"window,omitempty"` // 0 = unknown
+	// Input and Cached add up the turn's model calls: input tokens, and of
+	// those the ones read from the prompt cache.
+	Input  int `json:"input,omitempty"`
+	Cached int `json:"cached,omitempty"`
 }
 
 // ToolCall is set on tool_call and tool_result events.

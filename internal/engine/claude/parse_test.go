@@ -69,10 +69,13 @@ func TestParseSaysHowFullTheContextIs(t *testing.T) {
 	} {
 		p.parse([]byte(l))
 	}
-	// The result's usage adds up all calls; the last call is how full the context is.
-	evs := p.parse([]byte(`{"type":"result","subtype":"success","result":"b","usage":{"input_tokens":7},` +
+	// The result's usage adds up all calls (the cache hit rate counts them
+	// all); the last call is how full the context is.
+	evs := p.parse([]byte(`{"type":"result","subtype":"success","result":"b",` +
+		`"usage":{"input_tokens":7,"cache_creation_input_tokens":7749,"cache_read_input_tokens":90506},` +
 		`"modelUsage":{"claude-haiku":{"contextWindow":200000},"claude-opus-5-5":{"contextWindow":1000000}}}`))
-	if len(evs) != 1 || evs[0].Context == nil || *evs[0].Context != (engine.Context{Model: "claude-opus-5-5", Used: 57257, Window: 1000000}) {
+	want := engine.Context{Model: "claude-opus-5-5", Used: 57257, Window: 1000000, Input: 98262, Cached: 90506}
+	if len(evs) != 1 || evs[0].Context == nil || *evs[0].Context != want {
 		t.Fatalf("done %+v", evs)
 	}
 	var none parser

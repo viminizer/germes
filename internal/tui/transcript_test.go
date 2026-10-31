@@ -140,3 +140,21 @@ func TestLiveAreaFitsTheScreen(t *testing.T) {
 		}
 	}
 }
+
+// An edit prints its change after the tree like Hermes: unchanged lines
+// plain, removed before added.
+func TestEditPrintsItsDiff(t *testing.T) {
+	got := diffLines([]string{"a", "for i := 1", "b"}, []string{"a", "for i := 0", "b", "c"})
+	want := []string{"  a", "- for i := 1", "+ for i := 0", "  b", "+ c"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("diff %q, want %q", got, want)
+	}
+	var tr transcript
+	args := `{"file_path":"calc.go","old_string":"x := 1","new_string":"x := 2"}`
+	tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "1", Name: "Edit", Args: []byte(args)}})
+	tr.apply(api.Event{Seq: 2, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "1", Output: "ok"}})
+	out := tr.apply(api.Event{Seq: 3, Kind: api.KindText, Text: "done"})
+	if len(out) != 3 || out[0].Kind != kindTools || out[1].Kind != kindDiff || out[2].Kind != kindAssistant {
+		t.Fatalf("got %+v, want the tree, the diff, the text", out)
+	}
+}

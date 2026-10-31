@@ -89,7 +89,7 @@ func (s *Store) searchEvents(ctx context.Context, f api.EventFilter, limit int) 
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT e.session_id, e.seq, e.time, e.kind, e.text, e.tool, e.engine
 		FROM events_fts JOIN events e ON e.rowid = events_fts.rowid
-		WHERE events_fts MATCH ? AND (? = '' OR e.session_id = ?)
+		WHERE events_fts MATCH ? AND (? = '' OR e.session_id = ?) AND e.kind != 'reasoning' -- reasoning never goes back to the model
 		ORDER BY rank LIMIT ?`, strings.Join(terms, " "), f.SessionID, f.SessionID, limit)
 	if err != nil {
 		return api.Page[api.Event]{}, fmt.Errorf("search events: %w", err)

@@ -48,7 +48,10 @@ func (m *model) showDetails() tea.Cmd {
 			return printMsg{[]message{{Kind: kindNotice, Text: "no tool calls or reasoning in the last turn"}}}
 		}
 		head := fmt.Sprintf("the last turn's %d tool calls in full", len(byID))
-		if len(byID) < len(items) {
+		switch {
+		case len(byID) == 0:
+			head = "the last turn's reasoning"
+		case len(byID) < len(items):
 			head += ", and its reasoning"
 		}
 		return printMsg{append([]message{{Kind: kindNotice, Text: head}}, items...)}

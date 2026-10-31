@@ -61,6 +61,9 @@ func (l *Loop) compact(ctx context.Context, system string, events []api.Event) (
 	cut, size := len(kept), 0
 	for cut > 0 && size < budget {
 		cut--
+		if kept[cut].Kind == api.KindReasoning {
+			continue // never sent to the model
+		}
 		size += len(kept[cut].Text)
 		if kept[cut].Tool != nil {
 			size += len(kept[cut].Tool.Output) + len(kept[cut].Tool.Args)

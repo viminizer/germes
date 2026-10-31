@@ -22,8 +22,8 @@ const (
 // the build."): then no check is asked for. The phrase must end there:
 // "don't run tests in parallel", "never run it twice" or "do not run
 // migrations" describe code, not this turn, and do not match.
-var noRunRE = regexp.MustCompile(`(?i)\b(?:do\s+not|don['’]?t|never|without)\s+(?:run|running|execute|executing)\s+` +
-	`(?:any\s+|the\s+)?(?:anything|checks?|tests?|builds?|linters?)\s*(?:[.,;:!?)]|$)`)
+var noRunRE = regexp.MustCompile(`(?im)\b(?:do\s+not|don['’]?t|never|without)\s+(?:run|running|execute|executing)\s+` +
+	`(?:any\s+|the\s+)?(?:anything|checks?|tests?|builds?|linters?)\s*(?:[.,;:!?)"'”\-–—]|$)`) // any line end: messages can be several lines
 
 // saysNoRun says whether what the user typed asks not to run anything.
 func saysNoRun(request string) bool { return noRunRE.MatchString(request) }

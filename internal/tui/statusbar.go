@@ -81,16 +81,24 @@ func (s statusBar) view(width int) string {
 		parts = append(parts, contextUse(*s.Context))
 	}
 	keep := len(parts) // state, model and context never drop
-	if s.CacheRead > 0 && s.CacheInput > 0 {
-		// Like Hermes: how much of the prompt the provider's cache served.
-		pct := min(100, (200*s.CacheRead+s.CacheInput)/(2*s.CacheInput)) // rounded
-		parts = append(parts, lipgloss.NewStyle().Foreground(colorStatusGood).Render(fmt.Sprintf("◎ %d%%", pct)))
-	}
 	if !s.Started.IsZero() {
 		parts = append(parts, styleMuted.Render(shortDuration(time.Since(s.Started))))
 	}
 	if s.LastTurn > 0 {
 		parts = append(parts, styleMuted.Render("✓ "+shortDuration(s.LastTurn)))
+	}
+	if s.CacheRead > 0 && s.CacheInput > 0 {
+		// Like Hermes (appChrome.tsx): how much of the prompt the provider's
+		// cache served, last on the left, so it drops first.
+		pct := min(100, (200*s.CacheRead+s.CacheInput)/(2*s.CacheInput)) // rounded
+		style := styleMuted
+		switch {
+		case pct >= 70:
+			style = lipgloss.NewStyle().Foreground(colorStatusGood)
+		case pct >= 40:
+			style = lipgloss.NewStyle().Foreground(colorStatusWarn)
+		}
+		parts = append(parts, style.Render(fmt.Sprintf("◎ %d%%", pct)))
 	}
 	// The title bold in accent, losing its end when long, like Hermes;
 	// before there is one, the project, losing its start.

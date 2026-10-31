@@ -115,7 +115,7 @@ func TestStatusLineShowsTheCacheHitRate(t *testing.T) {
 		t.Fatalf("no cache read yet: %q", got)
 	}
 	s.CacheInput, s.CacheRead = 400, 300
-	if got := ansi.Strip(s.view(120)); !strings.Contains(got, "│ ◎ 75%") {
+	if got := ansi.Strip(s.view(120)); !strings.HasSuffix(strings.TrimSpace(got), "│ ◎ 75%") {
 		t.Fatalf("got %q, want ◎ 75%%", got)
 	}
 }

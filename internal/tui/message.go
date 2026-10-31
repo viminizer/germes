@@ -16,7 +16,7 @@ import (
 type message struct {
 	Kind  messageKind
 	Text  string
-	Tool  *api.ToolCall // call with its result, for kindDetail
+	Tool  *api.ToolCall // call with its result, for kindDetail and kindDiff
 	Tools []toolRun     // the calls of one step, for kindTools
 	Todos []todoItem    // the task list at the end of a turn, for kindTodo
 	Dir   string        // project folder: paths under it are shown short
@@ -37,6 +37,7 @@ const (
 	kindAlert   // a job's message for the user
 	kindTurnEnd // the short rule under a finished turn
 	kindTodo    // the model's task list at the end of a turn
+	kindDiff    // what an edit changed
 )
 
 // view renders the message for the given width. Each block starts with a
@@ -63,6 +64,8 @@ func (m message) view(width int) string {
 		return "\n" + gutter(styleAccent.Render("◆ "), styleAccent, m.Text, width)
 	case kindRound:
 		return "\n" + styleAccent.Render("── "+m.Text+" ──")
+	case kindDiff:
+		return "\n" + gutter(styleBorder.Render("┊  "), lipgloss.NewStyle(), diffView(m.Tool, m.Dir, width-3), width)
 	case kindTodo:
 		// Like Hermes: a finished list closed, an open one shown in full.
 		done := isTodoDone(m.Todos)

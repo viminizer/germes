@@ -43,7 +43,14 @@ func (t *transcript) apply(ev api.Event) []message {
 		return m.Kind == kindAssistant || m.Kind == kindError
 	})
 	if len(t.tools) > 0 && ends {
-		out = append([]message{{Kind: kindTools, Tools: t.tools, Dir: t.dir}}, out...)
+		// The tree, then what its edits changed, like Hermes' inline diff.
+		printed := []message{{Kind: kindTools, Tools: t.tools, Dir: t.dir}}
+		for _, r := range t.tools {
+			if r.Done && len(changes(r.Call)) > 0 {
+				printed = append(printed, message{Kind: kindDiff, Tool: r.Call, Dir: t.dir})
+			}
+		}
+		out = append(printed, out...)
 		t.tools = nil
 	}
 	return out

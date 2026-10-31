@@ -249,6 +249,8 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 				return
 			case llm.KindStatus:
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindStatus, Text: ch.Text})
+			case llm.KindReasoning:
+				stream.Send(ctx, out, engine.Event{Kind: engine.KindReasoning, Text: ch.Text})
 			case llm.KindContext:
 				used = &engine.Context{Model: ch.Context.Model, Used: ch.Context.Tokens, Window: window}
 			}

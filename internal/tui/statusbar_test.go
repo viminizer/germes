@@ -94,7 +94,7 @@ func TestViewsFitNarrowScreens(t *testing.T) {
 	for _, width := range []int{10, 20, 30} {
 		for name, view := range map[string]string{
 			"banner":      banner{Version: "1.0.0", Project: "/a/long/project/path", Engine: "codex-api"}.view(width),
-			"tree":        treeView(runs, "", width, "", time.Time{}, 0),
+			"tree":        treeView(runs, 1234, "", width, "", time.Time{}, 0),
 			"todo":        todoView(todos, width, false, true, 0),
 			"suggestions": sug.view(width),
 		} {

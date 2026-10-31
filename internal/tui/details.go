@@ -15,8 +15,9 @@ import (
 // maxDetailLines is how much of one tool's arguments or output /details shows.
 const maxDetailLines = 40
 
-// showDetails prints the last turn's tool calls in full: arguments and
-// output, read from the saved events (nothing runs again).
+// showDetails prints the last turn's tool calls in full (arguments and
+// output) and the model's reasoning, in order, read from the saved events
+// (nothing runs again).
 func (m *model) showDetails() tea.Cmd {
 	id, dir := m.sessionID, m.transcript.dir
 	if id == "" {
@@ -27,28 +28,30 @@ func (m *model) showDetails() tea.Cmd {
 		if err != nil {
 			return printMsg{[]message{{Kind: kindError, Text: err.Error()}}}
 		}
-		var calls []*api.ToolCall
+		var items []message
 		byID := map[string]*api.ToolCall{}
 		for _, ev := range events {
 			switch {
 			case ev.Kind == api.KindUserMessage:
-				calls, byID = nil, map[string]*api.ToolCall{}
+				items, byID = nil, map[string]*api.ToolCall{}
+			case ev.Kind == api.KindReasoning:
+				items = append(items, message{Kind: kindThought, Text: ev.Text})
 			case ev.Kind == api.KindToolCall && ev.Tool != nil:
 				c := *ev.Tool
-				calls = append(calls, &c)
+				items = append(items, message{Kind: kindDetail, Tool: &c, Dir: dir})
 				byID[c.ID] = &c
 			case ev.Kind == api.KindToolResult && ev.Tool != nil && byID[ev.Tool.ID] != nil:
 				byID[ev.Tool.ID].Output, byID[ev.Tool.ID].IsError = ev.Tool.Output, ev.Tool.IsError
 			}
 		}
-		if len(calls) == 0 {
-			return printMsg{[]message{{Kind: kindNotice, Text: "no tool calls in the last turn"}}}
+		if len(items) == 0 {
+			return printMsg{[]message{{Kind: kindNotice, Text: "no tool calls or reasoning in the last turn"}}}
 		}
-		out := []message{{Kind: kindNotice, Text: fmt.Sprintf("the last turn's %d tool calls in full", len(calls))}}
-		for _, c := range calls {
-			out = append(out, message{Kind: kindDetail, Tool: c, Dir: dir})
+		head := fmt.Sprintf("the last turn's %d tool calls in full", len(byID))
+		if len(byID) < len(items) {
+			head += ", and its reasoning"
 		}
-		return printMsg{out}
+		return printMsg{append([]message{{Kind: kindNotice, Text: head}}, items...)}
 	}
 }
 
@@ -71,6 +74,13 @@ func detailView(t *api.ToolCall, dir string, width int) string {
 		lines = append(lines, detailLines(shortPaths(t.Output, dir), styleDim, width)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// thoughtView is the model's reasoning in full (/details): what Hermes
+// shows when its Thinking row is opened.
+func thoughtView(text string, width int) string {
+	lines := []string{styleAccent.Render("▾ ") + styleDim.Render("Thinking")}
+	return strings.Join(append(lines, detailLines(text, styleDim, width)...), "\n")
 }
 
 // detailLines indents text, cuts long lines at the width and stops after

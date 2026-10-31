@@ -63,6 +63,7 @@ type message struct {
 type block struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
@@ -152,6 +153,10 @@ func (p *parser) assistant(m *message) []engine.Event {
 		switch b.Type {
 		case "text":
 			evs = append(evs, engine.Event{Kind: engine.KindText, Text: b.Text})
+		case "thinking":
+			if t := strings.TrimSpace(b.Thinking); t != "" {
+				evs = append(evs, engine.Event{Kind: engine.KindReasoning, Text: t})
+			}
 		case "tool_use":
 			evs = append(evs, engine.Event{Kind: engine.KindToolCall, Tool: &engine.ToolCall{ID: b.ID, Name: strings.TrimPrefix(b.Name, mcpPrefix), Args: b.Input}})
 		}

@@ -55,7 +55,8 @@ const (
 	KindSwitched   Kind = "switched"  // the router moved the turn to another engine (Text, Engine)
 	KindCompacted  Kind = "compacted" // older history was summarized (Text, KeepFrom)
 	KindError      Kind = "error"
-	KindStatus     Kind = "status" // a status line for the user, not saved (Text)
+	KindStatus     Kind = "status"    // a status line for the user, not saved (Text)
+	KindReasoning  Kind = "reasoning" // the model's summary of its reasoning (Text)
 )
 
 // Event is one thing that happened during a turn. Only the fields of its

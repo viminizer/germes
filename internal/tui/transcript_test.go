@@ -19,7 +19,7 @@ func TestStopPrintsStreamedTextBeforeError(t *testing.T) {
 	if len(got) != 2 || got[0].Kind != kindAssistant || got[0].Text != "half a sto" || got[1].Kind != kindError {
 		t.Fatalf("got %+v, want the streamed text, then the error", got)
 	}
-	if rest := tr.apply(api.Event{Seq: 2, Kind: api.KindTurnDone}); len(rest) != 1 || rest[0].Kind != kindTurnEnd {
+	if rest := tr.apply(api.Event{Seq: 2, Kind: api.KindTurnDone}); len(rest) != 0 {
 		t.Fatalf("text printed twice: %+v", rest)
 	}
 }
@@ -106,8 +106,8 @@ func TestTaskListPrintsWhenTheTurnEnds(t *testing.T) {
 		tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "1", Name: "todo_list"}})
 		tr.apply(api.Event{Seq: 2, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "1", Output: out}})
 		got := tr.apply(api.Event{Seq: 3, Kind: api.KindTurnDone})
-		if len(got) != 3 || got[0].Kind != kindTools || got[1].Kind != kindTodo || got[2].Kind != kindTurnEnd {
-			t.Fatalf("%q: got %+v, want the tree, the list, the end", out, got)
+		if len(got) != 2 || got[0].Kind != kindTools || got[1].Kind != kindTodo {
+			t.Fatalf("%q: got %+v, want the tree, then the list", out, got)
 		}
 		if n := strings.Count(strings.TrimPrefix(got[1].view(80), "\n"), "\n") + 1; n != wantLines {
 			t.Errorf("%q: list is %d lines, want %d:\n%s", out, n, wantLines, got[1].view(80))
@@ -202,5 +202,22 @@ func TestReasoningShowsAThinkingRow(t *testing.T) {
 	}
 	if got := ansi.Strip(out[0].view(80)); !strings.Contains(got, "└─ ▸ Thinking  ~50 tokens") {
 		t.Fatalf("row %q", got)
+	}
+}
+
+// Like Hermes, the short rule between turns comes with the next message,
+// not when a turn ends.
+func TestTheRuleBetweenTurnsComesWithTheNextMessage(t *testing.T) {
+	var tr transcript
+	if got := tr.apply(api.Event{Seq: 1, Kind: api.KindUserMessage, Text: "hi"}); len(got) != 1 {
+		t.Fatalf("first message: %+v", got)
+	}
+	tr.apply(api.Event{Seq: 2, Kind: api.KindText, Text: "hello"})
+	if got := tr.apply(api.Event{Seq: 3, Kind: api.KindTurnDone}); len(got) != 0 {
+		t.Fatalf("turn end printed %+v", got)
+	}
+	got := tr.apply(api.Event{Seq: 4, Kind: api.KindUserMessage, Text: "again"})
+	if len(got) != 2 || got[0].Kind != kindTurnEnd || got[1].Kind != kindUser {
+		t.Fatalf("next message: %+v, want the rule, then the message", got)
 	}
 }

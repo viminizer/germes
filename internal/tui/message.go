@@ -37,7 +37,7 @@ const (
 	kindSwitch  // the router moved the session to another engine
 	kindRound   // an attached job moved on to its next round
 	kindAlert   // a job's message for the user
-	kindTurnEnd // the short rule under a finished turn
+	kindTurnEnd // the short rule between turns
 	kindTodo    // the model's task list at the end of a turn
 	kindDiff    // what an edit changed
 )

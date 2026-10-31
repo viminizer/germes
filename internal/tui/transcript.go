@@ -23,6 +23,7 @@ type transcript struct {
 	started   bool            // a message of the current reply is printed
 	tools     []toolRun       // calls since the last text, printed as one tree
 	thinking  int             // the model's reasoning since the last text, in tokens (about)
+	ended     bool            // a turn ended: the next message gets the rule above it, like Hermes
 	todos     []todoItem      // the model's task list this turn, printed when it ends
 	lastSeq   int64
 }
@@ -66,6 +67,10 @@ func (t *transcript) applyEvent(ev api.Event) []message {
 	}
 	switch ev.Kind {
 	case api.KindUserMessage:
+		if t.ended {
+			t.ended = false
+			return []message{{Kind: kindTurnEnd}, {Kind: kindUser, Text: ev.Text}}
+		}
 		return []message{{Kind: kindUser, Text: ev.Text}}
 	case api.KindTextDelta:
 		t.streaming.WriteString(ev.Text)
@@ -104,7 +109,8 @@ func (t *transcript) applyEvent(ev api.Event) []message {
 			out = append(out, message{Kind: kindTodo, Todos: t.todos})
 			t.todos = nil
 		}
-		return append(out, message{Kind: kindTurnEnd})
+		t.ended = true
+		return out
 	}
 	return nil
 }

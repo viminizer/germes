@@ -61,6 +61,7 @@ const (
 	KindAttachment     EventKind = "attachment" // Text: the expanded @ references of the user message before it
 	KindLimitHit       EventKind = "limit_hit"
 	KindError          EventKind = "error"
+	KindReasoning      EventKind = "reasoning" // Text: the model's summary of its reasoning; shown, never sent back to the model
 )
 
 // TextInterrupted is the error event of a turn a daemon restart cut. Jobs

@@ -18,6 +18,7 @@ type message struct {
 	Text  string
 	Tool  *api.ToolCall // call with its result, for kindDetail and kindDiff
 	Tools []toolRun     // the calls of one step, for kindTools
+	Think int           // kindTools: the step's reasoning, in tokens (about)
 	Todos []todoItem    // the task list at the end of a turn, for kindTodo
 	Dir   string        // project folder: paths under it are shown short
 	Cont  bool          // kindAssistant: more of a reply already partly printed
@@ -28,8 +29,9 @@ type messageKind int
 const (
 	kindUser messageKind = iota
 	kindAssistant
-	kindTools  // the tool calls of one step, as a tree
-	kindDetail // a tool call in full (/details)
+	kindTools   // the tool calls of one step, as a tree
+	kindDetail  // a tool call in full (/details)
+	kindThought // the model's reasoning in full (/details)
 	kindError
 	kindNotice
 	kindSwitch  // the router moved the session to another engine
@@ -53,9 +55,11 @@ func (m message) view(width int) string {
 		}
 		return "\n" + text
 	case kindTools:
-		return "\n" + treeView(m.Tools, m.Dir, width, "", time.Time{}, 0)
+		return "\n" + treeView(m.Tools, m.Think, m.Dir, width, "", time.Time{}, 0)
 	case kindDetail:
 		return detailView(m.Tool, m.Dir, width)
+	case kindThought:
+		return thoughtView(m.Text, width)
 	case kindError:
 		return "\n" + gutter(styleError.Render("✗ "), styleError, m.Text, width)
 	case kindSwitch:

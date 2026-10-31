@@ -22,6 +22,7 @@ type transcript struct {
 	printed   string          // the part of the current reply already printed
 	started   bool            // a message of the current reply is printed
 	tools     []toolRun       // calls since the last text, printed as one tree
+	thinking  int             // the model's reasoning since the last text, in tokens (about)
 	todos     []todoItem      // the model's task list this turn, printed when it ends
 	lastSeq   int64
 }
@@ -42,16 +43,16 @@ func (t *transcript) apply(ev api.Event) []message {
 	ends := ev.Kind == api.KindTurnDone || slices.ContainsFunc(out, func(m message) bool {
 		return m.Kind == kindAssistant || m.Kind == kindError
 	})
-	if len(t.tools) > 0 && ends {
+	if (len(t.tools) > 0 || t.thinking > 0) && ends {
 		// The tree, then what its edits changed, like Hermes' inline diff.
-		printed := []message{{Kind: kindTools, Tools: t.tools, Dir: t.dir}}
+		printed := []message{{Kind: kindTools, Tools: t.tools, Think: t.thinking, Dir: t.dir}}
 		for _, r := range t.tools {
 			if r.Done && len(readEdits(r.Call).rows()) > 0 {
 				printed = append(printed, message{Kind: kindDiff, Tool: r.Call, Dir: t.dir})
 			}
 		}
 		out = append(printed, out...)
-		t.tools = nil
+		t.tools, t.thinking = nil, 0
 	}
 	return out
 }
@@ -76,6 +77,8 @@ func (t *transcript) applyEvent(ev api.Event) []message {
 			rest = rest[len(t.printed):]
 		}
 		return t.endReply(rest)
+	case api.KindReasoning:
+		t.thinking += (len(ev.Text) + 3) / 4 // Hermes' rough count (lib/text.ts estimateTokensRough)
 	case api.KindToolCall:
 		if ev.Tool != nil {
 			t.tools = append(t.tools, toolRun{Call: ev.Tool, Start: eventTime(ev)})
@@ -200,8 +203,12 @@ func (t *transcript) view(width, height int, spin string, now time.Time) string 
 		parts = append(parts, "", todoView(t.todos, width, false, false, rows-2))
 		room -= rows
 	}
-	if len(t.tools) > 0 && room >= 3 {
-		parts = append(parts, "", treeView(t.tools, t.dir, width, spin, now, room-2))
+	heads := 2 // a blank line and the header
+	if t.thinking > 0 {
+		heads++ // the Thinking row
+	}
+	if (len(t.tools) > 0 || t.thinking > 0) && room > heads {
+		parts = append(parts, "", treeView(t.tools, t.thinking, t.dir, width, spin, now, room-heads))
 	}
 	return strings.Join(append(parts, reply...), "\n")
 }

@@ -505,6 +505,7 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 	}
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 64*1024), 32*1024*1024)
+	var reasoning strings.Builder // summary text streamed for the current reasoning item, like Hermes reads it
 	for sc.Scan() {
 		data, ok := strings.CutPrefix(sc.Text(), "data:")
 		if !ok {
@@ -522,7 +523,15 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 		switch ev.Type {
 		case "response.output_text.delta":
 			sent = stream.Send(ctx, out, llm.Chunk{Kind: llm.KindTextDelta, Text: ev.Delta}) || sent
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+			reasoning.WriteString(ev.Delta)
+		case "response.reasoning_summary_part.done":
+			reasoning.WriteString("\n\n") // between parts of one summary
 		case "response.output_item.done":
+			if s := reasoningSummary(ev.Item, reasoning.String()); s != "" {
+				stream.Send(ctx, out, llm.Chunk{Kind: llm.KindReasoning, Text: s})
+			}
+			reasoning.Reset()
 			if ch, ok := itemChunk(ev.Item); ok {
 				sent = stream.Send(ctx, out, ch) || sent
 			}
@@ -570,6 +579,31 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 	}
 	// A cut connection is temporary, like a timeout.
 	return &streamEnd{chunk: llm.Chunk{Kind: llm.KindError, Err: fmt.Errorf("codex stream: %w", err)}, retry: true}, sent
+}
+
+// reasoningSummary is the summary text of a reasoning item ("" for other
+// items): Codex sends it because the request asks for summary "auto". The
+// streamed text counts; the item's own summary is the fallback.
+func reasoningSummary(raw json.RawMessage, streamed string) string {
+	var it struct {
+		Type    string `json:"type"`
+		Summary []struct {
+			Text string `json:"text"`
+		} `json:"summary"`
+	}
+	if json.Unmarshal(raw, &it) != nil || it.Type != "reasoning" {
+		return ""
+	}
+	if s := strings.TrimSpace(streamed); s != "" {
+		return s
+	}
+	var parts []string
+	for _, s := range it.Summary {
+		if t := strings.TrimSpace(s.Text); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // itemChunk turns a finished output item into a chunk.

@@ -70,8 +70,9 @@ const (
 	KindLimitHit  Kind = "limit_hit"
 	KindDone      Kind = "done"
 	KindError     Kind = "error"
-	KindStatus    Kind = "status"  // a status line for the user, live only (Text)
-	KindContext   Kind = "context" // how full the context was for this response (Context), before Done
+	KindStatus    Kind = "status"    // a status line for the user, live only (Text)
+	KindReasoning Kind = "reasoning" // the model's summary of its reasoning (Text)
+	KindContext   Kind = "context"   // how full the context was for this response (Context), before Done
 )
 
 // Phase says what an assistant text is: progress while the model works,

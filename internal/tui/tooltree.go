@@ -11,14 +11,27 @@ import (
 	"github.com/viminizer/germes/internal/api"
 )
 
-// treeView draws a step's tool calls like Hermes (hermes/ui-tui/src/
-// components/thinking.tsx): `└─ ▾ Tool calls (3)`, then one
+// treeView draws a step like Hermes (hermes/ui-tui/src/components/
+// thinking.tsx): `├─ ▸ Thinking  ~51 tokens` when the model reasoned (its
+// text is in /details), then `└─ ▾ Tool calls (3)` and one
 // `├─ ● Read("main.go") (0.2s)` row per call. A running call has the
 // spinner and its time so far; a failed one is red with its error under
 // it; subagent reports show under their call. maxRows > 0 keeps only the
 // last rows under the header (the live area).
-func treeView(runs []toolRun, dir string, width int, spin string, now time.Time, maxRows int) string {
+func treeView(runs []toolRun, thinking int, dir string, width int, spin string, now time.Time, maxRows int) string {
 	fit := func(s string) string { return ansi.Truncate(s, max(width, 1), "…") }
+	var heads []string
+	if thinking > 0 {
+		branch := "├─ "
+		if len(runs) == 0 {
+			branch = "└─ "
+		}
+		heads = append(heads, fit(styleDim.Render(branch)+styleAccent.Render("▸ ")+styleDim.Render("Thinking")+
+			styleTime.Render(fmt.Sprintf("  ~%s tokens", shortCount(thinking)))))
+	}
+	if len(runs) == 0 {
+		return strings.Join(heads, "\n")
+	}
 	head := styleDim.Render("└─ ") + styleAccent.Faint(true).Render("▾ ") + styleDim.Render(fmt.Sprintf("Tool calls (%d)", len(runs)))
 	var rows []string
 	for i, r := range runs {
@@ -57,7 +70,7 @@ func treeView(runs []toolRun, dir string, width int, spin string, now time.Time,
 		cut := len(rows) - maxRows + 1 // one row says how many are hidden
 		rows = append([]string{fit(styleDim.Render(fmt.Sprintf("  │ … %d rows above", cut)))}, rows[cut:]...)
 	}
-	return strings.Join(append([]string{fit(head)}, rows...), "\n")
+	return strings.Join(append(append(heads, fit(head)), rows...), "\n")
 }
 
 // tookText writes a call's time as 0.2s, 12.5s or 2m.

@@ -190,3 +190,17 @@ func TestBoldHoldsInlineCode(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// Like Hermes, a step where the model reasoned shows `▸ Thinking ~N
+// tokens` before its reply, even with no tool calls.
+func TestReasoningShowsAThinkingRow(t *testing.T) {
+	var tr transcript
+	tr.apply(api.Event{Seq: 1, Kind: api.KindReasoning, Text: strings.Repeat("x", 200)})
+	out := tr.apply(api.Event{Seq: 2, Kind: api.KindText, Text: "done"})
+	if len(out) != 2 || out[0].Kind != kindTools || out[0].Think != 50 || out[1].Kind != kindAssistant {
+		t.Fatalf("got %+v, want the Thinking row, then the text", out)
+	}
+	if got := ansi.Strip(out[0].view(80)); !strings.Contains(got, "└─ ▸ Thinking  ~50 tokens") {
+		t.Fatalf("row %q", got)
+	}
+}

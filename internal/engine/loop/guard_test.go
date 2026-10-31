@@ -110,6 +110,8 @@ func TestNoCheckIsAskedWhenTheUserSaidNotToRun(t *testing.T) {
 		"rename xs to values. Do not run anything.":       false,
 		"fix it, but don't run the tests":                 false,
 		"fix it, but don’t run the tests":                 false,
+		"don't run the tests\nalso rename foo":            false,
+		"rename foo\n\n\"Do not run anything\" - thanks":  false,
 		"fix it without running the build":                false,
 		"rename xs to values":                             true,
 		"do not run migrations on prod, but fix the test": true,

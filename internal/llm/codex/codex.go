@@ -330,6 +330,12 @@ func (c *Client) body(r llm.Request) map[string]any {
 	if len(r.Tools) > 0 {
 		var tools []map[string]any
 		for _, t := range r.Tools {
+			if t.Builtin == "web_search" {
+				// Codex searches the web itself, like Hermes on Codex: a source
+				// for each fact, and no fetched page in the context.
+				tools = append(tools, map[string]any{"type": "web_search"})
+				continue
+			}
 			tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "strict": false, "parameters": t.Schema})
 		}
 		b["tools"], b["tool_choice"], b["parallel_tool_calls"] = tools, "auto", true
@@ -624,6 +630,14 @@ func itemChunk(raw json.RawMessage) (llm.Chunk, bool) {
 		return llm.Chunk{Kind: llm.KindText, Text: b.String(), Phase: llm.Phase(it.Phase)}, b.Len() > 0
 	case "function_call":
 		return llm.Chunk{Kind: llm.KindToolCall, ToolCall: &llm.ToolCall{ID: it.CallID, Name: it.Name, Args: json.RawMessage(it.Arguments)}}, true
+	case "web_search_call":
+		// Codex ran the search; replayed like a reasoning item, so the next
+		// request of this turn still has it (without the id: store=false).
+		var m map[string]any
+		json.Unmarshal(raw, &m)
+		delete(m, "id")
+		b, _ := json.Marshal(m)
+		return llm.Chunk{Kind: llm.KindRaw, Raw: b}, true
 	case "reasoning":
 		// Replayed in the next request of this turn. With store=false the id
 		// must go (lookups 404), and temporary items are skipped.

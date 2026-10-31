@@ -343,3 +343,19 @@ func TestPruneOutputs(t *testing.T) {
 		t.Error("deleted a fresh output")
 	}
 }
+
+// A tool named by a block rule or a hook must have every call checked, so a
+// provider's own version of it may not stand in for it.
+func TestHasRulesFindsBlockRulesAndHooks(t *testing.T) {
+	r := newTestRegistry(t)
+	dir := t.TempDir()
+	if !r.HasRules("WebFetch", dir) || r.HasRules("WebSearch", dir) {
+		t.Fatal("block rules: want WebFetch named, WebSearch not")
+	}
+	if err := r.UpdateHooks(Hooks{Global: []Hook{{Before: "WebSearch(*secret*)", Run: "true"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !r.HasRules("WebSearch", dir) {
+		t.Fatal("a hook on WebSearch is not seen")
+	}
+}

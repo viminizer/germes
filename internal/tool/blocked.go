@@ -200,3 +200,24 @@ func compilePattern(pattern string) func(string) bool {
 	}
 	return regexp.MustCompile("(?s)^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$").MatchString
 }
+
+// HasRules says whether a block rule or a hook names the tool in dir: then
+// every call of it must come through Check, so a provider's own version of
+// the tool, which Germes never sees, must not stand in for it (R47).
+func (r *Registry) HasRules(name, dir string) bool {
+	for _, b := range r.blocked {
+		if b.tool == name {
+			return true
+		}
+	}
+	hooks, err := r.hooksFor(dir)
+	if err != nil {
+		return true // fail closed
+	}
+	for _, h := range hooks {
+		if h.rule.tool == name {
+			return true
+		}
+	}
+	return false
+}

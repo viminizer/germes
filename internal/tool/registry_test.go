@@ -346,7 +346,7 @@ func TestPruneOutputs(t *testing.T) {
 
 // A tool named by a block rule or a hook must have every call checked, so a
 // provider's own version of it may not stand in for it.
-func TestHasRulesFindsBlockRulesAndHooks(t *testing.T) {
+func TestHasRulesFindsBlockRulesAndGlobalHooks(t *testing.T) {
 	r := newTestRegistry(t)
 	dir := t.TempDir()
 	if !r.HasRules("WebFetch", dir) || r.HasRules("WebSearch", dir) {
@@ -358,16 +358,27 @@ func TestHasRulesFindsBlockRulesAndHooks(t *testing.T) {
 	if !r.HasRules("WebSearch", dir) {
 		t.Fatal("a hook on WebSearch is not seen")
 	}
-	// A project's own hooks count, and a hooks file that cannot be read
-	// fails closed.
+}
+
+// A project's own hooks name tools too, and a hooks file that cannot be
+// read fails closed.
+func TestHasRulesFindsProjectHooksAndFailsClosed(t *testing.T) {
+	r := newTestRegistry(t)
 	project := t.TempDir()
-	os.MkdirAll(filepath.Join(project, ".germes"), 0o755)
-	os.WriteFile(filepath.Join(project, HooksFile), []byte("hooks:\n  - before: Read(*secret*)\n    run: \"true\"\n"), 0o644)
-	if !r.HasRules("Read", project) || r.HasRules("Glob", project) {
-		t.Fatal("project hooks: want Read named, Glob not")
+	if err := os.MkdirAll(filepath.Join(project, ".germes"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(project, HooksFile), []byte("hooks: [not: valid"), 0o644)
-	if !r.HasRules("Glob", project) {
+	write := func(s string) {
+		if err := os.WriteFile(filepath.Join(project, HooksFile), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("hooks:\n  - before: Glob(*secret*)\n    run: \"true\"\n")
+	if !r.HasRules("Glob", project) || r.HasRules("Grep", project) {
+		t.Fatal("project hooks: want Glob named, Grep not")
+	}
+	write("hooks: [not: valid")
+	if !r.HasRules("Grep", project) {
 		t.Fatal("an unreadable hooks file must fail closed")
 	}
 }

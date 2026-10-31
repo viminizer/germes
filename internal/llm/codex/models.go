@@ -21,27 +21,44 @@ const (
 
 // GetContextWindow returns the model's context window in tokens from
 // Codex's model list. It is read once an hour, by one caller at a time:
-// the others get the window read before. A failed read keeps the last good
-// window and is tried again after 5 minutes; a read cut off (Esc, daemon
-// stopping) is not remembered.
+// the others get the window read before, or wait for the first read. A
+// failed read keeps the last good window and is tried again after 5
+// minutes; a read cut off (Esc, daemon stopping) is not remembered.
 func (c *Client) GetContextWindow(ctx context.Context) (int, error) {
 	c.winMu.Lock()
+	if done := c.winDone; done != nil && c.win == 0 {
+		// The first read runs: wait for it rather than guess 200k, which
+		// could compact a long history too early.
+		c.winMu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+		c.winMu.Lock()
+	}
 	ttl := windowTTL
 	if c.winErr != nil {
 		ttl = windowFailedTTL
 	}
-	if c.winReading || (!c.winAt.IsZero() && time.Since(c.winAt) < ttl) {
+	if c.winDone != nil || (!c.winAt.IsZero() && time.Since(c.winAt) < ttl) {
 		defer c.winMu.Unlock()
 		return c.lastWindow()
 	}
-	c.winReading = true
+	done := make(chan struct{})
+	c.winDone = done
 	c.winMu.Unlock()
+	defer func() { // also after a panic: no caller waits for ever
+		c.winMu.Lock()
+		c.winDone = nil
+		close(done)
+		c.winMu.Unlock()
+	}()
 
 	win, err := c.readContextWindow(ctx)
 
 	c.winMu.Lock()
 	defer c.winMu.Unlock()
-	c.winReading = false
 	switch {
 	case err == nil:
 		c.win, c.winErr, c.winAt = win, nil, time.Now()
@@ -57,14 +74,12 @@ func (c *Client) lastWindow() (int, error) {
 		return c.win, nil
 	}
 	if c.winErr == nil {
-		return 0, errors.New("the context window is being read")
+		return 0, errors.New("the context window is not read yet")
 	}
 	return 0, c.winErr
 }
 
 func (c *Client) readContextWindow(ctx context.Context) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 	var lastErr error
 	for _, v := range modelListVersions {
 		models, err := c.listModels(ctx, v)
@@ -93,11 +108,13 @@ type modelInfo struct {
 // rejected login is refreshed once, like a model call.
 func (c *Client) listModels(ctx context.Context, version string) ([]modelInfo, error) {
 	for force := false; ; force = true {
-		tok, err := c.auth.get(ctx, force)
+		tok, err := c.auth.get(ctx, force) // a login refresh gets the caller's time, not the read's
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.get(ctx, tok, "/codex/models?client_version="+version)
+		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		resp, err := c.get(rctx, tok, "/codex/models?client_version="+version)
 		if err != nil {
 			return nil, fmt.Errorf("codex model list: %w", err)
 		}

@@ -55,6 +55,9 @@ type ToolSpec struct {
 	Name        string
 	Description string
 	Schema      json.RawMessage
+	// Builtin names a provider's own tool that may stand in for this one
+	// (Codex's "web_search" for WebSearch); "" = always this function.
+	Builtin string
 }
 
 // Kind says what a Chunk is.

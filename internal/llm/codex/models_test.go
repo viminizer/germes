@@ -42,3 +42,26 @@ func TestContextWindowFromTheModelList(t *testing.T) {
 		t.Fatal("the failure is not remembered: the list would be asked on every turn")
 	}
 }
+
+// Sessions that ask while the first read runs wait for it: none gets the
+// 200k guess that could compact a long history too early.
+func TestFirstReadIsWaitedFor(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, `{"models":[{"slug":"gpt-6.1-sol","context_window":500000}]}`)
+	}))
+	defer srv.Close()
+	c := &Client{opts: Options{Model: "gpt-6.1-sol"}, http: srv.Client(), base: srv.URL, auth: &auth{tok: testTokens()}}
+	wins := make(chan int, 5)
+	for range 5 {
+		go func() {
+			win, _ := c.GetContextWindow(context.Background())
+			wins <- win
+		}()
+	}
+	for range 5 {
+		if win := <-wins; win != 500_000 {
+			t.Fatalf("a session got %d while the first read ran", win)
+		}
+	}
+}

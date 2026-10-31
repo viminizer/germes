@@ -48,11 +48,11 @@ type Client struct {
 
 	base string // the Codex backend; tests point it elsewhere
 
-	winMu      sync.Mutex // the context window read from the model list
-	win        int        // last good window; 0 = none yet
-	winErr     error      // why the last read failed; nil = it worked
-	winAt      time.Time  // when the last read ended
-	winReading bool       // a read is running
+	winMu   sync.Mutex    // the context window read from the model list
+	win     int           // last good window; 0 = none yet
+	winErr  error         // why the last read failed; nil = it worked
+	winAt   time.Time     // when the last read ended
+	winDone chan struct{} // closed when the running read ends; nil = none runs
 }
 
 var _ llm.Client = (*Client)(nil)

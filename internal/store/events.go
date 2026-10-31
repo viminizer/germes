@@ -82,6 +82,7 @@ func (s *Store) GetLastSeq(ctx context.Context, sessionID string) (int64, error)
 
 // searchEvents runs a full-text search over event text, best matches first.
 // The query is quoted word by word, so user text cannot break FTS syntax.
+// The model's reasoning is left out: search results go back to the model.
 func (s *Store) searchEvents(ctx context.Context, f api.EventFilter, limit int) (api.Page[api.Event], error) {
 	var terms []string
 	for _, w := range strings.Fields(f.Query) {
@@ -89,7 +90,7 @@ func (s *Store) searchEvents(ctx context.Context, f api.EventFilter, limit int) 
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT e.session_id, e.seq, e.time, e.kind, e.text, e.tool, e.engine
 		FROM events_fts JOIN events e ON e.rowid = events_fts.rowid
-		WHERE events_fts MATCH ? AND (? = '' OR e.session_id = ?) AND e.kind != 'reasoning' -- reasoning never goes back to the model
+		WHERE events_fts MATCH ? AND (? = '' OR e.session_id = ?) AND e.kind != 'reasoning'
 		ORDER BY rank LIMIT ?`, strings.Join(terms, " "), f.SessionID, f.SessionID, limit)
 	if err != nil {
 		return api.Page[api.Event]{}, fmt.Errorf("search events: %w", err)

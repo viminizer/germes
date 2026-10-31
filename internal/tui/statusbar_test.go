@@ -126,3 +126,26 @@ func TestStatusLineShowsTheCacheHitRate(t *testing.T) {
 		t.Fatalf("got %q, want ◎ 75%%", got)
 	}
 }
+
+// Like Hermes, the line keeps still while a turn runs: the busy state is
+// given the room of its widest face, so the faces do not move the rest.
+func TestBusyStatusLineKeepsStill(t *testing.T) {
+	now := time.Now()
+	s := statusBar{Busy: true, Since: now.Add(-3 * time.Second), Engine: "codex-api",
+		Started: now.Add(-30 * time.Minute), Title: "Fix the footer under the input"}
+	var lines []string
+	first := ansi.Strip(s.view(100, now))
+	for frame := 0; frame < 25*len(busyFaces); frame += 25 {
+		s.Frame = frame
+		got := ansi.Strip(s.view(100, now))
+		lines = append(lines, got[strings.Index(got, " ─ "):]) // the divider and the title
+		if strings.Contains(got, "30m") != strings.Contains(first, "30m") {
+			t.Fatalf("frame %d: the session age comes and goes: %q", frame, got)
+		}
+	}
+	for _, l := range lines[1:] {
+		if lipgloss.Width(l) != lipgloss.Width(lines[0]) {
+			t.Fatalf("the right side moves: %q vs %q", l, lines[0])
+		}
+	}
+}

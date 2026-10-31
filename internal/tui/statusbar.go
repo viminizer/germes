@@ -27,6 +27,16 @@ var (
 // longest verb and its "…".
 const verbWidth = len("brainstorming…")
 
+// busyWidth is the room the busy state is given: the widest face, the
+// verb and the turn's time (Hermes' busyIndicatorWidth).
+var busyWidth = func() int {
+	face := 0
+	for _, f := range busyFaces {
+		face = max(face, lipgloss.Width(f))
+	}
+	return face + 1 + verbWidth + len(" · ") + timeWidth
+}()
+
 // statusBar is the line over the input, like the Hermes status rule
 // (hermes/ui-tui/src/components/appChrome.tsx): state, model and context
 // used on the left, then the extras that fit (context bar, session age,
@@ -74,19 +84,29 @@ func (s statusBar) view(width int, now time.Time) string {
 	if s.Context != nil {
 		left += sep + styleMuted.Render(contextUsed(*s.Context, width < compactBelow))
 	}
+	// While busy the state is given the room of its widest face, verb and
+	// time, like Hermes: the line keeps still as they change.
+	used := lipgloss.Width(left)
+	if s.Busy && s.Hint == "" {
+		used += max(0, busyWidth-lipgloss.Width(s.state(now)))
+	}
 	right, rightStyle := " "+s.Title+" ", styleAccent.Bold(true)
 	if s.Title == "" {
 		right, rightStyle = folderLabel(s.Dir, s.Branch, maxFolderText), styleLabel
 	}
+	gap, divider, minLeft := 3, " ─ ", 8
+	if width < 24 { // like Hermes: a narrow line has a one-column gap
+		gap, divider, minLeft = 1, " ", 1
+	}
 	rightWidth := 0
 	if strings.TrimSpace(right) != "" {
-		rightWidth = max(0, min(lipgloss.Width(right), width-3-max(8, lipgloss.Width(left))))
+		rightWidth = max(0, min(lipgloss.Width(right), width-gap-max(minLeft, used)))
 	}
 	leftWidth := width
 	if rightWidth > 0 {
-		leftWidth = width - 3 - rightWidth // " ─ " between
+		leftWidth = width - gap - rightWidth
 	}
-	budget := leftWidth - lipgloss.Width(left)
+	budget := leftWidth - used
 	// A part shows only if the room it is given fits (a time gets timeWidth,
 	// so the line does not change as it counts up).
 	add := func(part string, room int) {
@@ -112,7 +132,7 @@ func (s statusBar) view(width int, now time.Time) string {
 	if rightWidth == 0 {
 		return left
 	}
-	return left + strings.Repeat(" ", max(leftWidth-lipgloss.Width(left), 0)) + styleBorder.Render(" ─ ") +
+	return left + strings.Repeat(" ", max(leftWidth-lipgloss.Width(left), 0)) + styleBorder.Render(divider) +
 		rightStyle.Render(ansi.Truncate(right, rightWidth, "…"))
 }
 

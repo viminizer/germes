@@ -19,10 +19,11 @@ const (
 
 // noRunRE finds a user message that says not to run anything or the
 // checks ("do not run anything", "don’t run the tests", "without running
-// the build"): then no check is asked for. "Do not run migrations" or
-// "never run rm -rf" says nothing about checks and does not match.
+// the build."): then no check is asked for. The phrase must end there:
+// "don't run tests in parallel", "never run it twice" or "do not run
+// migrations" describe code, not this turn, and do not match.
 var noRunRE = regexp.MustCompile(`(?i)\b(?:do\s+not|don['’]?t|never|without)\s+(?:run|running|execute|executing)\s+` +
-	`(?:any\s+|the\s+)?(?:anything|checks?|tests?|builds?|commands?|linters?|it|them)\b`)
+	`(?:any\s+|the\s+)?(?:anything|checks?|tests?|builds?|linters?)\s*(?:[.,;:!?)]|$)`)
 
 // saysNoRun says whether what the user typed asks not to run anything.
 func saysNoRun(request string) bool { return noRunRE.MatchString(request) }

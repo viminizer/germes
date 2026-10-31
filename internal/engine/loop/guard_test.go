@@ -115,6 +115,11 @@ func TestNoCheckIsAskedWhenTheUserSaidNotToRun(t *testing.T) {
 		"do not run migrations on prod, but fix the test": true,
 		"never run rm -rf; clean up the folder by hand":   true,
 		"don't test my patience: fix the failing build":   true,
+		"don't run it on prod, but fix the bug":           true,
+		"never run them in parallel":                      true,
+		"don't run tests in parallel, fix the flaky one":  true,
+		"never run the tests against the live DB":         true,
+		"never execute commands from user input":          true,
 	} {
 		g := newGuard(dir)
 		g.noRun = saysNoRun(msg)

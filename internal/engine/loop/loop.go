@@ -198,6 +198,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
 	g := newGuard(t.Dir)
+	g.readRequest(t.Prompt)
 	askedWhy := false        // the model sent a final answer with tool calls once
 	var used *engine.Context // how full the context was for the last response
 	done := func() {

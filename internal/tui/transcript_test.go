@@ -156,6 +156,7 @@ func TestEditPrintsItsDiffAfterTheTree(t *testing.T) {
 	for args, want := range map[string]int{
 		`{"file_path":"calc.go","old_string":"x := 1","new_string":"x := 2"}`: 3,
 		`{"file_path":"calc.go","old_string":"x","new_string":"x"}`:           2,
+		`{"file_path":"calc.go","old_string":"x\r\n","new_string":"x\n"}`:     2,
 	} {
 		var tr transcript
 		tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "1", Name: "Edit", Args: []byte(args)}})

@@ -94,7 +94,7 @@ func newModel(ctx context.Context, svc api.Service, opts Options) *model {
 	m := &model{
 		ctx: ctx, svc: svc, opts: opts, sessionID: opts.SessionID,
 		transcript: transcript{dir: opts.Dir},
-		status:     newStatus(opts),
+		status:     newStatus(opts.Engine, opts.Dir, opts.SessionID, time.Now()),
 		composer:   newComposer(),
 	}
 	// One of Hermes' hints, a different one per window, like Hermes.
@@ -113,7 +113,7 @@ func (m *model) Init() tea.Cmd {
 	if m.opts.Pick {
 		cmds = append(cmds, m.openPicker())
 	}
-	return tea.Batch(append(cmds, m.loadSkills(), clock())...)
+	return tea.Batch(append(cmds, m.loadSkills(), clock(), readBranch(m.ctx, m.status.Dir))...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -152,7 +152,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, warn
 
 	case sessionMsg:
-		m.showSession(msg.sess)
+		return m, m.showSession(msg.sess)
+
+	case branchMsg:
+		if msg.dir == m.status.Dir {
+			m.status.Branch = msg.branch
+		}
 		return m, nil
 
 	case skillsMsg:
@@ -181,8 +186,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.retryWatch(msg.gen)
 		}
 		m.queue.items = msg.queue
-		m.showSession(msg.sess)
-		return m, next(msg.gen, msg.ch)
+		return m, tea.Batch(next(msg.gen, msg.ch), m.showSession(msg.sess))
 
 	case eventMsg:
 		if msg.gen != m.gen {
@@ -428,24 +432,42 @@ func clock() tea.Cmd {
 
 type clockMsg struct{}
 
-// newStatus is the status line of a new view: the folder and its git
-// branch, and, for a new session, its age from now, like Hermes, which
-// starts the session when it opens.
-func newStatus(opts Options) statusBar {
-	s := statusBar{Engine: opts.Engine, Dir: opts.Dir, Branch: gitBranch(opts.Dir)}
-	if opts.SessionID == "" {
-		s.Started = time.Now()
+// newStatus is the status line of a view of a session ("" = a new one):
+// the folder (its branch comes from readBranch), and for a new session its
+// age from now, like Hermes, which starts the session when it opens.
+func newStatus(engine, dir, sessionID string, now time.Time) statusBar {
+	s := statusBar{Engine: engine, Dir: dir}
+	if sessionID == "" {
+		s.Started = now
 	}
 	return s
 }
 
-// gitBranch is the folder's git branch, "" when it has none.
-func gitBranch(dir string) string {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return ""
+// branchMsg is a folder's git branch, read in the background.
+type branchMsg struct{ dir, branch string }
+
+// branchTimeout bounds the git call: a slow folder must not stall the view
+// (Hermes waits 500 ms too, hooks/useGitBranch.ts).
+const branchTimeout = 500 * time.Millisecond
+
+// readBranch reads the folder's git branch in the background; none for a
+// folder that is not a repository or a detached HEAD, like Hermes. The TUI
+// runs git itself: it may only import api (R5), so it cannot share
+// prompt's git state.
+func readBranch(ctx context.Context, dir string) tea.Cmd {
+	if dir == "" {
+		return nil
 	}
-	return strings.TrimSpace(string(out))
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, branchTimeout)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		branch := strings.TrimSpace(string(out))
+		if err != nil || branch == "HEAD" {
+			branch = ""
+		}
+		return branchMsg{dir: dir, branch: branch}
+	}
 }
 
 func tick() tea.Cmd {
@@ -533,14 +555,18 @@ func margin(s string) string { return " " + strings.ReplaceAll(s, "\n", "\n ") }
 
 // showSession puts the session's title, start and branch in the status
 // line.
-func (m *model) showSession(s api.Session) {
+func (m *model) showSession(s api.Session) tea.Cmd {
 	m.status.Title = s.Title
-	if s.Branch != "" { // a worktree session: its own folder and branch
-		m.status.Dir, m.status.Branch = s.Dir, s.Branch
-	}
 	if !s.CreatedAt.IsZero() {
 		m.status.Started = s.CreatedAt
 	}
+	if s.Dir == "" || s.Dir == m.status.Dir {
+		return nil
+	}
+	// The session works elsewhere (its worktree, or back in the project):
+	// that folder and its branch.
+	m.status.Dir, m.status.Branch = s.Dir, s.Branch
+	return readBranch(m.ctx, s.Dir)
 }
 
 // loadSession reads the session for the rule and footer.

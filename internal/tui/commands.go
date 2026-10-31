@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -173,9 +174,9 @@ func (m *model) open(id string) tea.Cmd {
 	m.sessionID = id
 	m.transcript = transcript{dir: m.opts.Dir}
 	m.queue = queueView{}
-	m.status = statusBar{Engine: m.status.Engine, Dir: m.opts.Dir, Branch: gitBranch(m.opts.Dir)} // a session's own title, start, context and worktree come with it
+	m.status = newStatus(m.status.Engine, m.opts.Dir, id, time.Now()) // a session's own title, start, context and worktree come with it
 	if id == "" {
-		return nil
+		return readBranch(m.ctx, m.opts.Dir)
 	}
-	return m.watch()
+	return tea.Batch(m.watch(), readBranch(m.ctx, m.opts.Dir))
 }

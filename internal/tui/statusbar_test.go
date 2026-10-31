@@ -11,26 +11,28 @@ import (
 	"github.com/viminizer/germes/internal/api"
 )
 
-func TestStatusLineFitsAndDropsTheLeastImportantFirst(t *testing.T) {
+// Like Hermes: state, model and context always; then the title on the
+// right, kept whole when it can be; then the extras that fit, in order.
+func TestStatusLineKeepsTheTitleBeforeTheExtras(t *testing.T) {
+	now := time.Now()
 	s := statusBar{
-		Engine:   "codex-api",
-		Context:  &api.Context{Model: "gpt-5.5", Used: 57_000, Window: 200_000},
-		Started:  time.Now().Add(-2*time.Hour - 5*time.Minute),
-		LastTurn: 13 * time.Second,
-		Branch:   "germes/abc123",
-		Title:    "Fix the footer under the input",
-		Project:  "/p/germes",
+		Engine:     "codex-api",
+		Context:    &api.Context{Model: "gpt-5.5", Used: 57_000, Window: 200_000},
+		CacheInput: 400, CacheRead: 300,
+		Started: now.Add(-2*time.Hour - 5*time.Minute),
+		LastEnd: now.Add(-13 * time.Second),
+		Title:   "Fix the footer under the input",
 	}
 	for _, c := range []struct {
 		width      int
 		has, lacks []string
 	}{
-		{160, []string{"ready", "gpt 5.5", "57k/200k", "28%", "2h 5m", "✓ 13s", "Fix the footer under the input (germes/abc123)"}, nil},
-		{90, []string{"ready", "gpt 5.5", "57k/200k", "2h 5m", "─ Fix the footer under …"}, []string{"germes/abc123"}},
-		{50, []string{"ready", "gpt 5.5", "57k/200k"}, []string{"2h 5m", "germes/abc123"}},
+		{160, []string{"─ ready │ gpt 5.5 │ 57k/200k │ [███░░░░░░░] 28% │ 2h 5m │ ✓ 13s │ ◎ 75%", " ─  Fix the footer under the input "}, nil},
+		{100, []string{"57k/200k │ [███░░░░░░░] 28% │ 2h 5m │ ◎ 75%", " Fix the footer under the input "}, []string{"✓"}},
+		{70, []string{"ready │ gpt 5.5 │ 57k tok", "─  Fix the footer"}, []string{"[", "2h 5m"}},
 		{20, []string{"ready"}, nil},
 	} {
-		got := ansi.Strip(s.view(c.width))
+		got := ansi.Strip(s.view(c.width, now))
 		if strings.Contains(got, "\n") || lipgloss.Width(got) > c.width {
 			t.Errorf("width %d: %d wide or wraps: %q", c.width, lipgloss.Width(got), got)
 		}
@@ -45,10 +47,15 @@ func TestStatusLineFitsAndDropsTheLeastImportantFirst(t *testing.T) {
 			}
 		}
 	}
-	// Before a turn ends there is no context: the engine stands in for the
-	// model; before a title the project is on the right.
-	if got := ansi.Strip(statusBar{Engine: "codex-api", Project: "/p/germes"}.view(80)); !strings.Contains(got, "codex api") || !strings.HasSuffix(got, "─ /p/germes") {
-		t.Errorf("no context, no title: %q", got)
+}
+
+// Before a title, the folder and its branch are on the right, like Hermes:
+// under the home folder as ~, cut at the start to 28 characters.
+func TestStatusLineShowsTheFolderAndBranch(t *testing.T) {
+	t.Setenv("HOME", "/Users/kevin")
+	s := statusBar{Engine: "codex-api", Dir: "/Users/kevin/dev/github/germes/germes", Branch: "main"}
+	if got := ansi.Strip(s.view(100, time.Now())); !strings.Contains(got, "codex api") || !strings.HasSuffix(got, "─ …github/germes/germes (main)") {
+		t.Errorf("got %q", got)
 	}
 }
 
@@ -63,7 +70,7 @@ func TestStatusLineWritesShortNumbers(t *testing.T) {
 			t.Errorf("shortDuration(%s) = %q, want %q", in, got, want)
 		}
 	}
-	if got := ansi.Strip(contextUse(api.Context{Used: 300_000, Window: 200_000})); !strings.Contains(got, "[██████████] 100%") {
+	if got := ansi.Strip(contextBar(api.Context{Used: 300_000, Window: 200_000})); got != "[██████████] 100%" {
 		t.Errorf("over the window: %q", got)
 	}
 	for in, want := range map[string]string{"claude-opus-5-5": "opus 5.5", "gpt-6.1-sol": "gpt 6.1 sol", "openai/gpt-5.5": "gpt 5.5"} {
@@ -71,17 +78,17 @@ func TestStatusLineWritesShortNumbers(t *testing.T) {
 			t.Errorf("modelLabel(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := ansi.Strip(contextUse(api.Context{Used: 4000})); got != "4k" {
+	if got := contextUsed(api.Context{Used: 4000}, false); got != "4k tok" {
 		t.Errorf("unknown window: %q", got)
 	}
 }
 
-func TestReplayedTurnKeepsItsLength(t *testing.T) {
+func TestReplayedTurnKeepsItsEnd(t *testing.T) {
 	m := newModel(context.Background(), nil, Options{Engine: "codex-api"})
 	start := time.Now().Add(-time.Hour) // an old turn, replayed when the TUI attaches
 	m.track(api.Event{Kind: api.KindUserMessage, Time: start})
 	m.track(api.Event{Kind: api.KindTurnDone, Time: start.Add(3 * time.Second), Context: &api.Context{Used: 6000, Window: 200_000}})
-	if m.status.LastTurn != 3*time.Second || m.status.Busy || m.status.Context == nil {
+	if !m.status.LastEnd.Equal(start.Add(3*time.Second)) || m.status.Busy || m.status.Context == nil {
 		t.Fatalf("after replay: %+v", m.status)
 	}
 }
@@ -111,11 +118,11 @@ func TestViewsFitNarrowScreens(t *testing.T) {
 // prompt cache served, once it served any.
 func TestStatusLineShowsTheCacheHitRate(t *testing.T) {
 	s := statusBar{Engine: "codex-api", Context: &api.Context{Used: 6000, Window: 200_000}}
-	if got := ansi.Strip(s.view(120)); strings.Contains(got, "◎") {
+	if got := ansi.Strip(s.view(120, time.Now())); strings.Contains(got, "◎") {
 		t.Fatalf("no cache read yet: %q", got)
 	}
 	s.CacheInput, s.CacheRead = 400, 300
-	if got := ansi.Strip(s.view(120)); !strings.HasSuffix(strings.TrimSpace(got), "│ ◎ 75%") {
+	if got := ansi.Strip(s.view(120, time.Now())); !strings.HasSuffix(strings.TrimSpace(got), "│ ◎ 75%") {
 		t.Fatalf("got %q, want ◎ 75%%", got)
 	}
 }

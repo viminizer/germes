@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -26,10 +27,11 @@ var (
 // longest verb and its "…".
 const verbWidth = len("brainstorming…")
 
-// statusBar is the line over the input, like the Hermes status rule:
-// state, model, context used, session length and last turn time on the
-// left; the session title (the project before there is one) and branch on
-// the right.
+// statusBar is the line over the input, like the Hermes status rule
+// (hermes/ui-tui/src/components/appChrome.tsx): state, model and context
+// used on the left, then the extras that fit (context bar, session age,
+// time since the last turn, cache hit rate); on the right the session title,
+// or the folder and its git branch before there is one.
 type statusBar struct {
 	Busy    bool
 	Since   time.Time // when the turn started
@@ -39,93 +41,115 @@ type statusBar struct {
 	// CacheInput and CacheRead add up the session's model calls seen here:
 	// input tokens, and of those the ones from the prompt cache.
 	CacheInput, CacheRead int
-	Started               time.Time     // when the session was created; zero = not yet
-	LastTurn              time.Duration // how long the last turn took; 0 = none yet
-	Branch                string        // the session's worktree branch, "" = none
-	Title                 string        // the session's title, "" = none yet
-	Project               string
-	Note                  string // short message, e.g. "interrupted" or an error
-	Hint                  string // shown instead of the state for a moment, e.g. "Esc again to stop"
+	Started               time.Time // when the session started; zero = not yet
+	LastEnd               time.Time // when the last turn ended; zero = none yet
+	Dir                   string    // the session's folder
+	Branch                string    // its git branch, "" = none
+	Title                 string    // the session's title, "" = none yet
+	Note                  string    // short message, e.g. "interrupted" or an error
+	Hint                  string    // shown instead of the state for a moment, e.g. "Esc again to stop"
 }
 
 // spinner returns the current spinner frame.
 func (s statusBar) spinner() string { return spinnerFrames[s.Frame%len(spinnerFrames)] }
 
-// minRight is the narrowest the title on the right gets before it drops.
-const minRight = 12
+// Widths at which parts show, like Hermes (appChrome.tsx statusBarSegments).
+const (
+	compactBelow  = 72 // narrower: the context as "16.8k tok" and no bar
+	durationFrom  = 76 // session age and time since the last turn
+	cacheFrom     = 96
+	maxFolderText = 28 // the folder and branch on the right
+	timeWidth     = 7  // room a time is given ("59m 59s"), like Hermes' MAX_DURATION_WIDTH
+)
 
-// view renders the line. When narrow, the title on the right gets shorter,
-// then the left drops its parts after the model and context from the end,
-// then the title goes.
-func (s statusBar) view(width int) string {
-	var state string
+// view renders the line like Hermes: state, model and context always;
+// then the right side gets its room (the title is kept whole when it can
+// be); then the extras in order, each only if it fits whole.
+func (s statusBar) view(width int, now time.Time) string {
+	sep := styleMuted.Render(" │ ")
+	left := styleBorder.Render("─ ") + s.state(now)
+	if model := s.model(); model != "" {
+		left += sep + styleMuted.Render(modelLabel(model))
+	}
+	if s.Context != nil {
+		left += sep + styleMuted.Render(contextUsed(*s.Context, width < compactBelow))
+	}
+	right, rightStyle := " "+s.Title+" ", styleAccent.Bold(true)
+	if s.Title == "" {
+		right, rightStyle = folderLabel(s.Dir, s.Branch, maxFolderText), styleLabel
+	}
+	rightWidth := 0
+	if strings.TrimSpace(right) != "" {
+		rightWidth = max(0, min(lipgloss.Width(right), width-3-max(8, lipgloss.Width(left))))
+	}
+	leftWidth := width
+	if rightWidth > 0 {
+		leftWidth = width - 3 - rightWidth // " ─ " between
+	}
+	budget := leftWidth - lipgloss.Width(left)
+	// A part shows only if the room it is given fits (a time gets timeWidth,
+	// so the line does not change as it counts up).
+	add := func(part string, room int) {
+		if w := lipgloss.Width(sep) + room; w <= budget {
+			left, budget = left+sep+part, budget-w
+		}
+	}
+	if s.Context != nil && s.Context.Window > 0 && width >= compactBelow {
+		bar := contextBar(*s.Context)
+		add(bar, lipgloss.Width(bar))
+	}
+	if width >= durationFrom && !s.Started.IsZero() {
+		add(styleMuted.Render(shortDuration(now.Sub(s.Started))), timeWidth)
+	}
+	if width >= durationFrom && !s.Busy && !s.LastEnd.IsZero() {
+		add(styleMuted.Render("✓ "+shortDuration(now.Sub(s.LastEnd))), 2+timeWidth) // idle since, like Hermes
+	}
+	if width >= cacheFrom && s.CacheRead > 0 && s.CacheInput > 0 {
+		hit := cacheHit(s.CacheRead, s.CacheInput)
+		add(hit, lipgloss.Width(hit))
+	}
+	left = ansi.Truncate(left, max(leftWidth, 1), "…")
+	if rightWidth == 0 {
+		return left
+	}
+	return left + strings.Repeat(" ", max(leftWidth-lipgloss.Width(left), 0)) + styleBorder.Render(" ─ ") +
+		rightStyle.Render(ansi.Truncate(right, rightWidth, "…"))
+}
+
+// state is "ready", the busy face and verb with the turn's time, a hint
+// or a note.
+func (s statusBar) state(now time.Time) string {
 	switch {
 	case s.Hint != "":
-		state = styleAccent.Bold(true).Render(s.Hint)
+		return styleAccent.Bold(true).Render(s.Hint)
 	case s.Busy:
 		n := s.Frame / 25 // about every 2.5s, like Hermes
 		verb := busyVerbs[n%len(busyVerbs)] + "…"
-		state = styleMuted.Render(fmt.Sprintf("%s %s · %s", busyFaces[n%len(busyFaces)],
-			verb+strings.Repeat(" ", verbWidth-len([]rune(verb))), shortDuration(time.Since(s.Since))))
+		return styleMuted.Render(fmt.Sprintf("%s %s · %s", busyFaces[n%len(busyFaces)],
+			verb+strings.Repeat(" ", verbWidth-len([]rune(verb))), shortDuration(now.Sub(s.Since))))
 	case s.Note != "":
-		state = styleWarn.Render(s.Note)
-	default:
-		state = styleOK.Render("ready")
+		return styleWarn.Render(s.Note)
 	}
-	// Most important first; drop from the end until it fits.
-	parts := []string{state}
-	if model := s.model(); model != "" {
-		parts = append(parts, styleMuted.Render(modelLabel(model)))
+	return styleOK.Render("ready")
+}
+
+// folderLabel is the folder like Hermes (domain/paths.ts fmtCwdBranch):
+// under the home folder as ~, its start cut to fit max with the branch.
+func folderLabel(dir, branch string, maxWidth int) string {
+	if dir == "" {
+		return ""
 	}
-	if s.Context != nil {
-		parts = append(parts, contextUse(*s.Context))
+	if home := os.Getenv("HOME"); home != "" && strings.HasPrefix(dir, home) {
+		dir = "~" + dir[len(home):]
 	}
-	keep := len(parts) // state, model and context never drop
-	if !s.Started.IsZero() {
-		parts = append(parts, styleMuted.Render(shortDuration(time.Since(s.Started))))
-	}
-	if s.LastTurn > 0 {
-		parts = append(parts, styleMuted.Render("✓ "+shortDuration(s.LastTurn)))
-	}
-	if s.CacheRead > 0 && s.CacheInput > 0 {
-		// Like Hermes (appChrome.tsx): how much of the prompt the provider's
-		// cache served, last on the left, so it drops first.
-		pct := min(100, (200*s.CacheRead+s.CacheInput)/(2*s.CacheInput)) // rounded
-		style := styleMuted
-		switch {
-		case pct >= 70:
-			style = lipgloss.NewStyle().Foreground(colorStatusGood)
-		case pct >= 40:
-			style = lipgloss.NewStyle().Foreground(colorStatusWarn)
+	tag := ""
+	if branch != "" {
+		if r := []rune(branch); len(r) > 16 {
+			branch = "…" + string(r[len(r)-15:])
 		}
-		parts = append(parts, style.Render(fmt.Sprintf("◎ %d%%", pct)))
+		tag = " (" + branch + ")"
 	}
-	// The title bold in accent, losing its end when long, like Hermes;
-	// before there is one, the project, losing its start.
-	right, rightStyle := s.Title, styleAccent.Bold(true)
-	cut := func(s string, n int) string { return ansi.Truncate(s, n, "…") }
-	if right == "" {
-		right, rightStyle, cut = s.Project, styleLabel, truncateLeft
-	}
-	if s.Branch != "" {
-		right += " (" + s.Branch + ")"
-	}
-	lead := styleBorder.Render("─ ")
-	for {
-		left := lead + strings.Join(parts, styleMuted.Render(" │ "))
-		room := width - lipgloss.Width(left) - 3 - 2 // a gap of 3, then "─ "
-		if right == "" && lipgloss.Width(left) <= width {
-			return left // nothing on the right: the left fits as it is
-		}
-		if right != "" && room >= min(minRight, lipgloss.Width(right)) {
-			r := lead + rightStyle.Render(cut(right, room))
-			return left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(r)) + r
-		}
-		if len(parts) <= keep {
-			return ansi.Truncate(left, max(width, 1), "…")
-		}
-		parts = parts[:len(parts)-1]
-	}
+	return truncateLeft(dir, max(8, maxWidth-len([]rune(tag)))) + tag
 }
 
 // modelLabel writes a model name short, like Hermes: claude-opus-5-5 is
@@ -146,13 +170,18 @@ func (s statusBar) model() string {
 	return s.Engine
 }
 
-// contextUse renders "57.3k/200k │ [███░░░░░░░] 28%", the bar colored
-// by how full it is like Hermes, or only the used tokens when the window
-// is unknown.
-func contextUse(c api.Context) string {
-	if c.Window <= 0 {
-		return styleMuted.Render(shortCount(c.Used))
+// contextUsed is "57.3k/200k", or "57.3k tok" when compact or when the
+// window is unknown, like Hermes.
+func contextUsed(c api.Context, compact bool) string {
+	if compact || c.Window <= 0 {
+		return shortCount(c.Used) + " tok"
 	}
+	return shortCount(c.Used) + "/" + shortCount(c.Window)
+}
+
+// contextBar is "[███░░░░░░░] 28%", colored by how full the context is
+// like Hermes.
+func contextBar(c api.Context) string {
 	pct := min(100*c.Used/c.Window, 100)
 	full := (pct*10 + 50) / 100
 	bar := strings.Repeat("█", full) + strings.Repeat("░", 10-full)
@@ -165,8 +194,21 @@ func contextUse(c api.Context) string {
 	case pct >= 50:
 		color = colorStatusWarn // compaction starts at half the window
 	}
-	return styleMuted.Render(shortCount(c.Used)+"/"+shortCount(c.Window)+" │ ") +
-		lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("[%s] %d%%", bar, pct))
+	return lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("[%s] %d%%", bar, pct))
+}
+
+// cacheHit is "◎ 65%": how much of the session's input the prompt cache
+// served, colored like Hermes.
+func cacheHit(read, input int) string {
+	pct := min(100, (200*read+input)/(2*input)) // rounded
+	style := styleMuted
+	switch {
+	case pct >= 70:
+		style = lipgloss.NewStyle().Foreground(colorStatusGood)
+	case pct >= 40:
+		style = lipgloss.NewStyle().Foreground(colorStatusWarn)
+	}
+	return style.Render(fmt.Sprintf("◎ %d%%", pct))
 }
 
 // shortCount writes a token count like Hermes: 950, 57.3k or 1.2M.

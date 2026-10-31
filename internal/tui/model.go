@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -90,12 +91,15 @@ type model struct {
 }
 
 func newModel(ctx context.Context, svc api.Service, opts Options) *model {
-	return &model{
+	m := &model{
 		ctx: ctx, svc: svc, opts: opts, sessionID: opts.SessionID,
 		transcript: transcript{dir: opts.Dir},
-		status:     statusBar{Engine: opts.Engine, Project: opts.Project},
+		status:     newStatus(opts),
 		composer:   newComposer(),
 	}
+	// One of Hermes' hints, a different one per window, like Hermes.
+	m.composer.setPlaceholder(placeholders[time.Now().Nanosecond()%len(placeholders)])
+	return m
 }
 
 func (m *model) Init() tea.Cmd {
@@ -109,7 +113,7 @@ func (m *model) Init() tea.Cmd {
 	if m.opts.Pick {
 		cmds = append(cmds, m.openPicker())
 	}
-	return tea.Batch(append(cmds, m.loadSkills())...)
+	return tea.Batch(append(cmds, m.loadSkills(), clock())...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -143,7 +147,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.sessionID == "" {
 			m.sessionID = msg.sessionID
-			m.status.Started = time.Now()
 			return m, tea.Batch(warn, m.watch())
 		}
 		return m, warn
@@ -232,6 +235,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tick()
 		}
 		return m, nil
+
+	case clockMsg:
+		return m, clock() // a redraw: session age and idle time count up
 	}
 
 	var cmd tea.Cmd
@@ -316,9 +322,7 @@ func (m *model) track(ev api.Event) tea.Cmd {
 	case api.KindQueue:
 		m.queue.items = ev.Queue
 	case api.KindTurnDone:
-		if m.status.Busy {
-			m.status.LastTurn = eventTime(ev).Sub(m.status.Since)
-		}
+		m.status.LastEnd = eventTime(ev) // idle since, like Hermes
 		if ev.Context != nil {
 			m.status.Context = ev.Context
 			m.status.CacheInput += ev.Context.Input
@@ -416,6 +420,34 @@ func next(gen int, ch <-chan api.Event) tea.Cmd {
 	}
 }
 
+// clock redraws the status line once a second, so its times count up while
+// nothing else happens.
+func clock() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return clockMsg{} })
+}
+
+type clockMsg struct{}
+
+// newStatus is the status line of a new view: the folder and its git
+// branch, and, for a new session, its age from now, like Hermes, which
+// starts the session when it opens.
+func newStatus(opts Options) statusBar {
+	s := statusBar{Engine: opts.Engine, Dir: opts.Dir, Branch: gitBranch(opts.Dir)}
+	if opts.SessionID == "" {
+		s.Started = time.Now()
+	}
+	return s
+}
+
+// gitBranch is the folder's git branch, "" when it has none.
+func gitBranch(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func tick() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
 }
@@ -468,7 +500,7 @@ func (m *model) View() tea.View {
 	if sug := m.suggest.view(m.width); sug != "" && !m.picker.open {
 		bottom = append(bottom, sug)
 	} else {
-		bottom = append(bottom, m.status.view(m.width))
+		bottom = append(bottom, m.status.view(m.width, now))
 	}
 	if m.picker.open {
 		bottom = append(bottom, m.picker.view(m.width, now))
@@ -502,7 +534,10 @@ func margin(s string) string { return " " + strings.ReplaceAll(s, "\n", "\n ") }
 // showSession puts the session's title, start and branch in the status
 // line.
 func (m *model) showSession(s api.Session) {
-	m.status.Title, m.status.Branch = s.Title, s.Branch
+	m.status.Title = s.Title
+	if s.Branch != "" { // a worktree session: its own folder and branch
+		m.status.Dir, m.status.Branch = s.Dir, s.Branch
+	}
 	if !s.CreatedAt.IsZero() {
 		m.status.Started = s.CreatedAt
 	}

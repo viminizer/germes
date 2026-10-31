@@ -9,6 +9,12 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// placeholders are the hints of an empty input in a fresh session, Hermes'
+// (i18n/en/chrome.ts composer.placeholders); one is picked per window.
+var placeholders = []string{"Ask me anything…", `Try "explain this codebase"`, `Try "write a test for…"`,
+	`Try "refactor the auth module"`, `Try "/help" for commands`, `Try "fix the lint errors"`,
+	`Try "how does the config loader work?"`}
+
 // composer is the input: no border, `❯` prompt, grows with its lines.
 // Enter sends; Shift+Enter or Alt+Enter adds a line.
 type composer struct {
@@ -19,7 +25,7 @@ type composer struct {
 func newComposer() composer {
 	a := textarea.New()
 	a.ShowLineNumbers = false
-	a.Placeholder = "Ask me anything…"
+	a.Placeholder = placeholders[0]
 	a.DynamicHeight = true
 	a.MinHeight = 1
 	a.MaxHeight = 10
@@ -34,6 +40,7 @@ func newComposer() composer {
 	styles.Focused.CursorLine = lipgloss.NewStyle()
 	styles.Focused.Placeholder = styleMuted
 	styles.Focused.Text = styleText
+	styles.Cursor.Color = colorMuted // a gold block, like Hermes' cursor
 	styles.Blurred = styles.Focused
 	a.SetStyles(styles)
 	a.Focus()

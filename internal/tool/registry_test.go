@@ -358,4 +358,16 @@ func TestHasRulesFindsBlockRulesAndHooks(t *testing.T) {
 	if !r.HasRules("WebSearch", dir) {
 		t.Fatal("a hook on WebSearch is not seen")
 	}
+	// A project's own hooks count, and a hooks file that cannot be read
+	// fails closed.
+	project := t.TempDir()
+	os.MkdirAll(filepath.Join(project, ".germes"), 0o755)
+	os.WriteFile(filepath.Join(project, HooksFile), []byte("hooks:\n  - before: Read(*secret*)\n    run: \"true\"\n"), 0o644)
+	if !r.HasRules("Read", project) || r.HasRules("Glob", project) {
+		t.Fatal("project hooks: want Read named, Glob not")
+	}
+	os.WriteFile(filepath.Join(project, HooksFile), []byte("hooks: [not: valid"), 0o644)
+	if !r.HasRules("Glob", project) {
+		t.Fatal("an unreadable hooks file must fail closed")
+	}
 }

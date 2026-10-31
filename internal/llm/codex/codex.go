@@ -630,14 +630,6 @@ func itemChunk(raw json.RawMessage) (llm.Chunk, bool) {
 		return llm.Chunk{Kind: llm.KindText, Text: b.String(), Phase: llm.Phase(it.Phase)}, b.Len() > 0
 	case "function_call":
 		return llm.Chunk{Kind: llm.KindToolCall, ToolCall: &llm.ToolCall{ID: it.CallID, Name: it.Name, Args: json.RawMessage(it.Arguments)}}, true
-	case "web_search_call":
-		// Codex ran the search; replayed like a reasoning item, so the next
-		// request of this turn still has it (without the id: store=false).
-		var m map[string]any
-		json.Unmarshal(raw, &m)
-		delete(m, "id")
-		b, _ := json.Marshal(m)
-		return llm.Chunk{Kind: llm.KindRaw, Raw: b}, true
 	case "reasoning":
 		// Replayed in the next request of this turn. With store=false the id
 		// must go (lookups 404), and temporary items are skipped.

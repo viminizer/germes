@@ -205,8 +205,10 @@ func compilePattern(pattern string) func(string) bool {
 // every call of it must come through Check, so a provider's own version of
 // the tool, which Germes never sees, must not stand in for it (R47).
 func (r *Registry) HasRules(name, dir string) bool {
+	names := []string{name, r.tools[name].BlockedAs} // the names its calls are checked under, like firstMatch
+	named := func(tool string) bool { return tool != "" && slices.Contains(names, tool) }
 	for _, b := range r.blocked {
-		if b.tool == name {
+		if named(b.tool) {
 			return true
 		}
 	}
@@ -215,7 +217,7 @@ func (r *Registry) HasRules(name, dir string) bool {
 		return true // fail closed
 	}
 	for _, h := range hooks {
-		if h.rule.tool == name {
+		if named(h.rule.tool) {
 			return true
 		}
 	}

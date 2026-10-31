@@ -20,6 +20,7 @@ type Tool struct {
 	Schema      json.RawMessage // JSON Schema of the arguments
 	MatchArg    string          // the argument the block list checks ("command" for Bash)
 	BlockedAs   string          // another tool whose block rules apply too (send_file: Read's)
+	Builtin     string          // a provider's own tool that may stand in for it ("web_search"); "" = none
 	Timeout     time.Duration   // how long one call may run; 0 = the registry's default
 	Run         func(ctx context.Context, c Call) (string, error)
 }

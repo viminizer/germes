@@ -100,3 +100,22 @@ func TestGuardCountsOnlyProjectEdits(t *testing.T) {
 		t.Fatal("a failed write nudged")
 	}
 }
+
+// A user who says not to run anything gets no check asked for after edits.
+func TestNoCheckIsAskedWhenTheUserSaidNotToRun(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644)
+	for msg, nudge := range map[string]bool{
+		"rename xs to values. Do not run anything.": false,
+		"fix it, but don't run the tests":           false,
+		"fix it without running the build":          false,
+		"rename xs to values":                       true,
+	} {
+		g := newGuard(dir)
+		g.readRequest(msg)
+		g.edited = true
+		if got := g.finishNudge() != ""; got != nudge {
+			t.Errorf("%q: nudge %v, want %v", msg, got, nudge)
+		}
+	}
+}

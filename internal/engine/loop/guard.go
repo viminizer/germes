@@ -16,6 +16,11 @@ const (
 	maxSameRead    = 3 // an identical read run this often gets a note
 )
 
+// noRunRE finds a user message that says not to run anything ("do not
+// run anything", "don't run the tests", "without running"): then no check
+// is asked for.
+var noRunRE = regexp.MustCompile(`(?i)\b(do not|don't|dont|never|without)\s+(run|running|execute|executing|test|testing)\b`)
+
 // checkRE finds commands that check a project: builds, tests, linters.
 var checkRE = regexp.MustCompile(`\b(make|go (build|vet|test)|npm|pnpm|yarn|bun|cargo|pytest|tsc|eslint|ruff|mypy|vitest|jest|gofmt)\b`)
 
@@ -29,11 +34,15 @@ type guard struct {
 	reads  map[string]int // read-only call -> runs this turn
 	edited bool           // files changed since the last passing check
 	nudged bool
+	noRun  bool // the user said not to run anything: no check is asked for
 }
 
 func newGuard(dir string) *guard {
 	return &guard{dir: dir, checks: prompt.ListChecks(dir), fails: map[string]int{}, reads: map[string]int{}}
 }
+
+// readRequest notes whether the user's message says not to run anything.
+func (g *guard) readRequest(message string) { g.noRun = noRunRE.MatchString(message) }
 
 // refuse returns why the call must not run again, or "".
 func (g *guard) refuse(c llm.ToolCall) string {
@@ -90,7 +99,7 @@ func (g *guard) isInProject(args json.RawMessage) bool {
 // finishNudge sends the model back to check its changes, once a turn, when
 // the project has checks. "" = the model may finish.
 func (g *guard) finishNudge() string {
-	if !g.edited || g.nudged || len(g.checks) == 0 {
+	if !g.edited || g.nudged || g.noRun || len(g.checks) == 0 {
 		return ""
 	}
 	g.nudged = true

@@ -461,7 +461,9 @@ func readBranch(ctx context.Context, dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, branchTimeout)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
+		cmd.WaitDelay = branchTimeout // a child holding the pipe open does not keep us waiting
+		out, err := cmd.Output()
 		branch := strings.TrimSpace(string(out))
 		if err != nil || branch == "HEAD" {
 			branch = ""

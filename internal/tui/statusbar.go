@@ -87,7 +87,7 @@ func (s statusBar) view(width int, now time.Time) string {
 	// While busy the state is given the room of its widest face, verb and
 	// time, like Hermes: the line keeps still as they change.
 	used := lipgloss.Width(left)
-	if s.Busy && s.Hint == "" {
+	if s.Busy {
 		used += max(0, busyWidth-lipgloss.Width(s.state(now)))
 	}
 	right, rightStyle := " "+s.Title+" ", styleAccent.Bold(true)

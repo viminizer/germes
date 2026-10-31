@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/viminizer/germes/internal/llm"
@@ -44,6 +45,11 @@ type Client struct {
 	auth      *auth
 	http      *http.Client
 	retryWait time.Duration // before sending a failed stream again; times the attempt
+
+	winMu  sync.Mutex // the context window read from the model list
+	win    int
+	winErr error
+	winAt  time.Time
 }
 
 var _ llm.Client = (*Client)(nil)

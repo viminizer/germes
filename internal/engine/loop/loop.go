@@ -32,8 +32,9 @@ type Options struct {
 	// OverseerToolsets are the overseer's tools (it also controls Germes).
 	OverseerToolsets []string
 	MaxSteps         int // model calls per turn before the wrap-up call; 0 = 50
-	// ContextWindow is the model's context size in tokens; history is
-	// compacted at half of it. 0 = 200k.
+	// ContextWindow is the model's context size in tokens when the client
+	// does not know it (WindowClient); history is compacted at half of it.
+	// 0 = 200k.
 	ContextWindow int
 	// Todos gives the model its open task items again after a compaction;
 	// nil = none.
@@ -83,6 +84,23 @@ func New(client llm.Client, tools *tool.Registry, prompts *prompt.Builder, histo
 
 // Name returns the engine name.
 func (l *Loop) Name() string { return l.opts.Name }
+
+// WindowClient is a client that knows its model's context window, like
+// Codex from its model list (Hermes: agent/model_metadata.py).
+type WindowClient interface {
+	GetContextWindow(ctx context.Context) (int, error)
+}
+
+// window is the model's context window in tokens: the client's when it
+// knows it, else ContextWindow.
+func (l *Loop) window(ctx context.Context) int {
+	if c, ok := l.client.(WindowClient); ok {
+		if n, err := c.GetContextWindow(ctx); err == nil && n > 0 {
+			return n
+		}
+	}
+	return l.opts.ContextWindow
+}
 
 // Run runs one turn. The user's message is already in the session history.
 func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, error) {
@@ -163,6 +181,7 @@ type turnSpec struct {
 }
 
 func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []llm.Message, out chan<- engine.Event, spec turnSpec) {
+	window := l.window(ctx)
 	var specs []llm.ToolSpec
 	for _, tl := range l.tools.List(spec.toolsets...) {
 		specs = append(specs, llm.ToolSpec{Name: tl.Name, Description: tl.Description, Schema: tl.Schema})
@@ -190,7 +209,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		}
 	}()
 	for step := 0; step <= spec.maxSteps; step++ {
-		if tokens(system, msgs) > l.opts.ContextWindow/2 {
+		if tokens(system, msgs) > window/2 {
 			prune(msgs, 10) // a long turn: drop old tool outputs, keep the newest
 		}
 		req := llm.Request{System: system, Messages: msgs, Tools: specs, CacheKey: t.SessionID}
@@ -231,7 +250,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			case llm.KindStatus:
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindStatus, Text: ch.Text})
 			case llm.KindContext:
-				used = &engine.Context{Model: ch.Context.Model, Used: ch.Context.Tokens, Window: l.opts.ContextWindow}
+				used = &engine.Context{Model: ch.Context.Model, Used: ch.Context.Tokens, Window: window}
 			}
 		}
 		if ctx.Err() != nil {

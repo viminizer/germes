@@ -1,6 +1,8 @@
 package loop
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -49,5 +51,32 @@ func TestPruneKeepsHowOldOutputsEnded(t *testing.T) {
 	prune(msgs, 1)
 	if msgs[0].Text != before {
 		t.Errorf("pruning again changed an output:\n%s", msgs[0].Text)
+	}
+}
+
+// windowModel is a model client that knows its context window.
+type windowModel struct {
+	fakeModel
+	window int
+	err    error
+}
+
+func (w *windowModel) GetContextWindow(context.Context) (int, error) { return w.window, w.err }
+
+// History is compacted at half of the model's real window (500k for
+// gpt-6.1-sol on Codex), not at half of a fixed 200k; when the client
+// cannot say, 200k is used.
+func TestLoopUsesTheModelsWindow(t *testing.T) {
+	for _, c := range []struct {
+		model *windowModel
+		want  int
+	}{
+		{&windowModel{window: 500_000}, 500_000},
+		{&windowModel{err: errors.New("model list down")}, 200_000},
+	} {
+		l := New(c.model, nil, nil, nil, Options{})
+		if got := l.window(context.Background()); got != c.want {
+			t.Errorf("window %d, want %d", got, c.want)
+		}
 	}
 }

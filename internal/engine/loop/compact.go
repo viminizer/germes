@@ -50,13 +50,14 @@ func tokens(system string, msgs []llm.Message) int {
 // window. It returns the summary and the seq from which events are kept, or
 // ok=false when no compaction is needed or possible.
 func (l *Loop) compact(ctx context.Context, system string, events []api.Event) (summary string, keepFrom int64, ok bool, err error) {
-	if tokens(system, messages(events)) <= l.opts.ContextWindow/2 {
+	window := l.window(ctx)
+	if tokens(system, messages(events)) <= window/2 {
 		return "", 0, false, nil
 	}
 	prev, kept := effective(events)
 	// Keep the newest quarter of the window as it is, starting at a user
 	// message so tool calls and results stay together.
-	budget := l.opts.ContextWindow / 4 * charsPerToken
+	budget := window / 4 * charsPerToken
 	cut, size := len(kept), 0
 	for cut > 0 && size < budget {
 		cut--

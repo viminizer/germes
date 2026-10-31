@@ -42,7 +42,8 @@ func treeView(runs []toolRun, dir string, width int, spin string, now time.Time,
 		switch {
 		case !r.Done:
 		case r.Call.IsError:
-			sub = styleError.Render("└─ " + cleanLine(firstLine(shortPaths(r.Call.Output, dir))))
+			// Escape codes go first: a line holding only a color code is not the first line.
+			sub = styleError.Render("└─ " + cleanLine(firstLine(ansi.Strip(shortPaths(r.Call.Output, dir)))))
 		case r.Call.Name == "delegate_task":
 			sub = subagentList(r.Call.Output, width-5)
 		}

@@ -63,7 +63,7 @@ func (e edits) rows() []string {
 	for _, c := range e.changes {
 		d := diffLines(splitLines(c[0]), splitLines(c[1]))
 		if !hasChange(d) {
-			continue // like Hermes: no diff when before and after are the same
+			continue // nothing to show: the same text, or only tabs, line ends or a final newline changed
 		}
 		if len(rows) > 0 {
 			rows = append(rows, "@@")

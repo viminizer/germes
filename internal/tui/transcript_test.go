@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/viminizer/germes/internal/api"
 )
@@ -180,5 +181,12 @@ func TestLinesAreCleanedBeforeTheyPrint(t *testing.T) {
 		if got := cleanLine(in); got != want {
 			t.Errorf("cleanLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Bold text may hold inline code, like Hermes renders it: no backticks show.
+func TestBoldHoldsInlineCode(t *testing.T) {
+	if got := ansi.Strip(renderMarkdown("fixes in **security fixes in `crypto/x509`**, done", 80)); got != "fixes in security fixes in crypto/x509, done" {
+		t.Fatalf("got %q", got)
 	}
 }

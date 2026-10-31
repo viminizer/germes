@@ -95,10 +95,10 @@ func inline(text string, base lipgloss.Style) string {
 		switch {
 		case m[2] >= 0:
 			b.WriteString(styleAccent.Render(part(1)))
-		case m[4] >= 0:
-			b.WriteString(base.Bold(true).Render(part(2)))
+		case m[4] >= 0: // bold may hold code or a link, like Hermes' MdInline
+			b.WriteString(inline(part(2), base.Bold(true)))
 		case m[6] >= 0:
-			b.WriteString(base.Bold(true).Render(part(3)))
+			b.WriteString(inline(part(3), base.Bold(true)))
 		default:
 			b.WriteString(styleAccent.Underline(true).Render(part(4)))
 		}

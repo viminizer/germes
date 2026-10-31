@@ -34,10 +34,11 @@ var (
 	styleDim     = lipgloss.NewStyle().Foreground(colorMuted).Faint(true)
 	styleTime    = lipgloss.NewStyle().Foreground(colorStatus).Faint(true) // a call's time, a count
 	// Diff lines, Hermes' DIFF_DARK colors (hermes/ui-tui/src/theme.ts).
-	styleRemoved = lipgloss.NewStyle().Foreground(lipgloss.Color("#CF222E")).Background(lipgloss.Color("#FFDCDC"))
-	styleAdded   = lipgloss.NewStyle().Foreground(lipgloss.Color("#248A3D")).Background(lipgloss.Color("#DCFFDC"))
-	styleStatus  = lipgloss.NewStyle().Foreground(colorStatus)
-	styleError   = lipgloss.NewStyle().Foreground(colorError)
-	styleOK      = lipgloss.NewStyle().Foreground(colorOK)
-	styleWarn    = lipgloss.NewStyle().Foreground(colorWarn)
+	styleRemoved   = lipgloss.NewStyle().Foreground(lipgloss.Color("#CF222E")).Background(lipgloss.Color("#FFDCDC"))
+	styleUnchanged = lipgloss.NewStyle().Foreground(colorText).Faint(true)
+	styleAdded     = lipgloss.NewStyle().Foreground(lipgloss.Color("#248A3D")).Background(lipgloss.Color("#DCFFDC"))
+	styleStatus    = lipgloss.NewStyle().Foreground(colorStatus)
+	styleError     = lipgloss.NewStyle().Foreground(colorError)
+	styleOK        = lipgloss.NewStyle().Foreground(colorOK)
+	styleWarn      = lipgloss.NewStyle().Foreground(colorWarn)
 )

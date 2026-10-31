@@ -42,7 +42,7 @@ func treeView(runs []toolRun, dir string, width int, spin string, now time.Time,
 		switch {
 		case !r.Done:
 		case r.Call.IsError:
-			sub = styleError.Render("└─ " + firstLine(shortPaths(r.Call.Output, dir)))
+			sub = styleError.Render("└─ " + cleanLine(firstLine(shortPaths(r.Call.Output, dir))))
 		case r.Call.Name == "delegate_task":
 			sub = subagentList(r.Call.Output, width-5)
 		}

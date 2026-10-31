@@ -56,11 +56,28 @@ func readEdits(t *api.ToolCall) edits {
 	return e
 }
 
-// changed says whether the call changed any text, like Hermes, which shows
-// no diff when before and after are the same.
-func (e edits) changed() bool {
+// rows are the diff rows of all the call's changes: "-", "+" and "  "
+// rows, and "@@" between the changes of a MultiEdit.
+func (e edits) rows() []string {
+	var rows []string
 	for _, c := range e.changes {
-		if c[0] != c[1] {
+		d := diffLines(splitLines(c[0]), splitLines(c[1]))
+		if !hasChange(d) {
+			continue // like Hermes: no diff when before and after are the same
+		}
+		if len(rows) > 0 {
+			rows = append(rows, "@@")
+		}
+		rows = append(rows, d...)
+	}
+	return rows
+}
+
+// hasChange says whether diff rows remove or add a line: an edit of only
+// line endings or a final newline shows nothing.
+func hasChange(rows []string) bool {
+	for _, r := range rows {
+		if r[0] == '-' || r[0] == '+' {
 			return true
 		}
 	}
@@ -73,17 +90,7 @@ func (e edits) changed() bool {
 // call changed nothing it can show.
 func diffView(t *api.ToolCall, dir string, width int) string {
 	e := readEdits(t)
-	var rows []string
-	for i, c := range e.changes {
-		if c[0] == c[1] {
-			continue
-		}
-		d := diffLines(splitLines(c[0]), splitLines(c[1]))
-		if i > 0 && len(d) > 0 && len(rows) > 0 {
-			rows = append(rows, "@@")
-		}
-		rows = append(rows, d...)
-	}
+	rows := e.rows()
 	if len(rows) == 0 {
 		return ""
 	}
@@ -94,7 +101,7 @@ func diffView(t *api.ToolCall, dir string, width int) string {
 			lines = append(lines, styleDim.Render(fmt.Sprintf("… %d more lines", len(rows)-i)))
 			break
 		}
-		style := styleText.Faint(true) // unchanged, dim like Hermes
+		style := styleUnchanged
 		switch r[0] {
 		case '-':
 			style = styleRemoved

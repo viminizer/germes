@@ -157,7 +157,7 @@ func subagentList(out string, width int) string {
 		head, body, _ := strings.Cut(p, "\n")
 		num, goal, _ := strings.Cut(head, ": ")
 		n := strings.Count(strings.TrimSpace(body), "\n") + 1
-		lines = append(lines, styleDim.Render(ansi.Truncate(fmt.Sprintf("%s. %d-line report: %s", num, n, goal), max(width, 10), "…")))
+		lines = append(lines, styleDim.Render(ansi.Truncate(fmt.Sprintf("%s. %d-line report: %s", num, n, cleanLine(goal)), max(width, 10), "…")))
 	}
 	return strings.Join(lines, "\n")
 }

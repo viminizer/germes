@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/viminizer/germes/internal/api"
 	"github.com/viminizer/germes/internal/file"
 	"github.com/viminizer/germes/internal/llm"
 	"github.com/viminizer/germes/internal/prompt"
@@ -16,10 +17,26 @@ const (
 	maxSameRead    = 3 // an identical read run this often gets a note
 )
 
-// noRunRE finds a user message that says not to run anything ("do not
-// run anything", "don't run the tests", "without running"): then no check
-// is asked for.
-var noRunRE = regexp.MustCompile(`(?i)\b(do not|don't|dont|never|without)\s+(run|running|execute|executing|test|testing)\b`)
+// noRunRE finds a user message that says not to run anything or the
+// checks ("do not run anything", "don’t run the tests", "without running
+// the build"): then no check is asked for. "Do not run migrations" or
+// "never run rm -rf" says nothing about checks and does not match.
+var noRunRE = regexp.MustCompile(`(?i)\b(?:do\s+not|don['’]?t|never|without)\s+(?:run|running|execute|executing)\s+` +
+	`(?:any\s+|the\s+)?(?:anything|checks?|tests?|builds?|commands?|linters?|it|them)\b`)
+
+// saysNoRun says whether what the user typed asks not to run anything.
+func saysNoRun(request string) bool { return noRunRE.MatchString(request) }
+
+// lastRequest is what the user typed for this turn: the last user message,
+// without attachments or a loaded skill.
+func lastRequest(events []api.Event) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind == api.KindUserMessage {
+			return events[i].Text
+		}
+	}
+	return ""
+}
 
 // checkRE finds commands that check a project: builds, tests, linters.
 var checkRE = regexp.MustCompile(`\b(make|go (build|vet|test)|npm|pnpm|yarn|bun|cargo|pytest|tsc|eslint|ruff|mypy|vitest|jest|gofmt)\b`)
@@ -40,9 +57,6 @@ type guard struct {
 func newGuard(dir string) *guard {
 	return &guard{dir: dir, checks: prompt.ListChecks(dir), fails: map[string]int{}, reads: map[string]int{}}
 }
-
-// readRequest notes whether the user's message says not to run anything.
-func (g *guard) readRequest(message string) { g.noRun = noRunRE.MatchString(message) }
 
 // refuse returns why the call must not run again, or "".
 func (g *guard) refuse(c llm.ToolCall) string {

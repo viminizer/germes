@@ -140,7 +140,7 @@ func (l *Loop) Run(ctx context.Context, t engine.Turn) (<-chan engine.Event, err
 			}
 		}
 		spec := turnSpec{toolsets: l.opts.Toolsets, maxSteps: l.opts.MaxSteps,
-			review: true, delegate: len(l.opts.SubagentToolsets) > 0, ask: true}
+			review: true, delegate: len(l.opts.SubagentToolsets) > 0, ask: true, noRun: saysNoRun(lastRequest(events))}
 		switch {
 		case t.Plan:
 			// Read only, and no subagents: they could change files.
@@ -178,6 +178,7 @@ type turnSpec struct {
 	review   bool // count tool calls toward the background review
 	delegate bool // may start subagents
 	ask      bool // may ask the user (clarify); a subagent has nobody to ask
+	noRun    bool // the user said not to run anything: no check is asked for
 }
 
 func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []llm.Message, out chan<- engine.Event, spec turnSpec) {
@@ -198,7 +199,7 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 		msgs = append(msgs, llm.Message{Role: llm.RoleUser, Text: "[Germes] " + t.Extra})
 	}
 	g := newGuard(t.Dir)
-	g.readRequest(t.Prompt)
+	g.noRun = spec.noRun
 	askedWhy := false        // the model sent a final answer with tool calls once
 	var used *engine.Context // how full the context was for the last response
 	done := func() {
@@ -377,7 +378,7 @@ func (l *Loop) runCall(ctx context.Context, t engine.Turn, system string, spec t
 	}
 	switch {
 	case spec.delegate && call.Name == delegateTool:
-		return l.delegate(ctx, t, system, call.Args), ""
+		return l.delegate(ctx, t, system, call.Args, spec.noRun), ""
 	case spec.ask && call.Name == clarifyTool:
 		text, ok := clarify(call.Args)
 		if !ok {

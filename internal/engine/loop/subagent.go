@@ -44,7 +44,7 @@ type task struct {
 
 // delegate runs the tasks as subagents at the same time and returns their
 // reports, in order. Stopping the turn stops them.
-func (l *Loop) delegate(ctx context.Context, t engine.Turn, system string, args json.RawMessage) tool.Result {
+func (l *Loop) delegate(ctx context.Context, t engine.Turn, system string, args json.RawMessage, noRun bool) tool.Result {
 	var a struct {
 		Tasks []task `json:"tasks"`
 	}
@@ -67,7 +67,7 @@ func (l *Loop) delegate(ctx context.Context, t engine.Turn, system string, args 
 	reports := make([]string, len(a.Tasks))
 	var wg sync.WaitGroup
 	for i, tk := range a.Tasks {
-		wg.Go(func() { reports[i] = l.runSubagent(ctx, t, system, i, tk) })
+		wg.Go(func() { reports[i] = l.runSubagent(ctx, t, system, i, tk, noRun) })
 	}
 	wg.Wait()
 	var b strings.Builder
@@ -79,7 +79,7 @@ func (l *Loop) delegate(ctx context.Context, t engine.Turn, system string, args 
 
 // runSubagent runs one task as a fresh turn and returns its final report.
 // Its own steps are not shown in the session: only the report comes back.
-func (l *Loop) runSubagent(ctx context.Context, parent engine.Turn, system string, i int, tk task) (report string) {
+func (l *Loop) runSubagent(ctx context.Context, parent engine.Turn, system string, i int, tk task, noRun bool) (report string) {
 	defer func() {
 		if p := recover(); p != nil {
 			slog.Error("subagent panicked", "session", parent.SessionID, "panic", p, "stack", string(debug.Stack()))
@@ -98,7 +98,7 @@ func (l *Loop) runSubagent(ctx context.Context, parent engine.Turn, system strin
 	go func() {
 		defer close(out)
 		l.turn(ctx, t, system, []llm.Message{{Role: llm.RoleUser, Text: brief}}, out,
-			turnSpec{toolsets: l.opts.SubagentToolsets, maxSteps: subagentSteps})
+			turnSpec{toolsets: l.opts.SubagentToolsets, maxSteps: subagentSteps, noRun: noRun})
 	}()
 	var last, failure string
 	for ev := range out {

@@ -107,6 +107,7 @@ type Chunk struct {
 type Context struct {
 	Model  string
 	Tokens int // input tokens of the request, cached ones included
+	Cached int // of those, read from the provider's prompt cache
 }
 
 // Usage is how much of a usage window is used.

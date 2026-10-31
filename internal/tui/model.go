@@ -321,6 +321,8 @@ func (m *model) track(ev api.Event) tea.Cmd {
 		}
 		if ev.Context != nil {
 			m.status.Context = ev.Context
+			m.status.CacheInput += ev.Context.Input
+			m.status.CacheRead += ev.Context.Cached
 		}
 		m.status.Busy = false
 		m.composer.setPlaceholder("") // like Hermes: the hint is only for a fresh session

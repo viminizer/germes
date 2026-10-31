@@ -38,6 +38,11 @@ type line struct {
 	Denials   []struct {
 		Input map[string]any `json:"tool_input"`
 	} `json:"permission_denials"`
+	Usage *struct { // the result's: all the turn's calls added up
+		Input         int `json:"input_tokens"`
+		CacheCreation int `json:"cache_creation_input_tokens"`
+		CacheRead     int `json:"cache_read_input_tokens"`
+	} `json:"usage"`
 	ModelUsage map[string]struct {
 		ContextWindow int `json:"contextWindow"`
 	} `json:"modelUsage"`
@@ -136,6 +141,9 @@ func (p *parser) context(l line) *engine.Context {
 		return nil
 	}
 	c := &engine.Context{Used: p.used}
+	if u := l.Usage; u != nil {
+		c.Input, c.Cached = u.Input+u.CacheCreation+u.CacheRead, u.CacheRead
+	}
 	for model, u := range l.ModelUsage {
 		if u.ContextWindow > c.Window {
 			c.Model, c.Window = model, u.ContextWindow // a background model can be listed too

@@ -271,7 +271,7 @@ func TestDoneSaysHowFullTheContextIs(t *testing.T) {
 	for ev := range events {
 		done = ev
 	}
-	if done.Kind != engine.KindDone || done.Context == nil || *done.Context != (engine.Context{Model: "gpt-5.5", Used: 1234, Window: 200_000}) {
+	if done.Kind != engine.KindDone || done.Context == nil || *done.Context != (engine.Context{Model: "gpt-5.5", Used: 1234, Window: 200_000, Input: 1234}) {
 		t.Fatalf("done %+v", done)
 	}
 }

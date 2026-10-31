@@ -106,3 +106,16 @@ func TestViewsFitNarrowScreens(t *testing.T) {
 		}
 	}
 }
+
+// Like Hermes, the status line shows how much of the session's input the
+// prompt cache served, once it served any.
+func TestStatusLineShowsTheCacheHitRate(t *testing.T) {
+	s := statusBar{Engine: "codex-api", Context: &api.Context{Used: 6000, Window: 200_000}}
+	if got := ansi.Strip(s.view(120)); strings.Contains(got, "◎") {
+		t.Fatalf("no cache read yet: %q", got)
+	}
+	s.CacheInput, s.CacheRead = 400, 300
+	if got := ansi.Strip(s.view(120)); !strings.Contains(got, "│ ◎ 75%") {
+		t.Fatalf("got %q, want ◎ 75%%", got)
+	}
+}

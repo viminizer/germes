@@ -261,7 +261,11 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 			case llm.KindReasoning:
 				stream.Send(ctx, out, engine.Event{Kind: engine.KindReasoning, Text: ch.Text})
 			case llm.KindContext:
-				used = &engine.Context{Model: ch.Context.Model, Used: ch.Context.Tokens, Window: window}
+				input, cached := ch.Context.Tokens, ch.Context.Cached
+				if used != nil {
+					input, cached = input+used.Input, cached+used.Cached
+				}
+				used = &engine.Context{Model: ch.Context.Model, Used: ch.Context.Tokens, Window: window, Input: input, Cached: cached}
 			}
 		}
 		if ctx.Err() != nil {

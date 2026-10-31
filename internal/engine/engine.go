@@ -81,6 +81,9 @@ type Context struct {
 	Model  string
 	Used   int // tokens
 	Window int // tokens the model takes; 0 = unknown
+	// Input and Cached add up all the turn's model calls: input tokens, and
+	// of those the ones read from the prompt cache (Hermes' cache hit rate).
+	Input, Cached int
 }
 
 // ToolCall is a tool call or its result.

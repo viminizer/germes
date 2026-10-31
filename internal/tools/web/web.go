@@ -48,7 +48,7 @@ func New() []tool.Tool {
 
 func newTools(c *http.Client, endpoints []endpoint, timeout time.Duration) []tool.Tool {
 	return []tool.Tool{{
-		Name: "WebSearch", Toolset: "web", MatchArg: "query",
+		Name: "WebSearch", Toolset: "web", MatchArg: "query", Builtin: "web_search", // Codex searches itself
 		Description: "Search the web. Returns titles, links and short text. Use WebFetch to read a page.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`),
 		Run: tool.NewRun(func(ctx context.Context, _ tool.Call, a struct{ Query string }) (string, error) {

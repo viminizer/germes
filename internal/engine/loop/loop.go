@@ -186,10 +186,11 @@ func (l *Loop) turn(ctx context.Context, t engine.Turn, system string, msgs []ll
 	var specs []llm.ToolSpec
 	for _, tl := range l.tools.List(spec.toolsets...) {
 		s := llm.ToolSpec{Name: tl.Name, Description: tl.Description, Schema: tl.Schema}
-		if tl.Name == "WebSearch" && !l.tools.HasRules(tl.Name, t.Dir) {
-			// The provider may search itself (Codex does, like Hermes on Codex),
-			// unless a block rule or hook needs to see every search.
-			s.Builtin = "web_search"
+		if tl.Builtin != "" && !l.tools.HasRules(tl.Name, t.Dir) {
+			// The provider may use its own version (Codex searches the web
+			// itself, like Hermes on Codex), unless a block rule or hook needs
+			// to see every call.
+			s.Builtin = tl.Builtin
 		}
 		specs = append(specs, s)
 	}

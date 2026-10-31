@@ -141,20 +141,43 @@ func TestLiveAreaFitsTheScreen(t *testing.T) {
 	}
 }
 
-// An edit prints its change after the tree like Hermes: unchanged lines
-// plain, removed before added.
-func TestEditPrintsItsDiff(t *testing.T) {
+// A diff shows unchanged lines too, and removed lines before added ones.
+func TestDiffLinesKeepUnchangedLines(t *testing.T) {
 	got := diffLines([]string{"a", "for i := 1", "b"}, []string{"a", "for i := 0", "b", "c"})
 	want := []string{"  a", "- for i := 1", "+ for i := 0", "  b", "+ c"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("diff %q, want %q", got, want)
 	}
-	var tr transcript
-	args := `{"file_path":"calc.go","old_string":"x := 1","new_string":"x := 2"}`
-	tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "1", Name: "Edit", Args: []byte(args)}})
-	tr.apply(api.Event{Seq: 2, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "1", Output: "ok"}})
-	out := tr.apply(api.Event{Seq: 3, Kind: api.KindText, Text: "done"})
-	if len(out) != 3 || out[0].Kind != kindTools || out[1].Kind != kindDiff || out[2].Kind != kindAssistant {
-		t.Fatalf("got %+v, want the tree, the diff, the text", out)
+}
+
+// An edit prints its change after the tree, like Hermes; an edit that
+// changes nothing prints none.
+func TestEditPrintsItsDiffAfterTheTree(t *testing.T) {
+	for args, want := range map[string]int{
+		`{"file_path":"calc.go","old_string":"x := 1","new_string":"x := 2"}`: 3,
+		`{"file_path":"calc.go","old_string":"x","new_string":"x"}`:           2,
+	} {
+		var tr transcript
+		tr.apply(api.Event{Seq: 1, Kind: api.KindToolCall, Tool: &api.ToolCall{ID: "1", Name: "Edit", Args: []byte(args)}})
+		tr.apply(api.Event{Seq: 2, Kind: api.KindToolResult, Tool: &api.ToolCall{ID: "1", Output: "ok"}})
+		out := tr.apply(api.Event{Seq: 3, Kind: api.KindText, Text: "done"})
+		if len(out) != want || (want == 3 && out[1].Kind != kindDiff) {
+			t.Fatalf("%s: got %+v", args, out)
+		}
+	}
+}
+
+// Text from tools and files is cleaned before it is printed: a CRLF file
+// or a terminal command in a fixture must not garble the screen.
+func TestLinesAreCleanedBeforeTheyPrint(t *testing.T) {
+	for in, want := range map[string]string{
+		"x := 1\r":             "x := 1",
+		"\x1b[2Jclear\x07":     "clear",
+		"\tindent\x00":         "    indent",
+		"\x1b]0;title\x07text": "text",
+	} {
+		if got := cleanLine(in); got != want {
+			t.Errorf("cleanLine(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

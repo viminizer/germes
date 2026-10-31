@@ -529,7 +529,8 @@ func (c *Client) stream(ctx context.Context, body io.Reader, out chan<- llm.Chun
 			reasoning.WriteString("\n\n") // between parts of one summary
 		case "response.output_item.done":
 			if s := reasoningSummary(ev.Item, reasoning.String()); s != "" {
-				stream.Send(ctx, out, llm.Chunk{Kind: llm.KindReasoning, Text: s})
+				// Shown and saved: a stream cut after it is not sent again, or it would show twice.
+				sent = stream.Send(ctx, out, llm.Chunk{Kind: llm.KindReasoning, Text: s}) || sent
 			}
 			reasoning.Reset()
 			if ch, ok := itemChunk(ev.Item); ok {

@@ -332,3 +332,25 @@ func TestGetInsightsFindsSkills(t *testing.T) {
 		t.Fatalf("tools = %+v", in.Tools)
 	}
 }
+
+// The model's reasoning is saved but never found by search: search
+// results go back to the model, and reasoning must not.
+func TestSearchLeavesReasoningOut(t *testing.T) {
+	ctx := context.Background()
+	s, err := New(filepath.Join(t.TempDir(), "germes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(100, 0)
+	s.CreateSession(ctx, api.Session{ID: "a", Title: "a", Project: "/p", Dir: "/p", Status: api.StatusIdle, CreatedAt: now, UpdatedAt: now})
+	s.CreateEvent(ctx, api.Event{SessionID: "a", Seq: 1, Time: now, Kind: api.KindReasoning, Text: "weighing the lighthouse option"})
+	s.CreateEvent(ctx, api.Event{SessionID: "a", Seq: 2, Time: now, Kind: api.KindText, Text: "the lighthouse is fixed"})
+	page, err := s.ListEvents(ctx, api.EventFilter{Query: "lighthouse"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Kind != api.KindText {
+		t.Fatalf("search = %+v, want only the reply", page.Items)
+	}
+}

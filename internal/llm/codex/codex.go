@@ -46,10 +46,13 @@ type Client struct {
 	http      *http.Client
 	retryWait time.Duration // before sending a failed stream again; times the attempt
 
-	winMu  sync.Mutex // the context window read from the model list
-	win    int
-	winErr error
-	winAt  time.Time
+	base string // the Codex backend; tests point it elsewhere
+
+	winMu      sync.Mutex // the context window read from the model list
+	win        int        // last good window; 0 = none yet
+	winErr     error      // why the last read failed; nil = it worked
+	winAt      time.Time  // when the last read ended
+	winReading bool       // a read is running
 }
 
 var _ llm.Client = (*Client)(nil)
@@ -63,7 +66,7 @@ func New(opts Options) *Client {
 		opts.Effort = "medium"
 	}
 	hc := &http.Client{Timeout: 0} // streams can be long; ctx ends them
-	return &Client{opts: opts, http: hc, retryWait: 2 * time.Second, auth: &auth{
+	return &Client{opts: opts, http: hc, retryWait: 2 * time.Second, base: baseURL, auth: &auth{
 		germesFile: filepath.Join(opts.GermesDir, "auth", "codex.json"),
 		codexFile:  filepath.Join(opts.CodexDir, "auth.json"),
 		http:       &http.Client{Timeout: 30 * time.Second},
@@ -234,7 +237,7 @@ func (c *Client) post(ctx context.Context, body []byte, cacheKey string) (*http.
 		if err != nil {
 			return nil, tokens{}, err
 		}
-		req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/codex/responses", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, "POST", c.base+"/codex/responses", bytes.NewReader(body))
 		if err != nil {
 			return nil, tokens{}, err
 		}
@@ -606,16 +609,7 @@ func itemChunk(raw json.RawMessage) (llm.Chunk, bool) {
 func (c *Client) usage(ctx context.Context, tok tokens) []llm.Usage {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/wham/usage", nil)
-	if err != nil {
-		return nil
-	}
-	for k, v := range headers(tok) {
-		req.Header.Set(k, v)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "germes/"+c.opts.Version)
-	resp, err := c.http.Do(req)
+	resp, err := c.get(ctx, tok, "/wham/usage")
 	if err != nil {
 		slog.Warn("Codex usage", "err", err)
 		return nil

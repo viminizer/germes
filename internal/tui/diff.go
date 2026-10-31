@@ -4,34 +4,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/viminizer/germes/internal/api"
 )
 
-// Diff colors of the Hermes dark theme (hermes/ui-tui/src/theme.ts DIFF_DARK).
-var (
-	styleRemoved = lipgloss.NewStyle().Foreground(lipgloss.Color("#CF222E")).Background(lipgloss.Color("#FFDCDC"))
-	styleAdded   = lipgloss.NewStyle().Foreground(lipgloss.Color("#248A3D")).Background(lipgloss.Color("#DCFFDC"))
-)
-
 const (
-	maxDiffLines = 30  // shown per change; the rest is counted
+	maxDiffLines = 80  // shown per call, like Hermes (agent/display.py); the rest is counted
 	maxDiffInput = 400 // lines per side compared line by line; longer is shown as removed and added
 )
 
-// change is the old and new text of one edit.
-type change struct{ old, new string }
+// edits is what an Edit, MultiEdit or Write call changed, from its
+// arguments: the file and each old and new text. A Write shows its whole
+// content as added: the TUI cannot see the file before it.
+type edits struct {
+	path    string
+	changes [][2]string
+}
 
-// changes reads what an Edit, MultiEdit or Write call changed from its
-// arguments; none for other calls and failed ones.
-func changes(t *api.ToolCall) []change {
+// readEdits reads a call's changes; none for other calls and failed ones.
+func readEdits(t *api.ToolCall) edits {
 	if t == nil || t.IsError {
-		return nil
+		return edits{}
 	}
 	var a struct {
+		FilePath  string `json:"file_path"`
 		OldString string `json:"old_string"`
 		NewString string `json:"new_string"`
 		Content   string `json:"content"`
@@ -41,68 +40,98 @@ func changes(t *api.ToolCall) []change {
 		} `json:"edits"`
 	}
 	if json.Unmarshal(t.Args, &a) != nil {
-		return nil
+		return edits{}
 	}
+	e := edits{path: a.FilePath}
 	switch t.Name {
 	case "Edit":
-		return []change{{a.OldString, a.NewString}}
+		e.changes = [][2]string{{a.OldString, a.NewString}}
 	case "MultiEdit":
-		var out []change
-		for _, e := range a.Edits {
-			out = append(out, change{e.OldString, e.NewString})
+		for _, x := range a.Edits {
+			e.changes = append(e.changes, [2]string{x.OldString, x.NewString})
 		}
-		return out
 	case "Write":
-		return []change{{"", a.Content}}
+		e.changes = [][2]string{{"", a.Content}}
 	}
-	return nil
+	return e
+}
+
+// changed says whether the call changed any text, like Hermes, which shows
+// no diff when before and after are the same.
+func (e edits) changed() bool {
+	for _, c := range e.changes {
+		if c[0] != c[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // diffView draws a call's change like Hermes' inline diff: the file, then
-// removed lines red, added lines green and unchanged ones plain, cut at
-// maxDiffLines. "" when the call changed nothing it can show.
+// removed lines red, added lines green, unchanged ones dim, and `@@`
+// between the changes of a MultiEdit; cut at maxDiffLines. "" when the
+// call changed nothing it can show.
 func diffView(t *api.ToolCall, dir string, width int) string {
-	cs := changes(t)
-	if len(cs) == 0 {
-		return ""
-	}
-	var path struct {
-		FilePath string `json:"file_path"`
-	}
-	json.Unmarshal(t.Args, &path)
+	e := readEdits(t)
 	var rows []string
-	for _, c := range cs {
-		rows = append(rows, diffLines(splitLines(c.old), splitLines(c.new))...)
+	for i, c := range e.changes {
+		if c[0] == c[1] {
+			continue
+		}
+		d := diffLines(splitLines(c[0]), splitLines(c[1]))
+		if i > 0 && len(d) > 0 && len(rows) > 0 {
+			rows = append(rows, "@@")
+		}
+		rows = append(rows, d...)
 	}
 	if len(rows) == 0 {
 		return ""
 	}
 	fit := func(s string) string { return ansi.Truncate(s, max(width, 1), "…") }
-	lines := []string{fit(styleText.Render(shortPaths(path.FilePath, dir)))}
+	lines := []string{styleText.Render(fit(cleanLine(shortPaths(e.path, dir))))}
 	for i, r := range rows {
 		if i == maxDiffLines {
 			lines = append(lines, styleDim.Render(fmt.Sprintf("… %d more lines", len(rows)-i)))
 			break
 		}
-		r = strings.ReplaceAll(r, "\t", "    ")
+		style := styleText.Faint(true) // unchanged, dim like Hermes
 		switch r[0] {
 		case '-':
-			r = styleRemoved.Render(ansi.Truncate(r, max(width, 1), "…"))
+			style = styleRemoved
 		case '+':
-			r = styleAdded.Render(ansi.Truncate(r, max(width, 1), "…"))
-		default:
-			r = fit(styleText.Render(r))
+			style = styleAdded
+		case '@':
+			style = styleMuted
 		}
-		lines = append(lines, r)
+		lines = append(lines, style.Render(fit(r)))
 	}
 	return strings.Join(lines, "\n")
 }
 
+// splitLines splits text into clean lines (cleanLine).
 func splitLines(s string) []string {
 	if s == "" {
 		return nil
 	}
-	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = cleanLine(l)
+	}
+	return lines
+}
+
+// cleanLine makes a line from a tool or a file safe to print: tabs become
+// spaces (a tab is wider on screen than its count, and a line that wraps
+// moves the live area), escape sequences and other control characters
+// (a CR from a CRLF file, a terminal command in a fixture) go.
+func cleanLine(s string) string {
+	s = strings.ReplaceAll(ansi.Strip(s), "\t", "    ")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // diffLines compares old and new line by line (longest common

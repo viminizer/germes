@@ -80,10 +80,7 @@ func detailLines(text string, style lipgloss.Style, width int) []string {
 	shown := all[:min(len(all), maxDetailLines)]
 	var out []string
 	for _, l := range shown {
-		// A tab is wider on screen than Truncate counts it: a line that
-		// wraps moves the live area and loses lines.
-		l = strings.ReplaceAll(l, "\t", "    ")
-		out = append(out, style.Render(ansi.Truncate("  "+l, max(width, 10), "…")))
+		out = append(out, style.Render(ansi.Truncate("  "+cleanLine(l), max(width, 10), "…")))
 	}
 	if more := len(all) - len(shown); more > 0 {
 		out = append(out, styleDim.Render(fmt.Sprintf("  … (+%d more lines)", more)))
